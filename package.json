@@ -1,0 +1,13 @@
+{
+  "name": "promptql",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "bun run --cwd apps/web dev",
+    "build:web": "bun run --cwd apps/web build",
+    "lint:web": "bun run --cwd apps/web lint"
+  }
+}
