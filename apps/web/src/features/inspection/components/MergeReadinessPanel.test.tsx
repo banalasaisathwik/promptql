@@ -11,6 +11,14 @@ function analysisWithDecision(
   decision: MergeReadinessDecision,
 ): PullRequestMergeReadiness {
   return {
+    run_id: '49a8a46d-5c69-4e5d-a928-6a149b84d6e7',
+    workflow_name: 'merge_readiness',
+    workflow_version: '1',
+    status: 'completed',
+    started_at: '2026-08-02T10:00:00Z',
+    completed_at: '2026-08-02T10:00:01Z',
+    steps: [],
+    error: null,
     request: {
       repository_owner: 'acme',
       repository_name: 'analytics',
@@ -18,7 +26,7 @@ function analysisWithDecision(
     },
     github: null,
     jira: null,
-    policy_result: {
+    result: {
       decision,
       summary: `Backend returned ${decision}.`,
       reason_code: decision === 'unknown' ? 'evidence_unavailable' : decision,
@@ -47,8 +55,8 @@ describe('MergeReadinessPanel', () => {
 
   test('renders every blocker and every pending action', () => {
     const analysis = analysisWithDecision('blocked')
-    analysis.policy_result.reason_code = 'ci_check_failed'
-    analysis.policy_result.blockers = [
+    analysis.result.reason_code = 'ci_check_failed'
+    analysis.result.blockers = [
       {
         reason_code: 'ci_check_failed',
         message: 'Unit tests failed.',
@@ -60,7 +68,7 @@ describe('MergeReadinessPanel', () => {
         evidence_reference_ids: ['github.approvals.count'],
       },
     ]
-    analysis.policy_result.pending_actions = [
+    analysis.result.pending_actions = [
       {
         action_code: 'fix_ci_check',
         reason_code: 'ci_check_failed',
@@ -85,7 +93,7 @@ describe('MergeReadinessPanel', () => {
 
   test('renders missing information for an unknown result', () => {
     const analysis = analysisWithDecision('unknown')
-    analysis.policy_result.missing_information = [
+    analysis.result.missing_information = [
       {
         reason_code: 'evidence_unavailable',
         message: 'Jira evidence is unavailable.',
@@ -104,7 +112,7 @@ describe('MergeReadinessPanel', () => {
 
   test('does not derive or override the returned decision from blocker counts', () => {
     const analysis = analysisWithDecision('ready')
-    analysis.policy_result.blockers = [
+    analysis.result.blockers = [
       {
         reason_code: 'ci_check_failed',
         message: 'Contradictory test blocker.',

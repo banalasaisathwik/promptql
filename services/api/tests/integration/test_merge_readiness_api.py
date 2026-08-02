@@ -4,28 +4,56 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from app.api.v1.connector_router import get_jira_connector
-from app.connectors.errors import ConnectorUnavailableError
-from app.connectors.fixture_catalog import (
-    FAILED_CI_REQUEST,
-    MERGE_READY_REQUEST,
+from app.api.v1.connector_router import (
+    get_github_connector,
+    get_jira_connector,
+    get_merge_readiness_workflow,
 )
-from app.connectors.models import ConnectorRequest, JiraIssue
-from app.inspection.models import PullRequestMergeReadiness
+from app.connectors.errors import ConnectorUnavailableError
+from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
+from app.connectors.fixture_catalog import FAILED_CI_REQUEST, MERGE_READY_REQUEST
+from app.connectors.models import ConnectorRequest, GitHubPullRequest, JiraIssue
 from app.main import app
+from app.runtime import InMemoryRunRepository, MergeReadinessRun
+from app.workflows import MergeReadinessWorkflowService
 
 
 class UnavailableJiraConnector:
-    pass
-
     def get_issue_for_pull_request(self, _request: ConnectorRequest) -> JiraIssue:
         raise ConnectorUnavailableError("jira")
 
 
-def provide_unavailable_jira_connector() -> UnavailableJiraConnector:
+class FailingGitHubConnector:
+    def get_pull_request(self, _request: ConnectorRequest) -> GitHubPullRequest:
+        raise RuntimeError("secret-connector-detail")
+
+
+class RecordingWorkflow:
     pass
 
+    def __init__(self, run: MergeReadinessRun) -> None:
+        self.run = run
+        self.requests: list[ConnectorRequest] = []
+
+    def execute(self, request: ConnectorRequest) -> MergeReadinessRun:
+        self.requests.append(request)
+        return self.run
+
+
+def provide_unavailable_jira_connector() -> UnavailableJiraConnector:
     return UnavailableJiraConnector()
+
+
+def provide_failing_github_connector() -> FailingGitHubConnector:
+    return FailingGitHubConnector()
+
+
+def completed_ready_run() -> MergeReadinessRun:
+    return MergeReadinessWorkflowService(
+        FakeGitHubConnector(),
+        FakeJiraConnector(),
+        InMemoryRunRepository(),
+    ).execute(MERGE_READY_REQUEST)
 
 
 class MergeReadinessApiTests(unittest.TestCase):
@@ -34,8 +62,6 @@ class MergeReadinessApiTests(unittest.TestCase):
         cls.client = TestClient(app)
 
     def tearDown(self) -> None:
-
-
         app.dependency_overrides.clear()
 
     def post_request(self, request: ConnectorRequest):
@@ -44,27 +70,25 @@ class MergeReadinessApiTests(unittest.TestCase):
             json=request.model_dump(mode="json"),
         )
 
-    def test_failed_ci_returns_blocked_with_policy_details(self) -> None:
+    def test_failed_ci_returns_completed_blocked_run(self) -> None:
         response = self.post_request(FAILED_CI_REQUEST)
 
         self.assertEqual(response.status_code, 200)
-        policy_result = response.json()["policy_result"]
-        self.assertEqual(policy_result["decision"], "blocked")
-        self.assertEqual(policy_result["reason_code"], "ci_check_failed")
-        self.assertIn(
-            "ci_check_failed",
-            [blocker["reason_code"] for blocker in policy_result["blockers"]],
-        )
-        self.assertTrue(policy_result["pending_actions"])
-        self.assertTrue(policy_result["evidence_references"])
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["result"]["decision"], "blocked")
+        self.assertIsNone(body["error"])
+        self.assertEqual(len(body["steps"]), 3)
 
-    def test_merge_ready_facts_return_ready(self) -> None:
+    def test_merge_ready_facts_return_completed_ready_run(self) -> None:
         response = self.post_request(MERGE_READY_REQUEST)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["policy_result"]["decision"], "ready")
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["result"]["decision"], "ready")
 
-    def test_missing_required_jira_evidence_returns_unknown(self) -> None:
+    def test_missing_jira_evidence_completes_with_unknown(self) -> None:
         app.dependency_overrides[get_jira_connector] = (
             provide_unavailable_jira_connector
         )
@@ -73,30 +97,43 @@ class MergeReadinessApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["result"]["decision"], "unknown")
         self.assertIsNone(body["jira"])
-        self.assertEqual(body["policy_result"]["decision"], "unknown")
-        self.assertTrue(body["policy_result"]["missing_information"])
 
-    def test_verified_blocker_wins_when_jira_is_unavailable(self) -> None:
-        app.dependency_overrides[get_jira_connector] = (
-            provide_unavailable_jira_connector
+    def test_unexpected_connector_failure_returns_typed_500_run(self) -> None:
+        app.dependency_overrides[get_github_connector] = (
+            provide_failing_github_connector
         )
 
-        response = self.post_request(FAILED_CI_REQUEST)
+        response = self.post_request(MERGE_READY_REQUEST)
 
-        self.assertEqual(response.status_code, 200)
-        policy_result = response.json()["policy_result"]
-        self.assertEqual(policy_result["decision"], "blocked")
-        self.assertTrue(policy_result["blockers"])
-        self.assertTrue(policy_result["missing_information"])
+        self.assertEqual(response.status_code, 500)
+        run = MergeReadinessRun.model_validate(response.json())
+        self.assertEqual(run.status.value, "failed")
+        self.assertIsNone(run.result)
+        self.assertIsNotNone(run.run_id)
+        self.assertIsNotNone(run.started_at)
+        self.assertIsNotNone(run.completed_at)
+        self.assertEqual(run.steps[-1].status.value, "failed")
+        self.assertNotIn("secret-connector-detail", run.error.message)
 
-    def test_response_matches_declared_pydantic_schema(self) -> None:
+    def test_route_delegates_to_workflow_service(self) -> None:
+        workflow = RecordingWorkflow(completed_ready_run())
+        app.dependency_overrides[get_merge_readiness_workflow] = lambda: workflow
+
         response = self.post_request(MERGE_READY_REQUEST)
 
         self.assertEqual(response.status_code, 200)
-        validated = PullRequestMergeReadiness.model_validate(response.json())
+        self.assertEqual(workflow.requests, [MERGE_READY_REQUEST])
+
+    def test_success_response_matches_declared_schema(self) -> None:
+        response = self.post_request(MERGE_READY_REQUEST)
+
+        self.assertEqual(response.status_code, 200)
+        validated = MergeReadinessRun.model_validate(response.json())
         self.assertEqual(validated.request, MERGE_READY_REQUEST)
-        self.assertEqual(validated.policy_result.decision.value, "ready")
+        self.assertEqual(validated.result.decision.value, "ready")
 
     def test_unknown_fixture_keeps_structured_not_found_error(self) -> None:
         response = self.post_request(
@@ -110,7 +147,10 @@ class MergeReadinessApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["code"], "fixture_not_found")
 
-    def test_invalid_request_keeps_fastapi_validation_error(self) -> None:
+    def test_invalid_input_returns_422_before_workflow_execution(self) -> None:
+        workflow = RecordingWorkflow(completed_ready_run())
+        app.dependency_overrides[get_merge_readiness_workflow] = lambda: workflow
+
         response = self.client.post(
             "/v1/pull-request-merge-readiness",
             json={
@@ -121,6 +161,7 @@ class MergeReadinessApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 422)
+        self.assertEqual(workflow.requests, [])
 
 
 if __name__ == "__main__":

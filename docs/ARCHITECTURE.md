@@ -22,7 +22,7 @@ its supporting GitHub and Jira fixture evidence. The API also serves
 ```text
 GET  /v1/demo/pull-request-scenarios -> selectable fixture metadata
 POST /v1/pull-request-inspections    -> combined GitHub and Jira facts
-POST /v1/pull-request-merge-readiness -> policy result plus supporting facts
+POST /v1/pull-request-merge-readiness -> runtime run, policy result, and facts
 ```
 
 Browser code calls relative `/v1` URLs. Vite proxies that prefix to the local
@@ -34,7 +34,7 @@ same routing contract.
 | Path | Current responsibility |
 | --- | --- |
 | `apps/web` | Browser UI, runtime response validation, backend fixture selection, request submission, and evidence presentation |
-| `services/api` | Backend HTTP boundary, connector contracts, deterministic fixtures, V1 inspection orchestration, and pure merge-readiness policy |
+| `services/api` | Backend HTTP boundary, connector contracts, deterministic fixtures, synchronous runtime execution, and pure merge-readiness policy |
 | `packages` | Reserved for reusable TypeScript packages; not yet present |
 | `docs` | Product, architecture, testing, decisions, work records, and learning |
 | `infra` | Reserved for future infrastructure configuration; not yet present |
@@ -59,6 +59,12 @@ services/api/app/
 ├── policy/
 │   ├── models.py             # What typed readiness conclusions exist?
 │   └── evaluator.py          # How do provider facts become a decision?
+├── runtime/
+│   ├── models.py             # What run and step snapshots are valid?
+│   ├── state.py              # Which lifecycle transitions are allowed?
+│   └── repository.py         # How can run storage be replaced later?
+├── workflows/
+│   └── merge_readiness.py    # How are connector and policy steps executed?
 ├── api/v1/
 │   ├── models.py             # What HTTP-specific error bodies exist?
 │   └── connector_router.py   # Which URLs expose the use case?
@@ -93,19 +99,27 @@ apps/web/src/features/inspection/
   fictional fixture metadata and results; they do not call external systems.
 - `GET /v1/demo/pull-request-scenarios` is explicitly demo-only. The separate
   inspection contract can remain when real connectors replace the fakes.
-- HTTP routes delegate orchestration to `app.inspection.service`; routes do not
-  construct provider responses directly.
+- Raw inspection routes delegate to `app.inspection.service`. The readiness
+  route delegates to `MergeReadinessWorkflowService`; routes contain neither
+  connector sequencing nor policy rules.
 - `app.policy.evaluate_merge_readiness` is a pure domain function. It accepts
   typed GitHub and Jira facts, performs no connector or infrastructure calls,
   and returns every verified blocker plus explicit missing information and
   evidence references. `POST /v1/pull-request-merge-readiness` invokes it after
-  connector retrieval; the older inspection endpoint remains facts-only.
+  recorded connector steps; the older inspection endpoint remains facts-only.
+- The basic runtime creates a unique run, records three ordered steps, enforces
+  terminal state transitions, and returns immutable Pydantic snapshots. A
+  completed run contains `result`; a failed run returns HTTP `500`, contains a
+  sanitized error, and has `result=null`.
+- `RunRepository` isolates workflow execution from storage. The current route
+  uses request-local in-memory storage, which is not durable across requests or
+  process restarts.
 - Frontend network data remains `unknown` until `responseValidation.ts` proves
   the expected runtime structure.
 
 ## Not implemented
 
-The agent runtime, persistence, real connectors,
-authentication and authorization, tenant isolation, LLMOps, and evaluations
-are planned areas only. No database, queue, cache, cloud service, or deployed
-runtime component is present.
+Durable runtime persistence, cancellation APIs, retries, distributed workers,
+queues, real connectors, authentication and authorization, tenant isolation,
+LLMOps, tracing, and evaluations are not implemented. No database, queue,
+cache, cloud service, or deployed runtime component is present.

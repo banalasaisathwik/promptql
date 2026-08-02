@@ -18,10 +18,11 @@ V0 establishes:
 - testing conventions, where tooling may still be unconfigured; and
 - an agent-development workflow that supports review and learning.
 
-V0 does **not** implement the complete agent runtime. The current UI loads demo
-fixture choices, submits a typed connector request, and displays the
-deterministic merge-readiness decision, findings, actions, missing information,
-and evidence returned by the V1 API.
+V0 does **not** implement the complete agent runtime. The current V1 slice has a
+basic synchronous runtime that records the merge-readiness workflow's connector
+and policy steps. The UI loads demo fixture choices, submits a typed connector
+request, and displays the deterministic decision, findings, actions, missing
+information, and evidence returned by the API.
 
 ## Later directions
 

@@ -48,15 +48,26 @@ async function requestJson(
   const body = await readJson(response)
 
   if (!response.ok) {
-    // Expected API errors contain a top-level message. The fallback still gives
-    // useful status information if an intermediary returns a different shape.
-    const message =
+    let message = `The API request failed with status ${response.status}.`
+    if (
       typeof body === 'object' &&
       body !== null &&
       'message' in body &&
       typeof body.message === 'string'
-        ? body.message
-        : `The API request failed with status ${response.status}.`
+    ) {
+      message = body.message
+    } else if (
+      typeof body === 'object' &&
+      body !== null &&
+      'error' in body &&
+      typeof body.error === 'object' &&
+      body.error !== null &&
+      'message' in body.error &&
+      typeof body.error.message === 'string'
+    ) {
+      // Failed runs contain a sanitized error nested inside the run body.
+      message = body.error.message
+    }
 
     throw new ConnectorApiError(message, response.status)
   }

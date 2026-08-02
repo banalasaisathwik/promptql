@@ -141,9 +141,50 @@ export interface MergeReadinessResult {
   evidence_references: EvidenceReference[]
 }
 
+export type RuntimeStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export type WorkflowStepName =
+  | 'fetch_github_facts'
+  | 'fetch_jira_facts'
+  | 'evaluate_merge_readiness'
+
+export type RuntimeErrorCode =
+  | 'connector_execution_failed'
+  | 'policy_execution_failed'
+  | 'fixture_not_found'
+
+export interface RuntimeErrorInfo {
+  code: RuntimeErrorCode
+  message: string
+}
+
+export interface RuntimeStep {
+  step_id: string
+  name: WorkflowStepName
+  status: RuntimeStatus
+  started_at: string | null
+  completed_at: string | null
+  duration_ms: number | null
+  attempt: number
+  error: RuntimeErrorInfo | null
+}
+
 export interface PullRequestMergeReadiness {
+  run_id: string
+  workflow_name: string
+  workflow_version: string
+  status: 'completed'
+  started_at: string
+  completed_at: string
+  steps: RuntimeStep[]
+  error: null
+  result: MergeReadinessResult
   request: ConnectorRequest
   github: GitHubPullRequest | null
   jira: JiraIssue | null
-  policy_result: MergeReadinessResult
 }

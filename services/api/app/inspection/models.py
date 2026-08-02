@@ -8,7 +8,6 @@ from app.connectors.models import (
     JiraIssue,
     NonEmptyString,
 )
-from app.policy.models import MergeReadinessResult
 
 
 class FixtureScenarioItem(ContractModel):
@@ -31,12 +30,3 @@ class PullRequestInspection(ContractModel):
     request: ConnectorRequest
     github: GitHubPullRequest
     jira: JiraIssue
-
-
-class PullRequestMergeReadiness(ContractModel):
-    pass
-
-    request: ConnectorRequest
-    github: GitHubPullRequest | None
-    jira: JiraIssue | None
-    policy_result: MergeReadinessResult

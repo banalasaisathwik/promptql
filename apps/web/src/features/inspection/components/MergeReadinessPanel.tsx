@@ -68,11 +68,11 @@ function ActionList({ actions }: { actions: PendingAction[] }) {
 
 
 function AnalysisResult({ analysis }: { analysis: PullRequestMergeReadiness }) {
-  const { policy_result: policyResult } = analysis
+  const policyResult = analysis.result
 
   return (
     <div className="inspection-result">
-      {/* The decision comes directly from policy_result. No list length or raw
+      {/* The decision comes directly from result. No list length or raw
           connector field is used to calculate or replace this value. */}
       <section
         className={`decision-card decision-card--${policyResult.decision}`}

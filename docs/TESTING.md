@@ -2,8 +2,9 @@
 
 ## Current capability
 
-Backend connector contracts, deterministic merge-readiness policy, and V1 HTTP
-behavior have standard-library unit and integration tests:
+Backend connector contracts, deterministic policy, runtime transitions,
+workflow execution, and V1 HTTP behavior have standard-library unit and
+integration tests:
 
 ```bash
 cd services/api
@@ -26,8 +27,8 @@ behavior. No root command currently validates the Python application.
 | Layer | Intended location | Purpose | Status |
 | --- | --- | --- | --- |
 | Frontend unit/component | Near `apps/web/src` as `*.test.ts(x)` | Transport, response rendering, and loading state | Configured with Bun test; no browser DOM runner |
-| Backend unit | `services/api/tests/unit` | Connector contracts and pure policy behavior | Configured with `unittest` discovery |
-| Backend API integration | `services/api/tests/integration` | V1 catalog, raw inspection, merge readiness, HTTP failures, and determinism | Configured with `unittest` discovery and FastAPI TestClient |
+| Backend unit | `services/api/tests/unit` | Connector contracts, policy behavior, runtime transitions, and workflow execution | Configured with `unittest` discovery |
+| Backend API integration | `services/api/tests/integration` | V1 catalog, raw inspection, completed runs, typed failed runs, delegation, and validation | Configured with `unittest` discovery and FastAPI TestClient |
 | Cross-layer/end-to-end | Future repository-level area | Browser-to-API journeys | Planned; tooling not selected |
 | Agent evaluations | `evals` when introduced | Quality and regressions | Planned; area absent |
 

@@ -19,6 +19,8 @@ import type {
   PolicyFinding,
   PullRequestMergeReadiness,
   RequiredCheck,
+  RuntimeErrorInfo,
+  RuntimeStep,
 } from './types'
 
 
@@ -49,6 +51,26 @@ const PENDING_ACTION_CODES = [
   'complete_jira_issue',
   'clear_jira_blocker',
   'retry_evidence',
+] as const
+
+const RUNTIME_ERROR_CODES = [
+  'connector_execution_failed',
+  'policy_execution_failed',
+  'fixture_not_found',
+] as const
+
+const RUNTIME_STATUSES = [
+  'pending',
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+] as const
+
+const WORKFLOW_STEP_NAMES = [
+  'fetch_github_facts',
+  'fetch_jira_facts',
+  'evaluate_merge_readiness',
 ] as const
 
 
@@ -219,15 +241,56 @@ function isMergeReadinessResult(value: unknown): value is MergeReadinessResult {
 }
 
 
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value))
+}
+
+
+function isRuntimeError(value: unknown): value is RuntimeErrorInfo {
+  return (
+    isRecord(value) &&
+    isOneOf(value.code, RUNTIME_ERROR_CODES) &&
+    isNonEmptyString(value.message)
+  )
+}
+
+
+function isRuntimeStep(value: unknown): value is RuntimeStep {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.step_id) &&
+    isOneOf(value.name, WORKFLOW_STEP_NAMES) &&
+    isOneOf(value.status, RUNTIME_STATUSES) &&
+    (value.started_at === null || isTimestamp(value.started_at)) &&
+    (value.completed_at === null || isTimestamp(value.completed_at)) &&
+    (value.duration_ms === null ||
+      (Number.isSafeInteger(value.duration_ms) &&
+        Number(value.duration_ms) >= 0)) &&
+    Number.isSafeInteger(value.attempt) &&
+    Number(value.attempt) > 0 &&
+    (value.error === null || isRuntimeError(value.error))
+  )
+}
+
+
 export function parseMergeReadiness(
   value: unknown,
 ): PullRequestMergeReadiness {
   if (
     !isRecord(value) ||
+    !isNonEmptyString(value.run_id) ||
+    !isNonEmptyString(value.workflow_name) ||
+    !isNonEmptyString(value.workflow_version) ||
+    value.status !== 'completed' ||
+    !isTimestamp(value.started_at) ||
+    !isTimestamp(value.completed_at) ||
+    !Array.isArray(value.steps) ||
+    !value.steps.every(isRuntimeStep) ||
+    value.error !== null ||
+    !isMergeReadinessResult(value.result) ||
     !isConnectorRequest(value.request) ||
     !(value.github === null || isGitHubPullRequest(value.github)) ||
-    !(value.jira === null || isJiraIssue(value.jira)) ||
-    !isMergeReadinessResult(value.policy_result)
+    !(value.jira === null || isJiraIssue(value.jira))
   ) {
     throw new ConnectorApiError('The merge-readiness response is malformed.')
   }
@@ -236,9 +299,17 @@ export function parseMergeReadiness(
   // both TypeScript and a reader. No unchecked `as PullRequestInspection` cast
   // crosses this network boundary.
   return {
+    run_id: value.run_id,
+    workflow_name: value.workflow_name,
+    workflow_version: value.workflow_version,
+    status: value.status,
+    started_at: value.started_at,
+    completed_at: value.completed_at,
+    steps: value.steps,
+    error: value.error,
+    result: value.result,
     request: value.request,
     github: value.github,
     jira: value.jira,
-    policy_result: value.policy_result,
   }
 }

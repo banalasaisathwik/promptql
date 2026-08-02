@@ -341,3 +341,39 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** When connector failure reasons become user-visible,
   should the HTTP result expose retryability and permission details separately
   from policy missing-information messages?
+
+### 2026-08-02 — Runtime status and policy decision describe different failures
+
+- **Concept:** A workflow run answers whether execution succeeded, while a
+  policy result answers whether the known facts permit merging. Failed CI is a
+  successful execution with `decision=blocked`; an unexpected connector or
+  policy exception is a failed execution with no policy result.
+- **Important syntax:** Frozen Pydantic snapshots plus explicit transition
+  functions prevent terminal state reversal. `Protocol` defines the small
+  `RunRepository` storage boundary, `uuid4()` creates unique operational IDs,
+  UTC `datetime` values record wall-clock events, and `perf_counter_ns()`
+  measures durations without depending on wall-clock adjustments.
+- **Implementation location:** `app/runtime/models.py` defines run, step, and
+  error contracts; `runtime/state.py` enforces transitions;
+  `runtime/repository.py` isolates storage; and
+  `workflows/merge_readiness.py` records the connector and policy sequence. The
+  route delegates through `get_merge_readiness_workflow`.
+- **Design decision:** Synchronous execution failures return HTTP `500` with the
+  complete typed failed run. Completed runs return `200`. This preserves both
+  truthful HTTP semantics and the run ID, timestamps, step history, and safe
+  failure category.
+- **Invariant or failure behavior:** Completed runs contain `result` and no
+  runtime error. Failed runs contain `result=null` and a fixed sanitized error.
+  Connector unavailability remains missing evidence rather than a system
+  failure, terminal states cannot return to running, and identical facts still
+  produce equal policy results even though run metadata differs.
+- **Trade-off learned:** Request-local in-memory storage proves the repository
+  boundary and snapshot recording without database design, but runs cannot be
+  retrieved after the request and disappear on process restart. Sequential
+  steps simplify ordering but would include full connector latency later.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  passed 38 backend tests with the existing `TestClient` warning;
+  `uv run python -m compileall -q app tests` passed; `bun run test:web` passed
+  7 frontend tests; and `bun run build:web` plus `bun run lint:web` passed.
+- **Unresolved question:** Should the first persistence task store every runtime
+  snapshot as history, or store only the latest run plus separate step events?

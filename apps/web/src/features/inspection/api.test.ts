@@ -5,6 +5,14 @@ import type { PullRequestMergeReadiness } from './types'
 
 
 const READY_RESPONSE: PullRequestMergeReadiness = {
+  run_id: '49a8a46d-5c69-4e5d-a928-6a149b84d6e7',
+  workflow_name: 'merge_readiness',
+  workflow_version: '1',
+  status: 'completed',
+  started_at: '2026-08-02T10:00:00Z',
+  completed_at: '2026-08-02T10:00:01Z',
+  steps: [],
+  error: null,
   request: {
     repository_owner: 'acme',
     repository_name: 'analytics',
@@ -12,7 +20,7 @@ const READY_RESPONSE: PullRequestMergeReadiness = {
   },
   github: null,
   jira: null,
-  policy_result: {
+  result: {
     decision: 'ready',
     summary: 'All required conditions are satisfied.',
     reason_code: 'ready',
@@ -56,18 +64,32 @@ describe('merge-readiness API client', () => {
     expect(requestedUrl).toBe('/v1/pull-request-merge-readiness')
     expect(requestedInit?.method).toBe('POST')
     expect(JSON.parse(String(requestedInit?.body))).toEqual(request)
-    expect(result.policy_result.decision).toBe('ready')
+    expect(result.result.decision).toBe('ready')
   })
 
   test('keeps backend failures separate from an unknown policy decision', async () => {
     globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ message: 'Connector failed.' }), {
-        status: 503,
+      new Response(
+        JSON.stringify({
+          status: 'failed',
+          result: null,
+          error: {
+            code: 'connector_execution_failed',
+            message: 'The GitHub connector step failed unexpectedly.',
+          },
+        }),
+        {
+        status: 500,
         headers: { 'Content-Type': 'application/json' },
-      })) as typeof fetch
+        },
+      )) as typeof fetch
 
     await expect(
       analyzePullRequestMergeReadiness(READY_RESPONSE.request),
-    ).rejects.toBeInstanceOf(ConnectorApiError)
+    ).rejects.toMatchObject({
+      name: 'ConnectorApiError',
+      status: 500,
+      message: 'The GitHub connector step failed unexpectedly.',
+    } satisfies Partial<ConnectorApiError>)
   })
 })
