@@ -2,7 +2,14 @@
 
 ## Current capability
 
-No frontend or backend test files, test runners, or test scripts are present.
+Backend connector contracts and V1 HTTP behavior have standard-library unit and
+integration tests:
+
+```bash
+cd services/api
+uv run python -m unittest discover -s tests -v
+```
+
 The web workspace has manifest-backed build and lint commands:
 
 ```bash
@@ -18,8 +25,8 @@ command currently validates the Python application.
 | Layer | Intended location | Purpose | Status |
 | --- | --- | --- | --- |
 | Frontend unit/component | Near `apps/web/src` as `*.test.ts(x)` | UI behavior and state | Planned; runner not selected |
-| Backend unit | `services/api/tests/unit` | Domain/helper behavior | Planned; runner not configured |
-| Backend API integration | `services/api/tests/integration` | HTTP contracts and failures | Planned; runner not configured |
+| Backend unit | `services/api/tests/unit` | Domain/helper behavior | Configured with `unittest` discovery |
+| Backend API integration | `services/api/tests/integration` | V1 catalog, inspection, HTTP failures, and determinism | Configured with `unittest` discovery and FastAPI TestClient |
 | Cross-layer/end-to-end | Future repository-level area | Browser-to-API journeys | Planned; tooling not selected |
 | Agent evaluations | `evals` when introduced | Quality and regressions | Planned; area absent |
 
@@ -31,7 +38,6 @@ explicit coverage when introduced.
 
 ```text
 Frontend tests: NOT CONFIGURED
-Backend tests:  NOT CONFIGURED
 End-to-end:     NOT CONFIGURED
 Agent evals:    NOT CONFIGURED
 ```

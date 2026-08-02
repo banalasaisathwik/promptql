@@ -17,6 +17,6 @@ Create a new ADR, mark the old one superseded, and link both.
 
 ## Register
 
-No numbered ADRs exist yet. Add one only after a concrete architectural decision
-is resolved with enough evidence to complete the
-[ADR template](ADR-TEMPLATE.md).
+| ADR | Status | Decision |
+| --- | --- | --- |
+| [ADR-001](ADR-001-versioned-connector-inspection-api.md) | Accepted | Versioned inspection endpoint, backend-owned demo fixture catalog, and relative `/v1` frontend routing |

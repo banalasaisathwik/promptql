@@ -1,0 +1,39 @@
+from app.connectors.errors import FixtureNotFoundError
+from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
+from app.connectors.models import (
+    BlockerState,
+    CheckStatus,
+    ConnectorRequest,
+    GitHubPullRequest,
+    GitHubUser,
+    JiraAssignee,
+    JiraIssue,
+    JiraIssueStatus,
+    Mergeability,
+    PullRequestState,
+    RequiredCheck,
+)
+
+                                                                            
+                                                                               
+__all__ = [
+    "BlockerState",
+    "CheckStatus",
+    "ConnectorRequest",
+    "FakeGitHubConnector",
+    "FakeJiraConnector",
+    "FixtureNotFoundError",
+    "GitHubPullRequest",
+    "GitHubUser",
+    "JiraAssignee",
+    "JiraIssue",
+    "JiraIssueStatus",
+    "Mergeability",
+    "PullRequestState",
+    "RequiredCheck",
+]
+"""Public import surface for V1 connector contracts and deterministic fakes.
+
+Re-exporting supported types here gives callers one stable module to import from
+while fixtures remain an implementation/testing concern in ``fixtures.py``.
+"""

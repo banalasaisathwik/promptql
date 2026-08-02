@@ -8,9 +8,13 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 ### YYYY-MM-DD — Lesson title
 
 - **Concept:** The engineering idea.
+- **Important syntax:** Language, framework, or library syntax worth retaining.
 - **Implementation location:** Files, functions, tests, or commands providing evidence.
+- **Design decision:** The chosen approach and why it fits the concrete task.
+- **Invariant or failure behavior:** What later changes must preserve.
 - **Misconception corrected:** The prior assumption and more accurate model.
 - **Trade-off learned:** The concrete benefit, cost, and relevant conditions.
+- **Validation evidence:** Commands or tests demonstrating the behavior.
 - **Unresolved question:** A focused question requiring evidence or a decision.
 
 ## Repository-supported lessons
@@ -38,3 +42,233 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   prevent plans from becoming false operational guarantees.
 - **Unresolved question:** Which journey should be the first observable
   frontend-to-API slice?
+
+### 2026-07-30 — Validate connector facts before policy decisions
+
+- **Concept:** A connector boundary should return validated source facts; a
+  later policy layer should decide whether those facts mean a pull request is
+  merge-ready.
+- **Important syntax:** `StrEnum` gives Pydantic fields a closed set of
+  string-valued states. `Annotated[int, Field(strict=True, gt=0)]` rejects
+  coercion and non-positive PR numbers. `ConfigDict(extra="forbid",
+  frozen=True)` rejects unexpected fields and prevents model mutation.
+  `MappingProxyType` makes fixture maps read-only, while tuples make nested
+  collections immutable. `model_validate(...)` validates fixture variants;
+  unlike `model_copy(update=...)`, its updates do not bypass validation.
+- **Implementation location:** `services/api/app/connectors/models.py` defines
+  the request, GitHub, Jira, and enum contracts. `fixture_catalog.py`,
+  `github_fixtures.py`, and `jira_fixtures.py` define eight validated scenarios.
+  `fakes.py` performs exact request-key lookup, and `errors.py` defines
+  `FixtureNotFoundError`.
+- **Design decision:** GitHub and Jira have separate response models and fake
+  connectors keyed by the same repository-owner, repository-name, and PR-number
+  request. This preserves connector independence without introducing a shared
+  policy or HTTP API prematurely.
+- **Invariant or failure behavior:** Malformed data raises Pydantic
+  `ValidationError`; a valid but unknown identity raises
+  `FixtureNotFoundError`. Identical requests return equal frozen snapshots
+  without randomness, timestamps, or fallback generation.
+- **Misconception corrected:** A fake connector is not safer merely because its
+  data is hard-coded. Its fixtures still need boundary validation and immutable
+  storage, or tests can silently exercise invalid or mutated states.
+- **Trade-off learned:** In-code fixtures are easy to inspect, type, and test
+  for this small V1 set. A larger fixture catalog may justify external data
+  files, but that would add parsing, discovery, and error-reporting concerns.
+- **Validation evidence:** From `services/api`,
+  `uv run python -m unittest discover -s tests -v` passed seven tests, and
+  `uv run python -m compileall -q app tests` completed successfully.
+- **Unresolved question:** When real connectors are introduced, should their
+  provider-specific payloads be translated directly into these normalized
+  models, or should a separate raw-provider model preserve additional evidence?
+
+### 2026-07-31 — Comments should preserve reasoning, not narrate syntax
+
+- **Concept:** Source documentation is most useful when it explains boundaries,
+  invariants, failure translation, and surprising library behavior close to the
+  code that depends on them.
+- **Important syntax:** A module's first triple-quoted string is its module
+  docstring; the same syntax directly inside a class or function documents that
+  object. `#` comments are better for a local choice such as `raise ... from
+  None`, where suppressing exception chaining would otherwise be non-obvious.
+- **Implementation location:** Docstrings and focused inline comments across
+  `services/api/app/connectors/*.py` and
+  `services/api/tests/unit/test_connector_contracts.py`.
+- **Design decision:** Public concepts receive docstrings, while inline comments
+  are reserved for choices whose rationale is not encoded by names and types.
+  Serialized Pydantic fields were left unchanged so documentation adds no API
+  behavior.
+- **Invariant or failure behavior:** Documentation must remain consistent with
+  strict request validation, frozen contracts, exact fixture lookup, and typed
+  `FixtureNotFoundError` translation.
+- **Misconception corrected:** More comments do not necessarily create better
+  teaching material; comments that repeat assignments increase maintenance cost
+  without explaining a reusable idea.
+- **Trade-off learned:** Detailed reasoning improves approachability but makes
+  source files longer and creates documentation that must evolve with behavior.
+- **Validation evidence:** The connector unit suite and Python compilation check
+  are rerun after this documentation-only change.
+- **Unresolved question:** As real connectors grow, which explanations should
+  remain local docstrings and which should move to architecture documentation?
+
+### 2026-07-31 — Destructive commit automation needs a review boundary
+
+> Superseded later on 2026-07-31 by the workspace-preserving Git clean-filter
+> workflow below after the required local-source behavior was clarified.
+
+- **Concept:** A source-rewriting pre-commit hook should transform only an
+  unambiguous staged scope, validate the result, and stop before creating the
+  commit so destructive changes remain reviewable.
+- **Important syntax:** Python's `tokenize` module distinguishes real `COMMENT`
+  tokens from `#` characters inside strings, while `ast` identifies string
+  expressions that are actual module, class, or function docstrings.
+  `git diff --cached --name-only -z` safely lists staged paths, and
+  `git diff --name-only -z` detects files that also have unstaged changes.
+- **Implementation location:** The ignored local files
+  `.local-tools/strip_python_comments.py`, its focused unit test, and
+  `.githooks/pre-commit`; `.gitignore` keeps this machine-specific workflow out
+  of commits.
+- **Design decision:** The transformer preserves semantic tooling, security,
+  encoding, shebang, and legal comments. Changed source is compiled, written
+  atomically, staged, tested, and then the commit is intentionally aborted for
+  review rather than silently continuing.
+- **Invariant or failure behavior:** Partially staged Python files are never
+  rewritten. A parsing, compilation, write, staging, or test failure prevents
+  the commit. Re-running the transformer on already stripped code is a no-op.
+- **Misconception corrected:** A pre-commit hook that automatically edits and
+  completes a commit is not necessarily convenient; it can hide destructive
+  changes and accidentally stage unrelated working-tree content.
+- **Trade-off learned:** Ignoring the hook and transformer satisfies a local-only
+  workflow but means other clones do not inherit or enforce comment removal.
+- **Validation evidence:** Five transformer tests, seven connector tests, Python
+  compilation, Git ignore matching, hook shell syntax, and its no-change path
+  passed. The checkout uses `core.hooksPath=.githooks`.
+- **Unresolved question:** If this workflow later becomes team policy, should
+  the hook become tracked repository tooling or a server-side CI check?
+
+### 2026-07-31 — Git clean filters can separate workspace and stored content
+
+- **Concept:** A Git clean filter transforms bytes while Git creates an index
+  blob, allowing the commented working file and comment-free committed file to
+  differ without rewriting the workspace.
+- **Important syntax:** `*.py filter=comment-strip` assigns a Git attribute.
+  `filter.comment-strip.clean` defines the stdin-to-stdout transformer, while
+  `filter.comment-strip.required=true` makes Git fail instead of silently
+  storing unfiltered content when the transformer is unavailable.
+- **Implementation location:** The ignored local files
+  `.local-tools/gitattributes`, `strip_python_comments.py`, and its unit test;
+  local Git configuration points `core.attributesFile` at the ignored attribute
+  file. The earlier `.githooks/pre-commit` file and `core.hooksPath` setting were
+  removed.
+- **Design decision:** The transformer is now a pure stream operation: it reads
+  one Python file from standard input and writes stripped bytes to standard
+  output. It performs no filesystem or index mutation.
+- **Invariant or failure behavior:** Git receives compiled, comment-free Python,
+  while the workspace bytes remain unchanged. Semantic directives remain, and
+  parsing or compilation failure blocks Git from accepting the filtered blob.
+- **Misconception corrected:** A pre-commit rewrite cannot provide a temporary
+  Git-only representation because editing and restaging necessarily changes the
+  workspace. Git's clean-filter boundary is designed for this separation.
+- **Trade-off learned:** Commented source remains convenient locally, but the
+  comments are not backed up in Git, clones receive only comment-free source,
+  and this ignored local filter is not automatically configured in another
+  checkout.
+- **Validation evidence:** Unit tests cover parsing and preservation. Filtered
+  and unfiltered Git hashes differ while the workspace SHA-256 remains unchanged;
+  existing connector tests and compilation also pass.
+- **Unresolved question:** Should future TypeScript support use a corresponding
+  syntax-aware clean filter, or should comment-free storage remain Python-only?
+
+### 2026-07-31 — Form drafts and validated requests are different types
+
+- **Concept:** Browser input state should model what a user can temporarily
+  type, while the domain request should model only values safe to serialize.
+- **Important syntax:** A discriminated union using `ok: true | false` lets
+  TypeScript narrow a validation result to either `request` or `errors`.
+  `Partial<Record<keyof ConnectorRequestDraft, string>>` derives error keys
+  directly from editable fields, avoiding a second manually synchronized list.
+- **Implementation location:** `apps/web/src/features/inspection/types.ts` and
+  `requestValidation.ts` define the draft, request, errors, and conversion;
+  `components/RequestForm.tsx` renders controlled inputs and accessible errors.
+- **Design decision:** `pr_number` remains a string in editable state and becomes
+  a number only after digit-only and safe-integer validation. Final JSON keys use
+  the backend's snake_case names so no mapping layer can drift.
+- **Invariant or failure behavior:** Empty owner/repository values, zero,
+  negatives, decimals, exponent notation, and unsafe integers never produce a
+  `ConnectorRequest`. Submitting valid input only previews data and performs no
+  network request.
+- **Misconception corrected:** Using `type="number"` does not automatically make
+  React state a valid backend number; DOM values are strings and number inputs
+  can still represent intermediate invalid states.
+- **Trade-off learned:** Frontend validation gives immediate feedback but cannot
+  replace Pydantic validation at the future HTTP boundary.
+- **Validation evidence:** TypeScript/Vite build and Oxlint are run after the UI
+  implementation.
+- **Unresolved question:** When an API route exists, should submission remain a
+  single request or expose GitHub and Jira connector progress independently?
+
+### 2026-07-31 — Versioned HTTP contracts need validation on both sides
+
+- **Concept:** Static TypeScript types do not validate JSON received at runtime;
+  Pydantic protects the server boundary, while browser type guards protect the
+  rendering boundary from API drift or malformed intermediaries.
+- **Important syntax:** FastAPI `response_model` documents and serializes typed
+  responses, `responses={404: {"model": ApiError}}` documents an expected
+  failure, and an exception handler translates a domain lookup error into a
+  stable top-level HTTP body. TypeScript `unknown` plus type predicates such as
+  `value is PullRequestInspection` require proof before rendering.
+- **Implementation location:** `services/api/app/api/v1` owns HTTP routes and
+  error models; `app/inspection` owns orchestration; `app/main.py` registers
+  routing and error translation. Frontend `features/inspection/api.ts` owns
+  fetch calls, `responseValidation.ts` owns runtime parsing, and
+  `ConnectorInspectionPage.tsx` owns UI state transitions.
+
+- **Design decision:** A demo-prefixed catalog remains separate from the stable
+  inspection POST, and Vite proxies relative `/v1` browser URLs locally. This
+  prevents frontend fixture duplication and avoids broad CORS configuration.
+- **Invariant or failure behavior:** The backend is the only scenario source;
+  invalid requests return `422`, unknown fixtures return typed `404`, malformed
+  responses never render, and inspection data contains no policy conclusion.
+- **Misconception corrected:** Matching TypeScript interfaces and Pydantic
+  classes does not guarantee runtime compatibility because TypeScript types are
+  erased and network payloads remain untrusted values.
+- **Trade-off learned:** Handwritten browser guards add code and mirror response
+  fields, but avoid a new schema/code-generation dependency in this V1 slice.
+- **Validation evidence:** Five focused API tests and seven connector tests pass;
+  frontend parser assertions, Oxlint, TypeScript compilation, and Vite build
+  pass. TestClient emits a dependency deprecation warning without test failure.
+- **Unresolved question:** When the API surface grows, should OpenAPI-generated
+  types and runtime schemas replace handwritten frontend contracts?
+
+### 2026-08-01 — Modularization should follow questions, not file size
+
+- **Concept:** A useful module boundary lets a reader open one file to answer
+  one concrete question. Splitting solely because a file is long can increase
+  navigation without improving understanding.
+- **Important syntax:** Python modules are imported `.py` files, packages are
+  directories containing `__init__.py`, and leading underscores communicate
+  private conventions. React components are ordinary functions whose typed
+  props define their inputs; custom feature modules can separate data, effects,
+  validation, and rendering without a framework.
+- **Implementation location:** Python provider fixtures now live in
+  `fixture_catalog.py`, `github_fixtures.py`, and `jira_fixtures.py`; plain
+  application functions live in `inspection/service.py`. The frontend feature
+  is organized under `apps/web/src/features/inspection` by types, validation,
+  transport, coordination, and presentation.
+- **Design decision:** Routes remain HTTP-only and delegate to two service
+  functions instead of introducing a dependency-injection framework. `App.tsx`
+  delegates to one feature page, while form and response components remain
+  stateless except for DOM events.
+- **Invariant or failure behavior:** Endpoint paths, JSON contracts, all eight
+  fixture values, error statuses, runtime response validation, and visible UI
+  behavior remain unchanged by the module moves.
+- **Misconception corrected:** More abstraction is not always more modular. A
+  class, interface, or framework is unnecessary when two named functions express
+  the complete application use case clearly.
+- **Trade-off learned:** The refactor adds files and import statements, but each
+  file is shorter, provider ownership is explicit, and beginners can follow the
+  request flow in one direction.
+- **Validation evidence:** Twelve backend tests and compilation pass after the
+  Python split; frontend TypeScript build, Oxlint, and boundary assertions pass
+  after the component and transport split.
+- **Unresolved question:** At what feature count should shared frontend runtime
+  validation helpers move out of the inspection feature?

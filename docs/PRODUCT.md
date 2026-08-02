@@ -18,8 +18,9 @@ V0 establishes:
 - testing conventions, where tooling may still be unconfigured; and
 - an agent-development workflow that supports review and learning.
 
-V0 does **not** implement the complete agent runtime. The current UI is a Vite
-starter and the current API exposes only a health endpoint.
+V0 does **not** implement the complete agent runtime. The current UI loads demo
+fixture choices, submits a typed connector request, and displays deterministic
+GitHub and Jira evidence returned by the V1 API.
 
 ## Later directions
 

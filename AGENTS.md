@@ -231,6 +231,28 @@ Ground explanations in actual files, functions, commands and diff lines.
 
 Do not provide vague textbook explanations disconnected from the implementation.
 
+## Required learning-log update
+
+After every meaningful task that implements or changes code, update
+`docs/learning/LEARNING-LOG.md` before finishing. This is required even when the
+same task also has a completed task record, ADR, execution plan, or detailed
+teaching response.
+
+Each new learning-log entry must be grounded in the implemented diff and include:
+
+* the engineering concept learned
+* important language, framework, or library syntax introduced by the change
+* the implementation locations and validation commands that provide evidence
+* the important design decision and why it was selected
+* the invariant or failure behavior that future changes must preserve
+* the concrete trade-off and any unresolved question
+
+Do not turn the learning log into a file-by-file changelog or paste large code
+blocks. Explain only syntax and decisions that improve the repository owner's
+reusable understanding. For a trivial code change with no new reusable lesson,
+add a concise entry stating what existing pattern was reinforced rather than
+silently skipping the log.
+
 ## Source-code comments
 
 Comments should explain:
