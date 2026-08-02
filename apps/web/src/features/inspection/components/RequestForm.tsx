@@ -151,7 +151,7 @@ export function RequestForm({
       </div>
 
       <button className="primary-button" type="submit" disabled={submitting}>
-        {submitting ? 'Inspecting…' : 'Prepare request'}
+        {submitting ? 'Analysing…' : 'Analyse merge readiness'}
         {!submitting && <span aria-hidden="true">→</span>}
       </button>
 

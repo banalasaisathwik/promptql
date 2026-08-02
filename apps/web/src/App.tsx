@@ -1,15 +1,15 @@
 /** Root React component.
  *
  * App deliberately contains no feature logic. It selects the page to render,
- * while the inspection feature owns its state, API calls, and presentation.
+ * while the readiness feature owns its state, API calls, and presentation.
  */
 
 import './App.css'
-import { ConnectorInspectionPage } from './features/inspection/ConnectorInspectionPage'
+import { MergeReadinessPage } from './features/inspection/MergeReadinessPage'
 
 
 function App() {
-  return <ConnectorInspectionPage />
+  return <MergeReadinessPage />
 }
 
 

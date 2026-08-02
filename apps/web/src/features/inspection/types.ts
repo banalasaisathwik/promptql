@@ -81,8 +81,69 @@ export interface JiraIssue {
   assignee: JiraAssignee | null
 }
 
-export interface PullRequestInspection {
+export type MergeReadinessDecision = 'ready' | 'blocked' | 'unknown'
+
+export type PolicyReasonCode =
+  | 'ready'
+  | 'pr_is_draft'
+  | 'pr_closed_unmerged'
+  | 'merge_conflict'
+  | 'ci_check_failed'
+  | 'ci_check_pending'
+  | 'approval_missing'
+  | 'changes_requested'
+  | 'jira_link_missing'
+  | 'jira_not_complete'
+  | 'jira_blocker_present'
+  | 'evidence_unavailable'
+
+export type PendingActionCode =
+  | 'mark_pr_ready'
+  | 'reopen_pr'
+  | 'resolve_merge_conflict'
+  | 'fix_ci_check'
+  | 'wait_for_ci_check'
+  | 'get_required_approval'
+  | 'address_requested_changes'
+  | 'link_jira_issue'
+  | 'complete_jira_issue'
+  | 'clear_jira_blocker'
+  | 'retry_evidence'
+
+export type EvidenceSource = 'github' | 'jira'
+
+export interface EvidenceReference {
+  reference_id: string
+  source: EvidenceSource
+  field: string
+  value: string | boolean | number | null
+}
+
+export interface PolicyFinding {
+  reason_code: PolicyReasonCode
+  message: string
+  evidence_reference_ids: string[]
+}
+
+export interface PendingAction {
+  action_code: PendingActionCode
+  reason_code: PolicyReasonCode
+  message: string
+}
+
+export interface MergeReadinessResult {
+  decision: MergeReadinessDecision
+  summary: string
+  reason_code: PolicyReasonCode
+  blockers: PolicyFinding[]
+  pending_actions: PendingAction[]
+  missing_information: PolicyFinding[]
+  evidence_references: EvidenceReference[]
+}
+
+export interface PullRequestMergeReadiness {
   request: ConnectorRequest
-  github: GitHubPullRequest
-  jira: JiraIssue
+  github: GitHubPullRequest | null
+  jira: JiraIssue | null
+  policy_result: MergeReadinessResult
 }

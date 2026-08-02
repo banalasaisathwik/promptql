@@ -272,3 +272,72 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   after the component and transport split.
 - **Unresolved question:** At what feature count should shared frontend runtime
   validation helpers move out of the inspection feature?
+
+### 2026-08-02 — Deterministic policy separates facts from conclusions
+
+- **Concept:** Connector facts and policy conclusions have different ownership.
+  A pure policy function can turn immutable source facts into a reproducible
+  decision without knowing how those facts were retrieved.
+- **Important syntax:** A union such as `GitHubPullRequest | None` makes
+  unavailable evidence explicit in the function type. `StrEnum` provides stable
+  machine-readable decision, reason, action, and source values. Frozen Pydantic
+  models and tuples make the returned result immutable by contract.
+- **Implementation location:** `services/api/app/policy/models.py` defines typed
+  results and `evaluator.py` implements the rules. The focused behavior tests
+  are in `services/api/tests/unit/test_merge_readiness_policy.py`.
+- **Design decision:** The evaluator uses direct ordered checks instead of a
+  generic rule engine. It collects every verified blocker and every missing
+  fact before applying the precedence `blocked`, then `unknown`, then `ready`.
+  Findings point to typed evidence references rather than relying only on prose.
+- **Invariant or failure behavior:** Missing or indeterminate evidence never
+  becomes a blocker. A verified blocker still wins when other evidence is
+  unavailable, and no early return hides simultaneous blockers. Jira facts are
+  used only when their issue key matches the key linked by GitHub.
+- **Trade-off learned:** A fixed requirement of one approval and direct checks
+  are easy to understand and deterministic for V1, but they do not support
+  repository-specific policy configuration. `None` expresses availability but
+  does not explain whether a connector timed out, lacked permission, or was
+  rate-limited.
+- **Validation evidence:**
+  `uv run python -m unittest tests.unit.test_merge_readiness_policy -v` passed
+  10 policy tests; `uv run python -m unittest discover -s tests -v` passed all
+  22 backend tests with the existing `TestClient` deprecation warning; and
+  `uv run python -m compileall -q app tests` passed.
+- **Unresolved question:** When real connector failures arrive, should `None`
+  become a typed availability object that distinguishes retryable failures from
+  permission or configuration failures?
+
+### 2026-08-02 — Orchestration makes a pure policy usable without moving its rules
+
+- **Concept:** A pure policy becomes an application workflow only when an
+  orchestration boundary retrieves facts, handles availability, calls the
+  policy, and returns both conclusions and supporting evidence. The route and
+  frontend should transport that result rather than reimplement it.
+- **Important syntax:** FastAPI `Depends` supplies default fake connectors while
+  `app.dependency_overrides` supplies deterministic unavailable test doubles.
+  Python `Protocol` describes the small connector method each service needs.
+  In TypeScript, network JSON remains `unknown` until runtime guards prove the
+  nested `policy_result` and optional connector facts.
+- **Implementation location:** `app.inspection.service.analyze_pull_request_merge_readiness`
+  coordinates connectors and `evaluate_merge_readiness`; the route is in
+  `app/api/v1/connector_router.py`. Frontend `api.ts` calls the new endpoint,
+  `responseValidation.ts` validates it, and `MergeReadinessPanel.tsx` renders it.
+- **Design decision:** A dedicated `/v1/pull-request-merge-readiness` endpoint
+  preserves ADR-001’s facts-only inspection contract. The response nests the
+  complete decision under `policy_result` and keeps nullable raw facts beside
+  it for evidence and debugging.
+- **Invariant or failure behavior:** Only `ConnectorUnavailableError` becomes
+  missing evidence. Fixture-not-found remains `404`, request validation remains
+  `422`, verified blockers beat missing evidence, and the frontend displays
+  `policy_result.decision` without deriving it from blocker counts.
+- **Trade-off learned:** An additive endpoint and response wrapper add types and
+  one URL, but avoid a breaking response change. FastAPI dependency providers
+  add a small amount of wiring while enabling HTTP tests for partial failures
+  that predefined fixtures do not produce.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  passed 29 backend tests with the existing `TestClient` warning;
+  `uv run python -m compileall -q app tests` passed; `bun run test:web` passed
+  7 frontend tests; and `bun run build:web` plus `bun run lint:web` passed.
+- **Unresolved question:** When connector failure reasons become user-visible,
+  should the HTTP result expose retryability and permission details separately
+  from policy missing-information messages?

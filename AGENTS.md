@@ -162,6 +162,27 @@ For a cross-layer feature, migration, major refactor or task that cannot be safe
 * Do not claim success before validation completes.
 * Do not overwrite unrelated uncommitted work.
 
+## Simple code and naming
+
+Write code for a reader who is still learning the language and the repository.
+
+* Use simple, descriptive names that state what a value, function, class or
+  module represents.
+* Avoid unexplained abbreviations, clever names and vague names such as
+  `data`, `item`, `thing`, `helper` or `manager` when a precise name is
+  available.
+* Prefer direct functions and clear control flow over unnecessary classes,
+  generic frameworks, metaprogramming or deeply nested abstractions.
+* Keep each function focused on one understandable responsibility. Split long
+  functions when the resulting function names make the flow easier to follow.
+* Create a new module only when it gives a related group of behaviour a clear
+  home; do not split code into tiny files that make the request flow harder to
+  trace.
+* When a simple implementation and a more abstract implementation both satisfy
+  the current requirements, choose the simple implementation.
+* Explain non-obvious syntax and design reasoning in learning documentation or
+  focused comments, while following the source-code comment rules below.
+
 ## Dependency proposal protocol
 
 Before adding a dependency, report:

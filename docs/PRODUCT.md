@@ -19,8 +19,9 @@ V0 establishes:
 - an agent-development workflow that supports review and learning.
 
 V0 does **not** implement the complete agent runtime. The current UI loads demo
-fixture choices, submits a typed connector request, and displays deterministic
-GitHub and Jira evidence returned by the V1 API.
+fixture choices, submits a typed connector request, and displays the
+deterministic merge-readiness decision, findings, actions, missing information,
+and evidence returned by the V1 API.
 
 ## Later directions
 

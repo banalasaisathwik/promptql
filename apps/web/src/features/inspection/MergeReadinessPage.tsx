@@ -5,10 +5,13 @@
  * and this page coordinates state transitions between those responsibilities.
  */
 
-import { useEffect, useState } from 'react'
-import { fetchFixtureScenarios, inspectPullRequest } from './api'
+import { useEffect, useRef, useState } from 'react'
+import {
+  analyzePullRequestMergeReadiness,
+  fetchFixtureScenarios,
+} from './api'
 import { ConnectorApiError } from './apiError'
-import { InspectionPanel } from './components/InspectionPanel'
+import { MergeReadinessPanel } from './components/MergeReadinessPanel'
 import { RequestForm } from './components/RequestForm'
 import {
   createConnectorRequest,
@@ -18,11 +21,11 @@ import type {
   ConnectorRequestDraft,
   ConnectorRequestErrors,
   FixtureScenario,
-  PullRequestInspection,
+  PullRequestMergeReadiness,
 } from './types'
 
 
-export function ConnectorInspectionPage() {
+export function MergeReadinessPage() {
   // Each useState call owns one independent piece of changing UI data. Keeping
   // request, catalog, and submission state separate makes transitions explicit.
   const [draft, setDraft] = useState<ConnectorRequestDraft>(
@@ -33,9 +36,10 @@ export function ConnectorInspectionPage() {
   const [selectedScenarioId, setSelectedScenarioId] = useState('')
   const [catalogError, setCatalogError] = useState<string | null>(null)
   const [catalogLoading, setCatalogLoading] = useState(true)
-  const [inspection, setInspection] = useState<PullRequestInspection | null>(null)
+  const [analysis, setAnalysis] = useState<PullRequestMergeReadiness | null>(null)
   const [submissionError, setSubmissionError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const submissionInProgress = useRef(false)
 
   useEffect(() => {
     // Effects perform work outside rendering. AbortController prevents an
@@ -67,8 +71,8 @@ export function ConnectorInspectionPage() {
     return () => controller.abort()
   }, [])
 
-  function clearInspectionResult() {
-    setInspection(null)
+  function clearAnalysisResult() {
+    setAnalysis(null)
     setSubmissionError(null)
   }
 
@@ -78,13 +82,13 @@ export function ConnectorInspectionPage() {
     setDraft((currentDraft) => ({ ...currentDraft, [field]: value }))
     setErrors((currentErrors) => ({ ...currentErrors, [field]: undefined }))
     setSelectedScenarioId('')
-    clearInspectionResult()
+    clearAnalysisResult()
   }
 
   function selectScenario(scenarioId: string) {
     setSelectedScenarioId(scenarioId)
     setErrors({})
-    clearInspectionResult()
+    clearAnalysisResult()
 
     const scenario = scenarios.find((item) => item.id === scenarioId)
     if (!scenario) {
@@ -101,22 +105,29 @@ export function ConnectorInspectionPage() {
     })
   }
 
-  async function submitInspection() {
+  async function submitAnalysis() {
+    // React state updates are scheduled. The ref changes immediately, so two
+    // rapid submit events cannot start duplicate HTTP requests.
+    if (submissionInProgress.current) {
+      return
+    }
+
     const result = createConnectorRequest(draft)
 
     if (!result.ok) {
       setErrors(result.errors)
-      clearInspectionResult()
+      clearAnalysisResult()
       return
     }
 
+    submissionInProgress.current = true
     setErrors({})
     setSubmitting(true)
-    clearInspectionResult()
+    clearAnalysisResult()
 
     try {
-      const response = await inspectPullRequest(result.request)
-      setInspection(response)
+      const response = await analyzePullRequestMergeReadiness(result.request)
+      setAnalysis(response)
     } catch (error) {
       setSubmissionError(
         error instanceof ConnectorApiError
@@ -124,6 +135,7 @@ export function ConnectorInspectionPage() {
           : 'The inspection request failed unexpectedly.',
       )
     } finally {
+      submissionInProgress.current = false
       setSubmitting(false)
     }
   }
@@ -141,10 +153,11 @@ export function ConnectorInspectionPage() {
       <section className="workspace" aria-labelledby="page-title">
         <div className="intro">
           <p className="eyebrow">GitHub + Jira</p>
-          <h1 id="page-title">Inspect a pull request</h1>
+          <h1 id="page-title">Analyse merge readiness</h1>
           <p className="intro-copy">
             Choose a backend fixture or enter a repository reference, then load
-            its GitHub and Jira evidence through the versioned API.
+            its backend policy decision and supporting evidence through the
+            versioned API.
           </p>
         </div>
 
@@ -160,14 +173,14 @@ export function ConnectorInspectionPage() {
             submissionError={submissionError}
             onDraftChange={updateDraft}
             onScenarioChange={selectScenario}
-            onSubmit={submitInspection}
+            onSubmit={submitAnalysis}
           />
-          <InspectionPanel inspection={inspection} loading={submitting} />
+          <MergeReadinessPanel analysis={analysis} loading={submitting} />
         </div>
       </section>
 
       <footer className="site-footer">
-        <span>V1 connector inspection</span>
+        <span>V1 merge readiness</span>
         <span>Backend fixture environment</span>
       </footer>
     </main>

@@ -8,6 +8,7 @@
   "scripts": {
     "dev:web": "bun run --cwd apps/web dev",
     "build:web": "bun run --cwd apps/web build",
-    "lint:web": "bun run --cwd apps/web lint"
+    "lint:web": "bun run --cwd apps/web lint",
+    "test:web": "bun run --cwd apps/web test"
   }
 }

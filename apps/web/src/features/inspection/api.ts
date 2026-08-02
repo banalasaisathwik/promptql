@@ -7,11 +7,14 @@
  */
 
 import { ConnectorApiError } from './apiError'
-import { parseInspection, parseScenarioCatalog } from './responseValidation'
+import {
+  parseMergeReadiness,
+  parseScenarioCatalog,
+} from './responseValidation'
 import type {
   ConnectorRequest,
   FixtureScenario,
-  PullRequestInspection,
+  PullRequestMergeReadiness,
 } from './types'
 
 
@@ -72,14 +75,14 @@ export async function fetchFixtureScenarios(
 }
 
 
-export async function inspectPullRequest(
+export async function analyzePullRequestMergeReadiness(
   request: ConnectorRequest,
-): Promise<PullRequestInspection> {
-  const body = await requestJson('/v1/pull-request-inspections', {
+): Promise<PullRequestMergeReadiness> {
+  const body = await requestJson('/v1/pull-request-merge-readiness', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
   })
 
-  return parseInspection(body)
+  return parseMergeReadiness(body)
 }

@@ -9,13 +9,47 @@
 import { ConnectorApiError } from './apiError'
 import type {
   ConnectorRequest,
+  EvidenceReference,
   FixtureScenario,
   GitHubPullRequest,
   GitHubUser,
   JiraIssue,
-  PullRequestInspection,
+  MergeReadinessResult,
+  PendingAction,
+  PolicyFinding,
+  PullRequestMergeReadiness,
   RequiredCheck,
 } from './types'
+
+
+const POLICY_REASON_CODES = [
+  'ready',
+  'pr_is_draft',
+  'pr_closed_unmerged',
+  'merge_conflict',
+  'ci_check_failed',
+  'ci_check_pending',
+  'approval_missing',
+  'changes_requested',
+  'jira_link_missing',
+  'jira_not_complete',
+  'jira_blocker_present',
+  'evidence_unavailable',
+] as const
+
+const PENDING_ACTION_CODES = [
+  'mark_pr_ready',
+  'reopen_pr',
+  'resolve_merge_conflict',
+  'fix_ci_check',
+  'wait_for_ci_check',
+  'get_required_approval',
+  'address_requested_changes',
+  'link_jira_issue',
+  'complete_jira_issue',
+  'clear_jira_blocker',
+  'retry_evidence',
+] as const
 
 
 // A JavaScript array is also an object, so the Array check prevents accidentally
@@ -128,14 +162,74 @@ export function parseScenarioCatalog(value: unknown): FixtureScenario[] {
 }
 
 
-export function parseInspection(value: unknown): PullRequestInspection {
+function isPolicyFinding(value: unknown): value is PolicyFinding {
+  return (
+    isRecord(value) &&
+    isOneOf(value.reason_code, POLICY_REASON_CODES) &&
+    isNonEmptyString(value.message) &&
+    Array.isArray(value.evidence_reference_ids) &&
+    value.evidence_reference_ids.every(isNonEmptyString)
+  )
+}
+
+
+function isPendingAction(value: unknown): value is PendingAction {
+  return (
+    isRecord(value) &&
+    isOneOf(value.action_code, PENDING_ACTION_CODES) &&
+    isOneOf(value.reason_code, POLICY_REASON_CODES) &&
+    isNonEmptyString(value.message)
+  )
+}
+
+
+function isEvidenceReference(value: unknown): value is EvidenceReference {
+  const evidenceValueIsValid =
+    value !== null &&
+    isRecord(value) &&
+    (typeof value.value === 'string' ||
+      typeof value.value === 'boolean' ||
+      (typeof value.value === 'number' && Number.isSafeInteger(value.value)) ||
+      value.value === null)
+
+  return (
+    evidenceValueIsValid &&
+    isNonEmptyString(value.reference_id) &&
+    isOneOf(value.source, ['github', 'jira']) &&
+    isNonEmptyString(value.field)
+  )
+}
+
+
+function isMergeReadinessResult(value: unknown): value is MergeReadinessResult {
+  return (
+    isRecord(value) &&
+    isOneOf(value.decision, ['ready', 'blocked', 'unknown']) &&
+    isNonEmptyString(value.summary) &&
+    isOneOf(value.reason_code, POLICY_REASON_CODES) &&
+    Array.isArray(value.blockers) &&
+    value.blockers.every(isPolicyFinding) &&
+    Array.isArray(value.pending_actions) &&
+    value.pending_actions.every(isPendingAction) &&
+    Array.isArray(value.missing_information) &&
+    value.missing_information.every(isPolicyFinding) &&
+    Array.isArray(value.evidence_references) &&
+    value.evidence_references.every(isEvidenceReference)
+  )
+}
+
+
+export function parseMergeReadiness(
+  value: unknown,
+): PullRequestMergeReadiness {
   if (
     !isRecord(value) ||
     !isConnectorRequest(value.request) ||
-    !isGitHubPullRequest(value.github) ||
-    !isJiraIssue(value.jira)
+    !(value.github === null || isGitHubPullRequest(value.github)) ||
+    !(value.jira === null || isJiraIssue(value.jira)) ||
+    !isMergeReadinessResult(value.policy_result)
   ) {
-    throw new ConnectorApiError('The inspection response is malformed.')
+    throw new ConnectorApiError('The merge-readiness response is malformed.')
   }
 
   // Reconstructing the object after guards makes the proven types explicit to
@@ -145,5 +239,6 @@ export function parseInspection(value: unknown): PullRequestInspection {
     request: value.request,
     github: value.github,
     jira: value.jira,
+    policy_result: value.policy_result,
   }
 }

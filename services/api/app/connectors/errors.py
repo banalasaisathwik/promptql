@@ -3,12 +3,20 @@ pass
 from app.connectors.models import ConnectorRequest
 
 
+class ConnectorUnavailableError(RuntimeError):
+    pass
+
+    def __init__(self, connector_name: str) -> None:
+        self.connector_name = connector_name
+        super().__init__(f"{connector_name} connector is unavailable")
+
+
 class FixtureNotFoundError(LookupError):
     pass
 
     def __init__(self, connector_name: str, request: ConnectorRequest) -> None:
-                                                                             
-                                                                        
+
+
         self.connector_name = connector_name
         self.request = request
         super().__init__(

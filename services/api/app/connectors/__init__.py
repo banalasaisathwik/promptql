@@ -1,4 +1,4 @@
-from app.connectors.errors import FixtureNotFoundError
+from app.connectors.errors import ConnectorUnavailableError, FixtureNotFoundError
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.models import (
     BlockerState,
@@ -14,12 +14,13 @@ from app.connectors.models import (
     RequiredCheck,
 )
 
-                                                                            
-                                                                               
+
+
 __all__ = [
     "BlockerState",
     "CheckStatus",
     "ConnectorRequest",
+    "ConnectorUnavailableError",
     "FakeGitHubConnector",
     "FakeJiraConnector",
     "FixtureNotFoundError",

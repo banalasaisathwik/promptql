@@ -20,3 +20,4 @@ Create a new ADR, mark the old one superseded, and link both.
 | ADR | Status | Decision |
 | --- | --- | --- |
 | [ADR-001](ADR-001-versioned-connector-inspection-api.md) | Accepted | Versioned inspection endpoint, backend-owned demo fixture catalog, and relative `/v1` frontend routing |
+| [ADR-002](ADR-002-merge-readiness-http-workflow.md) | Accepted | Additive merge-readiness endpoint with backend-owned policy decisions and supporting connector facts |

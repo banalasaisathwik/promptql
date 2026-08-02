@@ -15,12 +15,14 @@ browser -> Vite React application (apps/web) -> FastAPI API (services/api)
 ```
 
 The frontend loads the backend-owned demo scenario catalog, posts a validated
-connector request, and renders returned GitHub and Jira fixture evidence. The
-API also serves `GET /health`.
+connector request, and renders the backend-owned merge-readiness decision plus
+its supporting GitHub and Jira fixture evidence. The API also serves
+`GET /health`.
 
 ```text
 GET  /v1/demo/pull-request-scenarios -> selectable fixture metadata
 POST /v1/pull-request-inspections    -> combined GitHub and Jira facts
+POST /v1/pull-request-merge-readiness -> policy result plus supporting facts
 ```
 
 Browser code calls relative `/v1` URLs. Vite proxies that prefix to the local
@@ -32,7 +34,7 @@ same routing contract.
 | Path | Current responsibility |
 | --- | --- |
 | `apps/web` | Browser UI, runtime response validation, backend fixture selection, request submission, and evidence presentation |
-| `services/api` | Backend HTTP boundary, connector contracts, deterministic fixtures, demo catalog, and V1 inspection orchestration |
+| `services/api` | Backend HTTP boundary, connector contracts, deterministic fixtures, V1 inspection orchestration, and pure merge-readiness policy |
 | `packages` | Reserved for reusable TypeScript packages; not yet present |
 | `docs` | Product, architecture, testing, decisions, work records, and learning |
 | `infra` | Reserved for future infrastructure configuration; not yet present |
@@ -54,6 +56,9 @@ services/api/app/
 ├── inspection/
 │   ├── models.py             # What combined application results exist?
 │   └── service.py            # How are GitHub and Jira calls coordinated?
+├── policy/
+│   ├── models.py             # What typed readiness conclusions exist?
+│   └── evaluator.py          # How do provider facts become a decision?
 ├── api/v1/
 │   ├── models.py             # What HTTP-specific error bodies exist?
 │   └── connector_router.py   # Which URLs expose the use case?
@@ -67,10 +72,10 @@ apps/web/src/features/inspection/
 ├── responseValidation.ts     # How is unknown network JSON proven safe?
 ├── apiError.ts               # How are client failures represented?
 ├── api.ts                    # How does the browser call /v1?
-├── ConnectorInspectionPage.tsx # How do UI states transition?
+├── MergeReadinessPage.tsx     # How do analysis UI states transition?
 └── components/
     ├── RequestForm.tsx       # How is request input rendered?
-    └── InspectionPanel.tsx   # How is returned evidence rendered?
+    └── MergeReadinessPanel.tsx # How are decisions and evidence rendered?
 ```
 
 ## Dependency and ownership boundaries
@@ -90,12 +95,17 @@ apps/web/src/features/inspection/
   inspection contract can remain when real connectors replace the fakes.
 - HTTP routes delegate orchestration to `app.inspection.service`; routes do not
   construct provider responses directly.
+- `app.policy.evaluate_merge_readiness` is a pure domain function. It accepts
+  typed GitHub and Jira facts, performs no connector or infrastructure calls,
+  and returns every verified blocker plus explicit missing information and
+  evidence references. `POST /v1/pull-request-merge-readiness` invokes it after
+  connector retrieval; the older inspection endpoint remains facts-only.
 - Frontend network data remains `unknown` until `responseValidation.ts` proves
   the expected runtime structure.
 
 ## Not implemented
 
-The merge-readiness policy, agent runtime, persistence, real connectors,
+The agent runtime, persistence, real connectors,
 authentication and authorization, tenant isolation, LLMOps, and evaluations
 are planned areas only. No database, queue, cache, cloud service, or deployed
 runtime component is present.
