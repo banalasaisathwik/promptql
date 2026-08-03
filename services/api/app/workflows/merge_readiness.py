@@ -111,18 +111,27 @@ class MergeReadinessWorkflowService:
         started_at_ns: int,
         **run_updates,
     ) -> MergeReadinessRun:
-        completed_step = transition_step(
-            step,
-            StepStatus.COMPLETED,
-            self._timestamp_clock(),
-            duration_ms=self._duration_ms(started_at_ns),
-        )
+        completed_step = self._build_completed_step(step, started_at_ns)
         return self._save(
             _replace_run(
                 run,
                 steps=(*run.steps[:-1], completed_step),
                 **run_updates,
             )
+        )
+
+    def _build_completed_step(
+        self,
+        step: RuntimeStep,
+        started_at_ns: int,
+    ) -> RuntimeStep:
+        pass
+
+        return transition_step(
+            step,
+            StepStatus.COMPLETED,
+            self._timestamp_clock(),
+            duration_ms=self._duration_ms(started_at_ns),
         )
 
     def _fail_step_and_run(
@@ -139,15 +148,19 @@ class MergeReadinessWorkflowService:
             duration_ms=self._duration_ms(started_at_ns),
             error=error,
         )
-        run = self._save(
-            _replace_run(run, steps=(*run.steps[:-1], failed_step))
+        run_with_failed_step = _replace_run(
+            run,
+            steps=(*run.steps[:-1], failed_step),
         )
         failed_run = transition_run(
-            run,
+            run_with_failed_step,
             RunStatus.FAILED,
             self._timestamp_clock(),
             error=error,
         )
+
+
+
         return self._save(failed_run)
 
     def execute(self, request: ConnectorRequest) -> MergeReadinessRun:
@@ -250,12 +263,20 @@ class MergeReadinessWorkflowService:
                     message="The merge-readiness policy step failed unexpectedly.",
                 ),
             )
-        run = self._complete_step(run, policy_step, policy_started_ns)
-
-        completed_run = transition_run(
+        completed_policy_step = self._build_completed_step(
+            policy_step,
+            policy_started_ns,
+        )
+        run_with_completed_policy = _replace_run(
             run,
+            steps=(*run.steps[:-1], completed_policy_step),
+        )
+        completed_run = transition_run(
+            run_with_completed_policy,
             RunStatus.COMPLETED,
             self._timestamp_clock(),
             result=result,
         )
+
+
         return self._save(completed_run)

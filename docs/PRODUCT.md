@@ -20,21 +20,22 @@ V0 establishes:
 
 V0 does **not** implement the complete agent runtime. The current V1 slice has a
 basic synchronous runtime that records the merge-readiness workflow's connector
-and policy steps. The UI loads demo fixture choices, submits a typed connector
-request, and displays the deterministic decision, findings, actions, missing
-information, and evidence returned by the API.
+and policy steps. Runtime runs and ordered steps can be persisted in managed
+PostgreSQL and retrieved by run ID. The UI loads demo fixture choices, submits a
+typed connector request, and displays the deterministic decision, findings,
+actions, missing information, and evidence returned by the API.
 
 ## Later directions
 
 Later versions may introduce investigation workflows, governed connectors,
-persistent state, model and prompt operations, evidence-aware answers, and
-evaluation infrastructure. These are directions, not current capabilities, and
-each architectural choice requires separate resolution.
+additional persisted state, model and prompt operations, evidence-aware
+answers, and evaluation infrastructure. These are directions, not current
+capabilities, and each architectural choice requires separate resolution.
 
 ## V0 non-goals
 
 - A production-ready autonomous agent runtime
-- Database, queue, cache, or cloud deployment selection
+- Queue, cache, or application deployment selection
 - Enterprise identity, authorization, or tenant isolation
 - Live enterprise data connectors
 - Model-provider integration or prompt management

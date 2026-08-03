@@ -377,3 +377,102 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   7 frontend tests; and `bun run build:web` plus `bun run lint:web` passed.
 - **Unresolved question:** Should the first persistence task store every runtime
   snapshot as history, or store only the latest run plus separate step events?
+
+### 2026-08-03 — Durability is a commit guarantee, not an in-memory result
+
+- **Concept:** A workflow result becomes durable only after PostgreSQL confirms
+  the transaction. Computing a policy result in memory is insufficient for an
+  HTTP `200`; a terminal persistence failure must return `503` without claiming
+  the run completed or failed durably.
+- **Important syntax:** SQLAlchemy's `sessionmaker.begin()` scopes one session,
+  transaction, commit, rollback, and close around a repository save. PostgreSQL
+  `JSONB` stores typed snapshots while `UUID`, `TIMESTAMPTZ`, `TEXT`, and
+  `INTEGER` columns keep identity, lifecycle, timing, and ordering queryable.
+  Alembic's `upgrade()` and `downgrade()` functions version schema changes
+  independently of application startup.
+- **Implementation location:** `app/database/models.py` defines relational
+  constraints; `postgres_run_repository.py` conditionally stores and rebuilds
+  Pydantic runs; `migrations/versions/20260803_0001_create_runtime_tables.py`
+  creates the schema; and `connector_router.py` exposes `GET /v1/runs/{run_id}`.
+- **Design decision:** Neon hosts ordinary PostgreSQL, while provider-neutral
+  SQLAlchemy 2.x and psycopg 3 own application access. Application traffic uses
+  a pooled URL, Alembic requires a separate direct URL, and production has no
+  memory fallback. Terminal step and run state share one repository commit.
+- **Invariant or failure behavior:** No transaction remains open during GitHub,
+  Jira, or policy work. HTTP `200` or the typed runtime `500` is returned only
+  after the corresponding terminal row commits. Persistence uncertainty uses a
+  fixed sanitized `503`; stored JSON is revalidated before retrieval.
+- **Trade-off learned:** JSONB avoids normalizing every provider fact and keeps
+  the current typed response reconstructible, but PostgreSQL enforces only that
+  each value is an object; Pydantic enforces its nested structure. Conditional
+  status updates fit one V1 owner per run, while future workers will likely need
+  an optimistic version column.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  discovered 54 tests: 50 passed and four PostgreSQL tests skipped explicitly
+  because `TEST_DATABASE_URL` was absent. Python compilation passed, Alembic
+  reported one head, and offline migration SQL rendered successfully without a
+  database connection.
+- **Unresolved question:** When recovery is introduced, should a stranded
+  running step be marked failed by an operator action or claimed by a worker
+  through an optimistic version check?
+
+### 2026-08-03 — JSON `null` and SQL `NULL` are different values
+
+- **Concept:** An optional JSONB column has two possible null representations.
+  SQL `NULL` means no database value exists, while JSON `null` is a present JSON
+  scalar. A constraint that permits SQL `NULL` or a JSON object rejects JSON
+  `null`.
+- **Important syntax:** `JSONB(none_as_null=True)` tells SQLAlchemy to bind
+  Python `None` as SQL `NULL`. Without this option, SQLAlchemy's JSON type uses
+  JSON `null`, even though both values appear as `None` when first reading the
+  Python model.
+- **Implementation location:** Optional run and step snapshot mappings in
+  `app/database/models.py` now use `none_as_null=True`.
+  `tests/unit/test_database_models.py` checks the PostgreSQL bind behavior for
+  GitHub facts, Jira facts, policy result, and runtime errors.
+- **Design decision:** Fix the mapping rather than weakening the database
+  constraints. The constraints still reject arrays, strings, numbers, and JSON
+  `null`, so a present snapshot must remain an object.
+- **Invariant or failure behavior:** Missing facts, result, and errors persist as
+  SQL `NULL`; present typed snapshots persist as JSON objects. This allows a
+  pending run to be inserted before connector evidence exists.
+- **Trade-off learned:** The mapping flag is small and preserves strict storage
+  validation, but its behavior is PostgreSQL-dialect-specific and therefore
+  needs a focused mapping test in addition to Pydantic tests.
+- **Validation evidence:** The focused database-model unit test passed. Full
+  backend discovery ran 55 tests: 51 passed and four isolated PostgreSQL tests
+  skipped because `TEST_DATABASE_URL` was not configured. A failed-CI fixture
+  executed against the configured application database and durably returned
+  `status=completed`, `decision=blocked`, and three recorded steps.
+- **Unresolved question:** If the persistence model gains more optional JSONB
+  columns, should a shared annotated SQLAlchemy type enforce this setting in
+  one place, or is explicit per-column configuration clearer at the current
+  size?
+
+### 2026-08-03 — Correlation identifiers make durable runs usable
+
+- **Concept:** A durable run is easier to inspect when its identifier appears in
+  the server's normal operational output. The ID connects one POST execution to
+  the stored resource available through `GET /v1/runs/{run_id}`.
+- **Important syntax:** Python logging keeps the message template separate from
+  values: `logger.info("...%s", value)`. This defers formatting until the logger
+  needs the record and avoids manually constructing log strings.
+- **Implementation location:** `analyze_pull_request()` in
+  `app/api/v1/connector_router.py` logs the terminal `run_id`, runtime status,
+  and policy decision through Uvicorn's configured logger. Its HTTP integration
+  test captures and verifies the exact safe fields.
+- **Design decision:** Log once after workflow execution returns, when the route
+  has a committed terminal run. This avoids noisy logs for every immutable
+  checkpoint and keeps policy logic outside the HTTP layer.
+- **Invariant or failure behavior:** The log may contain operational identifiers
+  and enums, but never repository input, connector evidence, exception text,
+  secrets, or stack traces.
+- **Trade-off learned:** Reusing `uvicorn.error` makes the line immediately
+  visible with the current server configuration, but couples this small
+  presentation concern to Uvicorn. A later structured-logging task should
+  replace it if the application runs under multiple server implementations.
+- **Validation evidence:** The focused API test passed and proved that the log's
+  run ID equals the ID returned by the typed HTTP response.
+- **Unresolved question:** Should future request-level correlation use the run
+  ID directly, or introduce a separate request ID for calls that fail before a
+  durable run is created?

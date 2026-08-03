@@ -9,6 +9,12 @@ from app.runtime.models import (
     StepStatus,
     WorkflowStepName,
 )
+from app.runtime.errors import (
+    RunPersistenceError,
+    RunRecordInvalidError,
+    RunRepositoryError,
+    RunStateConflictError,
+)
 from app.runtime.repository import InMemoryRunRepository, RunRepository
 from app.runtime.state import (
     InvalidStateTransitionError,
@@ -23,6 +29,10 @@ __all__ = [
     "InvalidStateTransitionError",
     "MergeReadinessRun",
     "RunRepository",
+    "RunPersistenceError",
+    "RunRecordInvalidError",
+    "RunRepositoryError",
+    "RunStateConflictError",
     "RunStatus",
     "RuntimeErrorCode",
     "RuntimeErrorInfo",

@@ -82,8 +82,9 @@ class MergeReadinessWorkflowTests(unittest.TestCase):
         self.assertNotIn("secret-token", run.error.message)
 
     def test_policy_exception_marks_policy_step_and_run_failed(self) -> None:
+        repository = InMemoryRunRepository()
         run = create_workflow(
-            InMemoryRunRepository(),
+            repository,
             policy_evaluator=failing_policy,
         ).execute(MERGE_READY_REQUEST)
 
@@ -96,6 +97,31 @@ class MergeReadinessWorkflowTests(unittest.TestCase):
             RuntimeErrorCode.POLICY_EXECUTION_FAILED,
         )
         self.assertNotIn("private-policy-detail", run.error.message)
+        self.assertFalse(
+            any(
+                snapshot.status is RunStatus.RUNNING
+                and snapshot.steps
+                and snapshot.steps[-1].status is StepStatus.FAILED
+                for snapshot in repository.history
+            )
+        )
+
+    def test_policy_step_and_completed_run_share_one_saved_checkpoint(self) -> None:
+        repository = InMemoryRunRepository()
+
+        run = create_workflow(repository).execute(MERGE_READY_REQUEST)
+
+        self.assertEqual(run.status, RunStatus.COMPLETED)
+        self.assertFalse(
+            any(
+                snapshot.status is RunStatus.RUNNING
+                and snapshot.steps
+                and snapshot.steps[-1].name
+                is WorkflowStepName.EVALUATE_MERGE_READINESS
+                and snapshot.steps[-1].status is StepStatus.COMPLETED
+                for snapshot in repository.history
+            )
+        )
 
     def test_steps_are_recorded_in_execution_order(self) -> None:
         run = create_workflow(InMemoryRunRepository()).execute(MERGE_READY_REQUEST)

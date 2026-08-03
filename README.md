@@ -22,6 +22,7 @@ yet contain the complete agent runtime.
 - Python 3.13 or newer
 - uv
 - Git
+- A managed Neon PostgreSQL project for durable runtime execution
 
 ## Setup and run
 
@@ -36,11 +37,33 @@ From `services/api`:
 
 ```bash
 uv sync
+```
+
+Use `.env.example` as a reference and set these values in the shell environment
+that runs Alembic and FastAPI:
+
+```text
+DATABASE_URL=<pooled Neon PostgreSQL URL>
+DATABASE_MIGRATION_URL=<direct Neon PostgreSQL URL>
+```
+
+Apply migrations explicitly, then start the API:
+
+```bash
+uv run alembic upgrade head
 uv run fastapi dev app/main.py
 ```
 
 The repository does not yet provide one command that starts both applications.
-Environment-variable setup, production deployment, and test commands are also
-not configured yet.
+The API never creates tables or runs migrations automatically at startup.
+
+Run credential-free backend tests with:
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
+PostgreSQL integration tests require a dedicated test branch and the explicit
+environment variables documented in [TESTING.md](docs/TESTING.md).
 
 Start with the [documentation index](docs/index.md) before making changes.

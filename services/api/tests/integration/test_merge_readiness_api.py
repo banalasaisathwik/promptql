@@ -8,13 +8,18 @@ from app.api.v1.connector_router import (
     get_github_connector,
     get_jira_connector,
     get_merge_readiness_workflow,
+    get_run_repository,
 )
 from app.connectors.errors import ConnectorUnavailableError
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.fixture_catalog import FAILED_CI_REQUEST, MERGE_READY_REQUEST
 from app.connectors.models import ConnectorRequest, GitHubPullRequest, JiraIssue
 from app.main import app
-from app.runtime import InMemoryRunRepository, MergeReadinessRun
+from app.runtime import (
+    InMemoryRunRepository,
+    MergeReadinessRun,
+    RunPersistenceError,
+)
 from app.workflows import MergeReadinessWorkflowService
 
 
@@ -40,6 +45,14 @@ class RecordingWorkflow:
         return self.run
 
 
+class UnavailableRunRepository:
+    def save(self, _run: MergeReadinessRun) -> None:
+        raise RunPersistenceError("Runtime persistence is unavailable.")
+
+    def get(self, _run_id):
+        raise RunPersistenceError("Runtime persistence is unavailable.")
+
+
 def provide_unavailable_jira_connector() -> UnavailableJiraConnector:
     return UnavailableJiraConnector()
 
@@ -61,6 +74,12 @@ class MergeReadinessApiTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.client = TestClient(app)
 
+    def setUp(self) -> None:
+
+
+        self.repository = InMemoryRunRepository()
+        app.dependency_overrides[get_run_repository] = lambda: self.repository
+
     def tearDown(self) -> None:
         app.dependency_overrides.clear()
 
@@ -71,7 +90,8 @@ class MergeReadinessApiTests(unittest.TestCase):
         )
 
     def test_failed_ci_returns_completed_blocked_run(self) -> None:
-        response = self.post_request(FAILED_CI_REQUEST)
+        with self.assertLogs("uvicorn.error", level="INFO") as captured_logs:
+            response = self.post_request(FAILED_CI_REQUEST)
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -79,6 +99,9 @@ class MergeReadinessApiTests(unittest.TestCase):
         self.assertEqual(body["result"]["decision"], "blocked")
         self.assertIsNone(body["error"])
         self.assertEqual(len(body["steps"]), 3)
+        self.assertIn(f"run_id={body['run_id']}", captured_logs.output[0])
+        self.assertIn("status=completed", captured_logs.output[0])
+        self.assertIn("decision=blocked", captured_logs.output[0])
 
     def test_merge_ready_facts_return_completed_ready_run(self) -> None:
         response = self.post_request(MERGE_READY_REQUEST)
@@ -134,6 +157,48 @@ class MergeReadinessApiTests(unittest.TestCase):
         validated = MergeReadinessRun.model_validate(response.json())
         self.assertEqual(validated.request, MERGE_READY_REQUEST)
         self.assertEqual(validated.result.decision.value, "ready")
+
+    def test_completed_run_can_be_retrieved_by_run_id(self) -> None:
+        created_response = self.post_request(MERGE_READY_REQUEST)
+        run_id = created_response.json()["run_id"]
+
+        retrieval_response = self.client.get(f"/v1/runs/{run_id}")
+
+        self.assertEqual(retrieval_response.status_code, 200)
+        self.assertEqual(retrieval_response.json(), created_response.json())
+
+    def test_failed_run_can_be_retrieved_as_a_resource(self) -> None:
+        app.dependency_overrides[get_github_connector] = (
+            provide_failing_github_connector
+        )
+        created_response = self.post_request(MERGE_READY_REQUEST)
+        run_id = created_response.json()["run_id"]
+
+        retrieval_response = self.client.get(f"/v1/runs/{run_id}")
+
+        self.assertEqual(created_response.status_code, 500)
+        self.assertEqual(retrieval_response.status_code, 200)
+        self.assertEqual(retrieval_response.json()["status"], "failed")
+
+    def test_unknown_run_returns_typed_404(self) -> None:
+        response = self.client.get(
+            "/v1/runs/00000000-0000-0000-0000-000000000001"
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], "run_not_found")
+
+    def test_unavailable_persistence_returns_sanitized_503(self) -> None:
+        app.dependency_overrides[get_run_repository] = UnavailableRunRepository
+
+        response = self.post_request(MERGE_READY_REQUEST)
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json()["code"],
+            "runtime_persistence_unavailable",
+        )
+        self.assertIsNone(response.json()["run_id"])
 
     def test_unknown_fixture_keeps_structured_not_found_error(self) -> None:
         response = self.post_request(

@@ -6,12 +6,13 @@ This document describes only what is present in the repository now.
 flowchart LR
     Browser --> Web["Vite React application<br/>apps/web"]
     Web --> API["FastAPI API<br/>services/api"]
+    API --> PostgreSQL["Managed PostgreSQL<br/>Neon"]
 ```
 
 Plain-text alternative:
 
 ```text
-browser -> Vite React application (apps/web) -> FastAPI API (services/api)
+browser -> Vite React application -> FastAPI API -> Neon PostgreSQL
 ```
 
 The frontend loads the backend-owned demo scenario catalog, posts a validated
@@ -23,6 +24,7 @@ its supporting GitHub and Jira fixture evidence. The API also serves
 GET  /v1/demo/pull-request-scenarios -> selectable fixture metadata
 POST /v1/pull-request-inspections    -> combined GitHub and Jira facts
 POST /v1/pull-request-merge-readiness -> runtime run, policy result, and facts
+GET  /v1/runs/{run_id}               -> persisted typed runtime run
 ```
 
 Browser code calls relative `/v1` URLs. Vite proxies that prefix to the local
@@ -34,7 +36,7 @@ same routing contract.
 | Path | Current responsibility |
 | --- | --- |
 | `apps/web` | Browser UI, runtime response validation, backend fixture selection, request submission, and evidence presentation |
-| `services/api` | Backend HTTP boundary, connector contracts, deterministic fixtures, synchronous runtime execution, and pure merge-readiness policy |
+| `services/api` | Backend HTTP boundary, connector contracts, deterministic fixtures, synchronous runtime execution, PostgreSQL persistence, and pure merge-readiness policy |
 | `packages` | Reserved for reusable TypeScript packages; not yet present |
 | `docs` | Product, architecture, testing, decisions, work records, and learning |
 | `infra` | Reserved for future infrastructure configuration; not yet present |
@@ -69,6 +71,18 @@ services/api/app/
 │   ├── models.py             # What HTTP-specific error bodies exist?
 │   └── connector_router.py   # Which URLs expose the use case?
 └── main.py                   # How is the FastAPI application assembled?
+```
+
+Durable execution adds these backend modules beside that domain map:
+
+```text
+services/api/
+├── app/config.py                         # Safe DATABASE_URL parsing
+├── app/database/engine.py                # Engine, pool, and sessions
+├── app/database/models.py                # Relational tables and constraints
+├── app/database/postgres_run_repository.py # Typed snapshot persistence
+├── app/runtime/errors.py                 # Sanitized persistence failures
+└── migrations/                           # Alembic schema history
 ```
 
 ```text
@@ -111,15 +125,30 @@ apps/web/src/features/inspection/
   terminal state transitions, and returns immutable Pydantic snapshots. A
   completed run contains `result`; a failed run returns HTTP `500`, contains a
   sanitized error, and has `result=null`.
-- `RunRepository` isolates workflow execution from storage. The current route
-  uses request-local in-memory storage, which is not durable across requests or
-  process restarts.
+- `RunRepository` isolates workflow execution from storage. Production route
+  dependencies require `PostgresRunRepository`; memory is available only when
+  unit and HTTP tests inject it explicitly.
+- One application-lifetime SQLAlchemy engine owns a small connection pool.
+  Repository methods open short transactions and release their sessions before
+  GitHub, Jira, or policy work begins. PostgreSQL stores run identity, status,
+  timestamps, workflow version, and step ordering relationally. Request,
+  connector facts, typed result, and sanitized errors are JSONB snapshots that
+  are revalidated through Pydantic on retrieval.
+- Alembic owns schema creation. Application startup validates connectivity and
+  required tables but never runs migrations or calls `create_all()`.
+- Terminal step and terminal run state are saved in one transaction. The API
+  returns `200` only after a completed result commits, `500` only after a failed
+  run commits, and sanitized `503` when durability cannot be confirmed.
+- After workflow execution returns, the readiness route writes one safe terminal
+  log containing `run_id`, runtime `status`, and policy `decision`. This gives an
+  operator a copyable identifier for `GET /v1/runs/{run_id}` without logging
+  repository input, connector facts, errors, or credentials.
 - Frontend network data remains `unknown` until `responseValidation.ts` proves
   the expected runtime structure.
 
 ## Not implemented
 
-Durable runtime persistence, cancellation APIs, retries, distributed workers,
-queues, real connectors, authentication and authorization, tenant isolation,
-LLMOps, tracing, and evaluations are not implemented. No database, queue,
-cache, cloud service, or deployed runtime component is present.
+Crash recovery, cancellation APIs, retries, distributed workers, queues, real
+connectors, authentication and authorization, tenant isolation, retention,
+LLMOps, tracing, and evaluations are not implemented. Neon resources and
+application deployment are not provisioned by this repository.
