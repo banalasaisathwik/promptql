@@ -90,8 +90,7 @@ class MergeReadinessApiTests(unittest.TestCase):
         )
 
     def test_failed_ci_returns_completed_blocked_run(self) -> None:
-        with self.assertLogs("uvicorn.error", level="INFO") as captured_logs:
-            response = self.post_request(FAILED_CI_REQUEST)
+        response = self.post_request(FAILED_CI_REQUEST)
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -99,9 +98,6 @@ class MergeReadinessApiTests(unittest.TestCase):
         self.assertEqual(body["result"]["decision"], "blocked")
         self.assertIsNone(body["error"])
         self.assertEqual(len(body["steps"]), 3)
-        self.assertIn(f"run_id={body['run_id']}", captured_logs.output[0])
-        self.assertIn("status=completed", captured_logs.output[0])
-        self.assertIn("decision=blocked", captured_logs.output[0])
 
     def test_merge_ready_facts_return_completed_ready_run(self) -> None:
         response = self.post_request(MERGE_READY_REQUEST)

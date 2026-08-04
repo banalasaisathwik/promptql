@@ -1,6 +1,5 @@
 pass
 
-import logging
 from typing import Annotated
 
 from uuid import UUID
@@ -22,6 +21,11 @@ from app.inspection.service import (
     list_fixture_scenarios,
 )
 from app.database import PostgresRunRepository
+from app.observability import (
+    NoOpRuntimeTelemetry,
+    ObservedRunRepository,
+    RuntimeTelemetry,
+)
 from app.runtime import (
     MergeReadinessRun,
     RunPersistenceError,
@@ -31,11 +35,6 @@ from app.runtime import (
 from app.workflows import MergeReadinessWorkflowService
 
 router = APIRouter(prefix="/v1", tags=["pull-request-inspections"])
-
-
-
-
-logger = logging.getLogger("uvicorn.error")
 
 
 def get_github_connector() -> FakeGitHubConnector:
@@ -50,7 +49,17 @@ def get_jira_connector() -> FakeJiraConnector:
     return FakeJiraConnector()
 
 
-def get_run_repository(request: Request) -> RunRepository:
+def get_runtime_telemetry(request: Request) -> RuntimeTelemetry:
+    pass
+
+    telemetry = getattr(request.app.state, "runtime_telemetry", None)
+    return telemetry if telemetry is not None else NoOpRuntimeTelemetry()
+
+
+def get_run_repository(
+    request: Request,
+    telemetry: Annotated[RuntimeTelemetry, Depends(get_runtime_telemetry)],
+) -> RunRepository:
     pass
 
     session_factory = getattr(request.app.state, "run_session_factory", None)
@@ -58,13 +67,17 @@ def get_run_repository(request: Request) -> RunRepository:
 
 
         raise RunPersistenceError("Runtime persistence is unavailable.")
-    return PostgresRunRepository(session_factory)
+    return ObservedRunRepository(
+        inner=PostgresRunRepository(session_factory),
+        telemetry=telemetry,
+    )
 
 
 def get_merge_readiness_workflow(
     github_connector: Annotated[FakeGitHubConnector, Depends(get_github_connector)],
     jira_connector: Annotated[FakeJiraConnector, Depends(get_jira_connector)],
     run_repository: Annotated[RunRepository, Depends(get_run_repository)],
+    telemetry: Annotated[RuntimeTelemetry, Depends(get_runtime_telemetry)],
 ) -> MergeReadinessWorkflowService:
     pass
 
@@ -72,6 +85,7 @@ def get_merge_readiness_workflow(
         github_connector,
         jira_connector,
         run_repository,
+        telemetry=telemetry,
     )
 
 
@@ -111,17 +125,12 @@ def analyze_pull_request(
         MergeReadinessWorkflowService,
         Depends(get_merge_readiness_workflow),
     ],
+    telemetry: Annotated[RuntimeTelemetry, Depends(get_runtime_telemetry)],
 ) -> MergeReadinessRun | JSONResponse:
     pass
 
     run = workflow.execute(request)
-    decision = run.result.decision.value if run.result is not None else "none"
-    logger.info(
-        "Merge-readiness run finished: run_id=%s status=%s decision=%s",
-        run.run_id,
-        run.status.value,
-        decision,
-    )
+    telemetry.correlate_current_span(run)
     if run.status is RunStatus.FAILED:
         return JSONResponse(
             status_code=500,

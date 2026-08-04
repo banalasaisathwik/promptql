@@ -47,6 +47,31 @@ DATABASE_URL=<pooled Neon PostgreSQL URL>
 DATABASE_MIGRATION_URL=<direct Neon PostgreSQL URL>
 ```
 
+Telemetry is safe and disabled by default. To inspect spans and metrics locally
+without an external service, opt into console exporters:
+
+```text
+PROMPTQL_TELEMETRY_ENABLED=true
+PROMPTQL_TELEMETRY_CONSOLE_ENABLED=true
+OTEL_SERVICE_NAME=promptql-api
+```
+
+For Grafana Cloud, keep the console exporter disabled and set the provider's
+OTLP base URL and encoded authorization header. Use real values only in your
+local environment or secret manager:
+
+```text
+PROMPTQL_TELEMETRY_ENABLED=true
+PROMPTQL_TELEMETRY_CONSOLE_ENABLED=false
+OTEL_SERVICE_NAME=promptql-api
+OTEL_EXPORTER_OTLP_ENDPOINT=<https OTLP base URL ending in /otlp>
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20<base64-instance-id-and-token>
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+```
+
+The application appends `/v1/traces` and `/v1/metrics` to that base endpoint.
+Do not commit `.env`, API tokens, or rendered authorization headers.
+
 Apply migrations explicitly, then start the API:
 
 ```bash

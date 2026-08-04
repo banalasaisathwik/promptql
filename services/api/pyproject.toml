@@ -5,6 +5,10 @@ requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.16,<2",
     "fastapi[standard]>=0.140.9",
+    "opentelemetry-api>=1.44,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.44,<2",
+    "opentelemetry-instrumentation-fastapi>=0.65b0,<0.66",
+    "opentelemetry-sdk>=1.44,<2",
     "psycopg[binary]>=3.2,<4",
     "sqlalchemy>=2.0,<3",
 ]

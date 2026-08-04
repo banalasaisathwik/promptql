@@ -3,7 +3,7 @@
 ## Current capability
 
 Backend connector contracts, deterministic policy, runtime transitions,
-workflow execution, PostgreSQL safety gates, and V1 HTTP behavior have
+workflow execution, PostgreSQL safety gates, observability, and V1 HTTP behavior have
 standard-library unit and integration tests:
 
 ```bash
@@ -46,6 +46,7 @@ and clean up only run IDs created by the tests.
 | Frontend unit/component | Near `apps/web/src` as `*.test.ts(x)` | Transport, response rendering, and loading state | Configured with Bun test; no browser DOM runner |
 | Backend unit | `services/api/tests/unit` | Connector contracts, policy behavior, runtime transitions, and workflow execution | Configured with `unittest` discovery |
 | Backend API integration | `services/api/tests/integration` | V1 catalog, raw inspection, completed runs, typed failed runs, delegation, and validation | Configured with `unittest` discovery and FastAPI TestClient |
+| Observability | `services/api/tests/unit/test_runtime_observability.py` and `services/api/tests/integration/test_observability_api.py` | In-memory spans/metrics, hierarchy, durable terminal emission, redaction, exporter isolation, health exclusion | Runs without Grafana credentials |
 | PostgreSQL integration | `services/api/tests/integration/test_postgres_runtime_persistence.py` | Alembic schema, durable reconstruction, ordering, failures, and conflicts | Opt-in; skipped unless guarded test credentials are configured |
 | Cross-layer/end-to-end | Future repository-level area | Browser-to-API journeys | Planned; tooling not selected |
 | Agent evaluations | `evals` when introduced | Quality and regressions | Planned; area absent |

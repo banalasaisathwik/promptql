@@ -476,3 +476,40 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** Should future request-level correlation use the run
   ID directly, or introduce a separate request ID for calls that fail before a
   durable run is created?
+
+### 2026-08-04 — Observability must describe committed reality
+
+- **Concept:** A trace connects related work through parent-child spans, while
+  counters count occurrences and histograms record distributions such as
+  latency. Traces explain one run; metrics summarize many runs; a terminal JSON
+  event gives a searchable, correlated operational fact.
+- **Important syntax:** `start_as_current_span(..., record_exception=False,
+  set_status_on_exception=False)` prevents an escaping Python exception from
+  automatically adding its message and stack to a span. `ContextVar` carries a
+  closed persistence checkpoint through the repository decorator without
+  changing `RunRepository.save(run)`. Counters use `add()`; histograms use
+  `record()` with seconds as the unit.
+- **Implementation location:** `app/observability/runtime_telemetry.py` owns the
+  five instruments and domain spans; `observed_run_repository.py` decorates any
+  repository; `setup.py` owns providers, OTLP exporters, FastAPI
+  instrumentation, and shutdown; `structured_logging.py` emits safe JSON.
+- **Design decision:** OpenTelemetry keeps instrumentation provider-neutral,
+  while Grafana Cloud is only the current OTLP HTTP/protobuf destination.
+  Terminal metrics and logs run after the terminal repository save, so they
+  report a committed fact instead of a computed but possibly uncommitted one.
+- **Invariant or failure behavior:** `ready`, `blocked`, and `unknown` are
+  successful completed traces. System failures use a closed category. If the
+  terminal commit fails, no terminal run metric or success event is emitted;
+  exporter failure never changes the runtime, persistence, or HTTP result.
+- **Trade-off learned:** Batch export keeps network latency out of requests and
+  supports a hosted backend, but bounded in-process queues can lose recent
+  telemetry on abrupt shutdown. Exact metric-label allowlists prevent
+  high-cardinality IDs and input values, at the cost of deliberately limited
+  slice-and-dice dimensions.
+- **Validation evidence:** `uv run python -m compileall -q app tests` passed;
+  full unittest discovery ran 68 tests with 64 passing and four PostgreSQL tests
+  skipped because `TEST_DATABASE_URL` was absent. Seven frontend tests, the
+  TypeScript/Vite build, and Oxlint also passed.
+- **Unresolved question:** Once production traffic exists, which service-level
+  objectives should determine dashboard panels and alert thresholds without
+  turning every available measurement into an alert?

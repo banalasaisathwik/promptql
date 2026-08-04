@@ -9,6 +9,14 @@ from app.connectors.errors import ConnectorUnavailableError, FixtureNotFoundErro
 from app.connectors.models import ConnectorRequest, GitHubPullRequest, JiraIssue
 from app.policy import evaluate_merge_readiness
 from app.policy.models import MergeReadinessResult
+from app.observability import (
+    FailureCategory,
+    NoOpRuntimeTelemetry,
+    PersistenceCheckpoint,
+    RuntimeTelemetry,
+    StepOutcome,
+)
+from app.observability.runtime_telemetry import SpanObservation
 from app.runtime import (
     MergeReadinessRun,
     RunRepository,
@@ -22,6 +30,11 @@ from app.runtime import (
     create_pending_step,
     transition_run,
     transition_step,
+)
+from app.runtime.errors import (
+    RunPersistenceError,
+    RunRecordInvalidError,
+    RunStateConflictError,
 )
 
 
@@ -68,6 +81,7 @@ class MergeReadinessWorkflowService:
         policy_evaluator: PolicyEvaluator = evaluate_merge_readiness,
         timestamp_clock: TimestampClock = _utc_now,
         duration_clock: DurationClock = perf_counter_ns,
+        telemetry: RuntimeTelemetry | None = None,
     ) -> None:
         self._github_connector = github_connector
         self._jira_connector = jira_connector
@@ -75,9 +89,15 @@ class MergeReadinessWorkflowService:
         self._policy_evaluator = policy_evaluator
         self._timestamp_clock = timestamp_clock
         self._duration_clock = duration_clock
+        self._telemetry = telemetry or NoOpRuntimeTelemetry()
 
-    def _save(self, run: MergeReadinessRun) -> MergeReadinessRun:
-        self._run_repository.save(run)
+    def _save(
+        self,
+        run: MergeReadinessRun,
+        checkpoint: PersistenceCheckpoint,
+    ) -> MergeReadinessRun:
+        with self._telemetry.checkpoint(checkpoint):
+            self._run_repository.save(run)
         return run
 
     def _start_step(
@@ -88,7 +108,10 @@ class MergeReadinessWorkflowService:
         pass
 
         pending_step = create_pending_step(name)
-        run = self._save(_replace_run(run, steps=(*run.steps, pending_step)))
+        run = self._save(
+            _replace_run(run, steps=(*run.steps, pending_step)),
+            PersistenceCheckpoint.STEP_STARTED,
+        )
 
         running_step = transition_step(
             pending_step,
@@ -96,7 +119,8 @@ class MergeReadinessWorkflowService:
             self._timestamp_clock(),
         )
         run = self._save(
-            _replace_run(run, steps=(*run.steps[:-1], running_step))
+            _replace_run(run, steps=(*run.steps[:-1], running_step)),
+            PersistenceCheckpoint.STEP_STARTED,
         )
         return run, running_step, self._duration_clock()
 
@@ -117,7 +141,8 @@ class MergeReadinessWorkflowService:
                 run,
                 steps=(*run.steps[:-1], completed_step),
                 **run_updates,
-            )
+            ),
+            PersistenceCheckpoint.STEP_COMPLETED,
         )
 
     def _build_completed_step(
@@ -161,48 +186,164 @@ class MergeReadinessWorkflowService:
 
 
 
-        return self._save(failed_run)
+        return self._save(failed_run, PersistenceCheckpoint.RUN_FAILED)
+
+    def _record_terminal_step(
+        self,
+        run: MergeReadinessRun,
+        outcome: StepOutcome,
+        failure_category: FailureCategory | None = None,
+    ) -> None:
+        step = run.steps[-1]
+        if step.duration_ms is None:
+            return
+        self._telemetry.record_terminal_step(
+            run,
+            step.name,
+            step.duration_ms,
+            outcome,
+            failure_category,
+        )
+
+    def _record_terminal_run(
+        self,
+        run: MergeReadinessRun,
+        observation: SpanObservation,
+        failure_category: FailureCategory | None = None,
+    ) -> MergeReadinessRun:
+        attributes = {
+            "promptql.run.status": run.status.value,
+        }
+        if run.result is not None:
+            attributes["promptql.policy.decision"] = run.result.decision.value
+        observation.set_attributes(**attributes)
+        if failure_category is not None:
+            observation.mark_error(failure_category)
+        self._telemetry.record_terminal_workflow(run)
+        return run
+
+    @staticmethod
+    def _persistence_failure_category(error: Exception) -> FailureCategory:
+        if isinstance(error, RunStateConflictError):
+            return FailureCategory.STATE_CONFLICT
+        if isinstance(error, RunRecordInvalidError):
+            return FailureCategory.RECORD_INVALID
+        return FailureCategory.PERSISTENCE_UNAVAILABLE
 
     def execute(self, request: ConnectorRequest) -> MergeReadinessRun:
         pass
 
-        run = self._save(create_pending_run(request))
+        run = create_pending_run(request)
+        with self._telemetry.observe_workflow(run) as workflow_observation:
+            try:
+                return self._execute_workflow(
+                    request,
+                    run,
+                    workflow_observation,
+                )
+            except (
+                RunPersistenceError,
+                RunStateConflictError,
+                RunRecordInvalidError,
+            ) as error:
+                workflow_observation.mark_error(
+                    self._persistence_failure_category(error)
+                )
+                raise
+            except FixtureNotFoundError:
+                workflow_observation.mark_error(
+                    FailureCategory.FIXTURE_NOT_FOUND
+                )
+                raise
+            except Exception:
+                workflow_observation.mark_error(FailureCategory.SYSTEM_FAILURE)
+                raise
+
+    def _execute_workflow(
+        self,
+        request: ConnectorRequest,
+        run: MergeReadinessRun,
+        workflow_observation: SpanObservation,
+    ) -> MergeReadinessRun:
+        pass
+
+        run = self._save(run, PersistenceCheckpoint.RUN_CREATED)
         run = self._save(
             transition_run(
                 run,
                 RunStatus.RUNNING,
                 self._timestamp_clock(),
-            )
+            ),
+            PersistenceCheckpoint.RUN_STARTED,
         )
 
         run, github_step, github_started_ns = self._start_step(
             run,
             WorkflowStepName.FETCH_GITHUB_FACTS,
         )
-        try:
-            github = self._github_connector.get_pull_request(request)
-        except ConnectorUnavailableError:
-            github = None
-        except FixtureNotFoundError:
-            self._fail_step_and_run(
-                run,
-                github_step,
-                github_started_ns,
-                RuntimeErrorInfo(
-                    code=RuntimeErrorCode.FIXTURE_NOT_FOUND,
-                    message="GitHub facts were not found for this request.",
-                ),
-            )
-            raise
-        except Exception:
-            return self._fail_step_and_run(
-                run,
-                github_step,
-                github_started_ns,
-                RuntimeErrorInfo(
-                    code=RuntimeErrorCode.CONNECTOR_EXECUTION_FAILED,
-                    message="The GitHub connector step failed unexpectedly.",
-                ),
+        with self._telemetry.observe_step(
+            run,
+            github_step.name,
+        ) as github_observation:
+            try:
+                github = self._github_connector.get_pull_request(request)
+                github_outcome = StepOutcome.COMPLETED
+            except ConnectorUnavailableError:
+                github = None
+                github_outcome = StepOutcome.UNAVAILABLE
+            except FixtureNotFoundError:
+                category = FailureCategory.FIXTURE_NOT_FOUND
+                github_observation.set_attributes(
+                    **{"promptql.step.outcome": StepOutcome.FAILED.value}
+                )
+                github_observation.mark_error(category)
+                failed_run = self._fail_step_and_run(
+                    run,
+                    github_step,
+                    github_started_ns,
+                    RuntimeErrorInfo(
+                        code=RuntimeErrorCode.FIXTURE_NOT_FOUND,
+                        message="GitHub facts were not found for this request.",
+                    ),
+                )
+                self._record_terminal_step(
+                    failed_run,
+                    StepOutcome.FAILED,
+                    category,
+                )
+                self._record_terminal_run(
+                    failed_run,
+                    workflow_observation,
+                    category,
+                )
+                raise
+            except Exception:
+                category = FailureCategory.CONNECTOR_FAILURE
+                github_observation.set_attributes(
+                    **{"promptql.step.outcome": StepOutcome.FAILED.value}
+                )
+                github_observation.mark_error(category)
+                failed_run = self._fail_step_and_run(
+                    run,
+                    github_step,
+                    github_started_ns,
+                    RuntimeErrorInfo(
+                        code=RuntimeErrorCode.CONNECTOR_EXECUTION_FAILED,
+                        message="The GitHub connector step failed unexpectedly.",
+                    ),
+                )
+                self._record_terminal_step(
+                    failed_run,
+                    StepOutcome.FAILED,
+                    category,
+                )
+                return self._record_terminal_run(
+                    failed_run,
+                    workflow_observation,
+                    category,
+                )
+            github_observation.set_attributes(
+                **{"promptql.step.outcome": github_outcome.value}
             )
         run = self._complete_step(
             run,
@@ -210,35 +351,75 @@ class MergeReadinessWorkflowService:
             github_started_ns,
             github=github,
         )
+        self._record_terminal_step(run, github_outcome)
 
         run, jira_step, jira_started_ns = self._start_step(
             run,
             WorkflowStepName.FETCH_JIRA_FACTS,
         )
-        try:
-            jira = self._jira_connector.get_issue_for_pull_request(request)
-        except ConnectorUnavailableError:
-            jira = None
-        except FixtureNotFoundError:
-            self._fail_step_and_run(
-                run,
-                jira_step,
-                jira_started_ns,
-                RuntimeErrorInfo(
-                    code=RuntimeErrorCode.FIXTURE_NOT_FOUND,
-                    message="Jira facts were not found for this request.",
-                ),
-            )
-            raise
-        except Exception:
-            return self._fail_step_and_run(
-                run,
-                jira_step,
-                jira_started_ns,
-                RuntimeErrorInfo(
-                    code=RuntimeErrorCode.CONNECTOR_EXECUTION_FAILED,
-                    message="The Jira connector step failed unexpectedly.",
-                ),
+        with self._telemetry.observe_step(
+            run,
+            jira_step.name,
+        ) as jira_observation:
+            try:
+                jira = self._jira_connector.get_issue_for_pull_request(request)
+                jira_outcome = StepOutcome.COMPLETED
+            except ConnectorUnavailableError:
+                jira = None
+                jira_outcome = StepOutcome.UNAVAILABLE
+            except FixtureNotFoundError:
+                category = FailureCategory.FIXTURE_NOT_FOUND
+                jira_observation.set_attributes(
+                    **{"promptql.step.outcome": StepOutcome.FAILED.value}
+                )
+                jira_observation.mark_error(category)
+                failed_run = self._fail_step_and_run(
+                    run,
+                    jira_step,
+                    jira_started_ns,
+                    RuntimeErrorInfo(
+                        code=RuntimeErrorCode.FIXTURE_NOT_FOUND,
+                        message="Jira facts were not found for this request.",
+                    ),
+                )
+                self._record_terminal_step(
+                    failed_run,
+                    StepOutcome.FAILED,
+                    category,
+                )
+                self._record_terminal_run(
+                    failed_run,
+                    workflow_observation,
+                    category,
+                )
+                raise
+            except Exception:
+                category = FailureCategory.CONNECTOR_FAILURE
+                jira_observation.set_attributes(
+                    **{"promptql.step.outcome": StepOutcome.FAILED.value}
+                )
+                jira_observation.mark_error(category)
+                failed_run = self._fail_step_and_run(
+                    run,
+                    jira_step,
+                    jira_started_ns,
+                    RuntimeErrorInfo(
+                        code=RuntimeErrorCode.CONNECTOR_EXECUTION_FAILED,
+                        message="The Jira connector step failed unexpectedly.",
+                    ),
+                )
+                self._record_terminal_step(
+                    failed_run,
+                    StepOutcome.FAILED,
+                    category,
+                )
+                return self._record_terminal_run(
+                    failed_run,
+                    workflow_observation,
+                    category,
+                )
+            jira_observation.set_attributes(
+                **{"promptql.step.outcome": jira_outcome.value}
             )
         run = self._complete_step(
             run,
@@ -246,22 +427,47 @@ class MergeReadinessWorkflowService:
             jira_started_ns,
             jira=jira,
         )
+        self._record_terminal_step(run, jira_outcome)
 
         run, policy_step, policy_started_ns = self._start_step(
             run,
             WorkflowStepName.EVALUATE_MERGE_READINESS,
         )
-        try:
-            result = self._policy_evaluator(github, jira)
-        except Exception:
-            return self._fail_step_and_run(
-                run,
-                policy_step,
-                policy_started_ns,
-                RuntimeErrorInfo(
-                    code=RuntimeErrorCode.POLICY_EXECUTION_FAILED,
-                    message="The merge-readiness policy step failed unexpectedly.",
-                ),
+        with self._telemetry.observe_step(
+            run,
+            policy_step.name,
+        ) as policy_observation:
+            try:
+                result = self._policy_evaluator(github, jira)
+            except Exception:
+                category = FailureCategory.POLICY_FAILURE
+                policy_observation.set_attributes(
+                    **{"promptql.step.outcome": StepOutcome.FAILED.value}
+                )
+                policy_observation.mark_error(category)
+                failed_run = self._fail_step_and_run(
+                    run,
+                    policy_step,
+                    policy_started_ns,
+                    RuntimeErrorInfo(
+                        code=RuntimeErrorCode.POLICY_EXECUTION_FAILED,
+                        message=(
+                            "The merge-readiness policy step failed unexpectedly."
+                        ),
+                    ),
+                )
+                self._record_terminal_step(
+                    failed_run,
+                    StepOutcome.FAILED,
+                    category,
+                )
+                return self._record_terminal_run(
+                    failed_run,
+                    workflow_observation,
+                    category,
+                )
+            policy_observation.set_attributes(
+                **{"promptql.step.outcome": StepOutcome.COMPLETED.value}
             )
         completed_policy_step = self._build_completed_step(
             policy_step,
@@ -279,4 +485,12 @@ class MergeReadinessWorkflowService:
         )
 
 
-        return self._save(completed_run)
+        completed_run = self._save(
+            completed_run,
+            PersistenceCheckpoint.RUN_COMPLETED,
+        )
+        self._record_terminal_step(completed_run, StepOutcome.COMPLETED)
+        return self._record_terminal_run(
+            completed_run,
+            workflow_observation,
+        )

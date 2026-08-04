@@ -7,12 +7,14 @@ flowchart LR
     Browser --> Web["Vite React application<br/>apps/web"]
     Web --> API["FastAPI API<br/>services/api"]
     API --> PostgreSQL["Managed PostgreSQL<br/>Neon"]
+    API -. "OTLP traces and metrics" .-> Observability["Hosted observability<br/>Grafana Cloud"]
 ```
 
 Plain-text alternative:
 
 ```text
 browser -> Vite React application -> FastAPI API -> Neon PostgreSQL
+                                      `-> OTLP traces/metrics -> Grafana Cloud
 ```
 
 The frontend loads the backend-owned demo scenario catalog, posts a validated
@@ -85,6 +87,17 @@ services/api/
 └── migrations/                           # Alembic schema history
 ```
 
+Runtime observability adds a provider-neutral boundary:
+
+```text
+services/api/app/observability/
+|-- contracts.py                 # Closed attributes, labels, and categories
+|-- runtime_telemetry.py         # Domain spans, metrics, and terminal events
+|-- observed_run_repository.py   # Storage decorator and checkpoint spans
+|-- structured_logging.py        # Safe correlated JSON events
+`-- setup.py                     # Providers, exporters, FastAPI setup, shutdown
+```
+
 ```text
 apps/web/src/features/inspection/
 ├── types.ts                  # What data shapes exist in TypeScript?
@@ -139,10 +152,14 @@ apps/web/src/features/inspection/
 - Terminal step and terminal run state are saved in one transaction. The API
   returns `200` only after a completed result commits, `500` only after a failed
   run commits, and sanitized `503` when durability cannot be confirmed.
-- After workflow execution returns, the readiness route writes one safe terminal
-  log containing `run_id`, runtime `status`, and policy `decision`. This gives an
-  operator a copyable identifier for `GET /v1/runs/{run_id}` without logging
-  repository input, connector facts, errors, or credentials.
+- One FastAPI server span parents a manual workflow span, three step spans, and
+  explicit persistence spans. `run_id` may correlate spans and safe JSON logs,
+  but IDs and user-controlled values are forbidden metric labels. Terminal run
+  measurements and logs occur only after the terminal database commit.
+- OpenTelemetry exports traces and metrics through OTLP HTTP/protobuf when
+  explicitly enabled. Grafana Cloud is configuration, not a domain dependency;
+  setup and exporter failures degrade safely without changing HTTP, runtime,
+  policy, or persistence behavior.
 - Frontend network data remains `unknown` until `responseValidation.ts` proves
   the expected runtime structure.
 
@@ -150,5 +167,6 @@ apps/web/src/features/inspection/
 
 Crash recovery, cancellation APIs, retries, distributed workers, queues, real
 connectors, authentication and authorization, tenant isolation, retention,
-LLMOps, tracing, and evaluations are not implemented. Neon resources and
-application deployment are not provisioned by this repository.
+LLMOps, dashboards, alerting, OpenTelemetry log export, and evaluations are not
+implemented. Neon/Grafana resources and application deployment are not
+provisioned by this repository.

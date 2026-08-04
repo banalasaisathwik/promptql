@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from app.api.v1.connector_router import get_run_repository
+from app.observability import NoOpRuntimeTelemetry
 from app.config import DatabaseConfigurationError, parse_postgresql_url
 from app.runtime import RunPersistenceError
 
@@ -41,7 +42,7 @@ class DatabaseConfigurationTests(unittest.TestCase):
         )
 
         with self.assertRaises(RunPersistenceError):
-            get_run_repository(request)
+            get_run_repository(request, NoOpRuntimeTelemetry())
 
 
 if __name__ == "__main__":

@@ -23,3 +23,4 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-002](ADR-002-merge-readiness-http-workflow.md) | Accepted | Additive merge-readiness endpoint with backend-owned policy decisions and supporting connector facts |
 | [ADR-003](ADR-003-basic-runtime-execution.md) | Accepted | Synchronous runtime runs, recorded steps, replaceable storage, and typed HTTP 500 failed-run bodies |
 | [ADR-004](ADR-004-durable-runtime-persistence.md) | Accepted | Neon PostgreSQL persistence through SQLAlchemy, Alembic migrations, short transactions, and run retrieval |
+| [ADR-005](ADR-005-opentelemetry-observability.md) | Accepted | Provider-neutral OpenTelemetry traces and metrics, Grafana Cloud OTLP export, bounded telemetry, and post-commit terminal reporting |
