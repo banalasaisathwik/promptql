@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.models import ApiError, ApiErrorCode, RuntimePersistenceApiError
 from app.connectors.models import ConnectorRequest
-from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
+from app.connectors.protocols import GitHubConnector, JiraConnector
 from app.inspection.models import (
     FixtureScenarioCatalog,
     PullRequestInspection,
@@ -37,16 +37,16 @@ from app.workflows import MergeReadinessWorkflowService
 router = APIRouter(prefix="/v1", tags=["pull-request-inspections"])
 
 
-def get_github_connector() -> FakeGitHubConnector:
+def get_github_connector(request: Request) -> GitHubConnector:
     pass
 
-    return FakeGitHubConnector()
+    return request.app.state.github_connector
 
 
-def get_jira_connector() -> FakeJiraConnector:
+def get_jira_connector(request: Request) -> JiraConnector:
     pass
 
-    return FakeJiraConnector()
+    return request.app.state.jira_connector
 
 
 def get_runtime_telemetry(request: Request) -> RuntimeTelemetry:
@@ -74,8 +74,8 @@ def get_run_repository(
 
 
 def get_merge_readiness_workflow(
-    github_connector: Annotated[FakeGitHubConnector, Depends(get_github_connector)],
-    jira_connector: Annotated[FakeJiraConnector, Depends(get_jira_connector)],
+    github_connector: Annotated[GitHubConnector, Depends(get_github_connector)],
+    jira_connector: Annotated[JiraConnector, Depends(get_jira_connector)],
     run_repository: Annotated[RunRepository, Depends(get_run_repository)],
     telemetry: Annotated[RuntimeTelemetry, Depends(get_runtime_telemetry)],
 ) -> MergeReadinessWorkflowService:
@@ -107,7 +107,7 @@ async def list_pull_request_scenarios() -> FixtureScenarioCatalog:
 async def inspect_pull_request(request: ConnectorRequest) -> PullRequestInspection:
     pass
 
-    return run_pull_request_inspection(request)
+    return await run_pull_request_inspection(request)
 
 
 @router.post(
@@ -119,7 +119,7 @@ async def inspect_pull_request(request: ConnectorRequest) -> PullRequestInspecti
         503: {"model": RuntimePersistenceApiError},
     },
 )
-def analyze_pull_request(
+async def analyze_pull_request(
     request: ConnectorRequest,
     workflow: Annotated[
         MergeReadinessWorkflowService,
@@ -129,7 +129,7 @@ def analyze_pull_request(
 ) -> MergeReadinessRun | JSONResponse:
     pass
 
-    run = workflow.execute(request)
+    run = await workflow.execute(request)
     telemetry.correlate_current_span(run)
     if run.status is RunStatus.FAILED:
         return JSONResponse(

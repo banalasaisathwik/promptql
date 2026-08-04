@@ -21,11 +21,6 @@ from app.policy.models import (
 )
 
 
-
-
-REQUIRED_APPROVAL_COUNT = 1
-
-
 def _record_evidence(
     evidence_references: list[EvidenceReference],
     source: EvidenceSource,
@@ -145,6 +140,18 @@ def evaluate_merge_readiness(
             "approvals.count",
             len(github.approvals),
         )
+        approval_requirement_reference = _record_evidence(
+            evidence_references,
+            EvidenceSource.GITHUB,
+            "required_approval_count",
+            github.required_approval_count,
+        )
+        reviews_known_reference = _record_evidence(
+            evidence_references,
+            EvidenceSource.GITHUB,
+            "reviews_known",
+            github.reviews_known,
+        )
         changes_reference = _record_evidence(
             evidence_references,
             EvidenceSource.GITHUB,
@@ -158,6 +165,12 @@ def evaluate_merge_readiness(
             github.linked_jira_key,
         )
 
+        checks_known_reference = _record_evidence(
+            evidence_references,
+            EvidenceSource.GITHUB,
+            "required_checks_known",
+            github.required_checks_known,
+        )
         check_references: list[tuple[str, str]] = []
         for check_index, check in enumerate(github.required_checks):
             check_name_reference = _record_evidence(
@@ -216,51 +229,77 @@ def evaluate_merge_readiness(
                 (mergeability_reference,),
             )
 
+        if not github.required_checks_known:
+            _add_missing_information(
+                missing_information,
+                pending_actions,
+                "GitHub required-check rules are unavailable.",
+                (checks_known_reference,),
+            )
+        else:
 
 
 
-        for expected_status, reason_code, action_code in (
-            (
-                CheckStatus.FAILED,
-                PolicyReasonCode.CI_CHECK_FAILED,
-                PendingActionCode.FIX_CI_CHECK,
-            ),
-            (
-                CheckStatus.PENDING,
-                PolicyReasonCode.CI_CHECK_PENDING,
-                PendingActionCode.WAIT_FOR_CI_CHECK,
-            ),
-        ):
-            for check_index, check in enumerate(github.required_checks):
-                if check.status is not expected_status:
-                    continue
-                check_evidence = check_references[check_index]
-                _add_blocker(
-                    blockers,
-                    pending_actions,
-                    reason_code,
-                    f"Required CI check '{check.name}' is {check.status.value}.",
-                    check_evidence,
-                    action_code,
-                    (
-                        f"Fix required CI check '{check.name}'."
-                        if check.status is CheckStatus.FAILED
-                        else f"Wait for required CI check '{check.name}' to finish."
-                    ),
-                )
+            for expected_status, reason_code, action_code in (
+                (
+                    CheckStatus.FAILED,
+                    PolicyReasonCode.CI_CHECK_FAILED,
+                    PendingActionCode.FIX_CI_CHECK,
+                ),
+                (
+                    CheckStatus.PENDING,
+                    PolicyReasonCode.CI_CHECK_PENDING,
+                    PendingActionCode.WAIT_FOR_CI_CHECK,
+                ),
+            ):
+                for check_index, check in enumerate(github.required_checks):
+                    if check.status is not expected_status:
+                        continue
+                    check_evidence = check_references[check_index]
+                    _add_blocker(
+                        blockers,
+                        pending_actions,
+                        reason_code,
+                        f"Required CI check '{check.name}' is {check.status.value}.",
+                        check_evidence,
+                        action_code,
+                        (
+                            f"Fix required CI check '{check.name}'."
+                            if check.status is CheckStatus.FAILED
+                            else (
+                                f"Wait for required CI check '{check.name}' to finish."
+                            )
+                        ),
+                    )
 
-        if len(github.approvals) < REQUIRED_APPROVAL_COUNT:
+        if not github.reviews_known:
+            _add_missing_information(
+                missing_information,
+                pending_actions,
+                "GitHub review evidence is unavailable.",
+                (reviews_known_reference,),
+            )
+        elif github.required_approval_count is None:
+            _add_missing_information(
+                missing_information,
+                pending_actions,
+                "GitHub required-approval rules are unavailable.",
+                (approval_requirement_reference,),
+            )
+        elif len(github.approvals) < github.required_approval_count:
             _add_blocker(
                 blockers,
                 pending_actions,
                 PolicyReasonCode.APPROVAL_MISSING,
-                "The pull request does not have the required approval.",
-                (approval_reference,),
+                "The pull request does not have the required approval count.",
+                (approval_reference, approval_requirement_reference),
                 PendingActionCode.GET_REQUIRED_APPROVAL,
-                "Obtain at least one approval.",
+                (
+                    "Obtain the remaining approvals required by GitHub rules."
+                ),
             )
 
-        if github.changes_requested:
+        if github.reviews_known and github.changes_requested:
             _add_blocker(
                 blockers,
                 pending_actions,

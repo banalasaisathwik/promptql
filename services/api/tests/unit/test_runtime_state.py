@@ -1,5 +1,6 @@
 pass
 
+import asyncio
 import unittest
 from datetime import UTC, datetime, timedelta
 
@@ -24,7 +25,9 @@ class RuntimeStateTests(unittest.TestCase):
     def test_completed_and_failed_runs_cannot_return_to_running(self) -> None:
         started_at = datetime(2026, 8, 2, 10, 0, tzinfo=UTC)
         completed_at = started_at + timedelta(seconds=1)
-        github = FakeGitHubConnector().get_pull_request(MERGE_READY_REQUEST)
+        github = asyncio.run(
+            FakeGitHubConnector().get_pull_request(MERGE_READY_REQUEST)
+        )
         jira = FakeJiraConnector().get_issue_for_pull_request(MERGE_READY_REQUEST)
         result = evaluate_merge_readiness(github, jira)
 

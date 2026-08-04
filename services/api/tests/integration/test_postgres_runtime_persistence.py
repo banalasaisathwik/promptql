@@ -1,5 +1,6 @@
 pass
 
+import asyncio
 import os
 import unittest
 from pathlib import Path
@@ -27,7 +28,10 @@ TEST_DATABASE_URL = load_safe_test_database_url()
 
 
 class FailingGitHubConnector:
-    def get_pull_request(self, _request: ConnectorRequest) -> GitHubPullRequest:
+    async def get_pull_request(
+        self,
+        _request: ConnectorRequest,
+    ) -> GitHubPullRequest:
         raise RuntimeError("database-test-secret-must-not-leak")
 
 
@@ -76,11 +80,13 @@ class PostgresRuntimePersistenceTests(unittest.TestCase):
             )
 
     def execute_workflow(self, github_connector=FakeGitHubConnector()):
-        run = MergeReadinessWorkflowService(
-            github_connector,
-            FakeJiraConnector(),
-            self.repository,
-        ).execute(MERGE_READY_REQUEST)
+        run = asyncio.run(
+            MergeReadinessWorkflowService(
+                github_connector,
+                FakeJiraConnector(),
+                self.repository,
+            ).execute(MERGE_READY_REQUEST)
+        )
         self.created_run_ids.append(run.run_id)
         return run
 

@@ -1,11 +1,15 @@
 pass
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import StrEnum
+from math import isfinite
 from urllib.parse import unquote, urlsplit
 
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
+
+from app.connectors.errors import GitHubConfigurationError
 
 
 class DatabaseConfigurationError(RuntimeError):
@@ -14,6 +18,44 @@ class DatabaseConfigurationError(RuntimeError):
 
 class TelemetryConfigurationError(RuntimeError):
     pass
+
+
+class GitHubConnectorMode(StrEnum):
+    pass
+
+    FAKE = "fake"
+    GITHUB = "github"
+
+
+def _parse_github_api_base_url(raw_url: str) -> str:
+    url = raw_url.strip().rstrip("/")
+    parsed_url = urlsplit(url)
+    if (
+        parsed_url.scheme != "https"
+        or not parsed_url.hostname
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_url.query
+        or parsed_url.fragment
+    ):
+        raise GitHubConfigurationError(
+            "GITHUB_API_BASE_URL must be a credential-free HTTPS URL."
+        )
+    return url
+
+
+def _parse_github_timeout(raw_timeout: str) -> float:
+    try:
+        timeout = float(raw_timeout)
+    except ValueError:
+        raise GitHubConfigurationError(
+            "GITHUB_REQUEST_TIMEOUT_SECONDS must be a number."
+        ) from None
+    if not isfinite(timeout) or timeout <= 0 or timeout > 60:
+        raise GitHubConfigurationError(
+            "GITHUB_REQUEST_TIMEOUT_SECONDS must be greater than 0 and at most 60."
+        )
+    return timeout
 
 
 def _parse_boolean(raw_value: str, variable_name: str) -> bool:
@@ -120,6 +162,43 @@ class DatabaseSettings:
                 os.environ.get("DATABASE_URL", ""),
                 "DATABASE_URL",
             )
+        )
+
+
+@dataclass(frozen=True)
+class GitHubSettings:
+    pass
+
+    mode: GitHubConnectorMode
+    token: str | None = field(repr=False)
+    api_base_url: str
+    request_timeout_seconds: float
+
+    @classmethod
+    def from_environment(cls) -> "GitHubSettings":
+        raw_mode = os.environ.get("PROMPTQL_GITHUB_CONNECTOR", "fake").strip()
+        try:
+            mode = GitHubConnectorMode(raw_mode)
+        except ValueError:
+            raise GitHubConfigurationError(
+                "PROMPTQL_GITHUB_CONNECTOR must be fake or github."
+            ) from None
+
+        token = os.environ.get("GITHUB_TOKEN", "").strip() or None
+        if mode is GitHubConnectorMode.GITHUB and token is None:
+            raise GitHubConfigurationError(
+                "GITHUB_TOKEN is required when the GitHub connector mode is github."
+            )
+
+        return cls(
+            mode=mode,
+            token=token,
+            api_base_url=_parse_github_api_base_url(
+                os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com")
+            ),
+            request_timeout_seconds=_parse_github_timeout(
+                os.environ.get("GITHUB_REQUEST_TIMEOUT_SECONDS", "10")
+            ),
         )
 
 

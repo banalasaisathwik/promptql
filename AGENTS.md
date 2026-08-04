@@ -311,6 +311,31 @@ Use [the documentation index](docs/index.md) to locate the current source of
 truth. Follow [the agent playbook](docs/agent/PLAYBOOK.md) for non-trivial
 planning, execution and review.
 
+## Detailed Mermaid architecture flows
+
+Maintain beginner-friendly Mermaid diagrams under `docs/mermaid/` for local
+learning. This folder is intentionally ignored by Git, while
+`docs/ARCHITECTURE.md` remains the tracked high-level architecture source of
+truth.
+
+After every meaningful task that changes architecture, a request-to-response
+flow, runtime execution, persistence, observability, or a cross-layer boundary:
+
+1. Create or update the relevant file under `docs/mermaid/`.
+2. Use actual routes, modules, classes, functions, state names and response
+   statuses from the implemented repository.
+3. Show the complete input-to-output path and important success and failure
+   branches, rather than only listing components.
+4. Explain where validation, business decisions, durable commits and external
+   boundaries occur.
+5. Keep diagrams synchronized with verified implementation. Clearly label
+   deferred behavior instead of presenting it as implemented.
+6. Never place credentials, database URLs, authorization headers, connector
+   payloads, private exception messages or other sensitive values in diagrams.
+
+Prefer one readable detailed flow over many tiny diagrams. Split a diagram only
+when its size makes the request path harder to understand.
+
 ## Final response format
 
 Use this order:

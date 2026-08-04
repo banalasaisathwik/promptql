@@ -513,3 +513,50 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** Once production traffic exists, which service-level
   objectives should determine dashboard panels and alert thresholds without
   turning every available measurement into an alert?
+
+### 2026-08-04 — Normalize external APIs behind an asynchronous protocol
+
+- **Concept:** Dependency inversion lets the workflow depend on the small
+  `GitHubConnector` behavior it needs instead of either fixture lookup or HTTP.
+  Dependency injection then selects `FakeGitHubConnector` or
+  `HttpGitHubConnector` at FastAPI assembly. A mocked HTTP transport is not a
+  fake connector: it replaces network delivery in tests while still exercising
+  real request, pagination, validation, error, and normalization code.
+- **Important syntax:** `Protocol` describes structural behavior without a base
+  class; `async def` plus `await` lets GitHub I/O yield the event loop;
+  `asyncio.to_thread()` keeps the approved synchronous SQLAlchemy repository
+  calls off that loop. Private Pydantic response models use
+  `model_validate(payload)` to reject missing or malformed provider fields.
+  Frozen dataclass/settings fields use `field(repr=False)` so a token cannot
+  accidentally appear in a settings representation.
+- **Implementation locations:** `app/connectors/protocols.py` owns the shared
+  contract; `github_http_models.py` validates raw REST shapes;
+  `github_http.py` normalizes evidence; `factory.py`, `config.py`, and
+  `main.py` select and own the application-scoped client; the workflow awaits
+  the protocol. `test_github_http_connector.py` uses `httpx.MockTransport` and
+  `test_github_connector_factory.py` proves the two actual runtime modes.
+- **Design decision:** REST was chosen before GraphQL because the required PR,
+  review, rule, and status evidence maps to documented endpoints and realistic
+  minimal response fixtures. Pages are limited to ten. Live failures never
+  fall back to fake facts, and absent branch-rule evidence never invents a
+  default approval count or required-check set.
+- **Invariant or failure behavior:** External JSON never leaves the connector
+  boundary. `mergeable=null`, inaccessible requirements, and inaccessible
+  reviews become missing evidence; any independently verified blocker still
+  takes precedence. Provider errors enter a sanitized closed taxonomy, while
+  tokens, headers, raw bodies, URLs, repository content, and exception text are
+  excluded from runtime errors and telemetry.
+- **Trade-off:** Several REST calls increase latency and rate-limit use versus a
+  tailored GraphQL query. The conservative pagination bound can reject very
+  large histories instead of returning incomplete evidence. Live mode also
+  cannot return `ready` until a real Jira connector exists, because using fake
+  Jira beside live GitHub would mix factual and fictional evidence.
+- **Validation evidence:** Focused connector/factory discovery ran 21 tests.
+  Full backend discovery ran 91 tests successfully; four PostgreSQL integration
+  tests skipped because `TEST_DATABASE_URL` was absent. Seven frontend tests,
+  the TypeScript/Vite production build, and Oxlint passed. Automated GitHub
+  tests inject `MockTransport` and therefore open no real GitHub connection.
+- **Unresolved question:** Should `httpx` become an explicit direct dependency
+  rather than remain transitively provided by `fastapi[standard]`? Direct
+  ownership is clearer, but adding it requires a separately approved manifest
+  and lockfile decision.

@@ -122,13 +122,24 @@ function isRequiredCheck(value: unknown): value is RequiredCheck {
 function isGitHubPullRequest(value: unknown): value is GitHubPullRequest {
   return (
     isRecord(value) &&
+    Number.isSafeInteger(value.pr_number) &&
+    Number(value.pr_number) > 0 &&
+    isNonEmptyString(value.title) &&
+    isNonEmptyString(value.url) &&
+    isNonEmptyString(value.head_branch) &&
+    isNonEmptyString(value.base_branch) &&
     isOneOf(value.state, ['open', 'closed', 'merged']) &&
     typeof value.is_draft === 'boolean' &&
     isOneOf(value.mergeability, ['mergeable', 'conflicting', 'unknown']) &&
     Array.isArray(value.required_checks) &&
     value.required_checks.every(isRequiredCheck) &&
+    typeof value.required_checks_known === 'boolean' &&
     Array.isArray(value.approvals) &&
     value.approvals.every(isGitHubUser) &&
+    (value.required_approval_count === null ||
+      (Number.isSafeInteger(value.required_approval_count) &&
+        Number(value.required_approval_count) >= 0)) &&
+    typeof value.reviews_known === 'boolean' &&
     typeof value.changes_requested === 'boolean' &&
     isGitHubUser(value.author) &&
     Array.isArray(value.assignees) &&

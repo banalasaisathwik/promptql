@@ -18,12 +18,14 @@ V0 establishes:
 - testing conventions, where tooling may still be unconfigured; and
 - an agent-development workflow that supports review and learning.
 
-V0 does **not** implement the complete agent runtime. The current V1 slice has a
-basic synchronous runtime that records the merge-readiness workflow's connector
-and policy steps. Runtime runs and ordered steps can be persisted in managed
-PostgreSQL and retrieved by run ID. The UI loads demo fixture choices, submits a
-typed connector request, and displays the deterministic decision, findings,
-actions, missing information, and evidence returned by the API.
+V0 does **not** implement the complete agent runtime. The current V1 slice has
+an asynchronous merge-readiness workflow that records connector and policy
+steps. Runtime runs and ordered steps can be persisted in managed PostgreSQL and
+retrieved by run ID. The UI loads demo fixture choices, submits a typed
+connector request, and displays the deterministic decision, findings, actions,
+missing information, and evidence returned by the API. GitHub evidence can
+come from deterministic fixtures or an explicitly configured read-only REST
+connector; Jira remains fixture-only.
 
 ## Later directions
 
@@ -37,7 +39,7 @@ capabilities, and each architectural choice requires separate resolution.
 - A production-ready autonomous agent runtime
 - Queue, cache, or application deployment selection
 - Enterprise identity, authorization, or tenant isolation
-- Live enterprise data connectors
+- A general catalog of live enterprise data connectors
 - Model-provider integration or prompt management
 - Automated evaluation pipelines
 - Unsupported claims of production readiness, scale, or security

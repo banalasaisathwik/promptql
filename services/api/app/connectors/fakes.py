@@ -2,14 +2,21 @@ pass
 
 from collections.abc import Mapping
 
-from app.connectors.errors import FixtureNotFoundError
+from app.connectors.errors import ConnectorUnavailableError, FixtureNotFoundError
 from app.connectors.github_fixtures import GITHUB_FIXTURES
 from app.connectors.jira_fixtures import JIRA_FIXTURES
-from app.connectors.models import ConnectorRequest, GitHubPullRequest, JiraIssue
+from app.connectors.models import (
+    ConnectorRequest,
+    ConnectorSource,
+    GitHubPullRequest,
+    JiraIssue,
+)
 
 
 class FakeGitHubConnector:
     pass
+
+    source = ConnectorSource.FAKE
 
     def __init__(
         self,
@@ -17,15 +24,15 @@ class FakeGitHubConnector:
     ) -> None:
         self._fixtures = fixtures
 
-    def get_pull_request(self, request: ConnectorRequest) -> GitHubPullRequest:
+    async def get_pull_request(self, request: ConnectorRequest) -> GitHubPullRequest:
         pass
 
         try:
             return self._fixtures[request]
         except KeyError:
-                                                                              
-                                                                            
-                                                                               
+
+
+
             raise FixtureNotFoundError("github", request) from None
 
 
@@ -44,6 +51,13 @@ class FakeJiraConnector:
         try:
             return self._fixtures[request]
         except KeyError:
-                                                                            
-                                                                               
+
+
             raise FixtureNotFoundError("jira", request) from None
+
+
+class UnavailableJiraConnector:
+    pass
+
+    def get_issue_for_pull_request(self, _request: ConnectorRequest) -> JiraIssue:
+        raise ConnectorUnavailableError("jira")

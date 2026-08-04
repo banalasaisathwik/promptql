@@ -1,5 +1,6 @@
 pass
 
+import asyncio
 import unittest
 
 from app.connectors.errors import FixtureNotFoundError
@@ -33,9 +34,9 @@ class ConnectorContractTests(unittest.TestCase):
     def test_all_predefined_fixtures_are_valid_contract_models(self) -> None:
         pass
 
-                                                                           
-                                                                                
-                                                                   
+
+
+
         for fixture in GITHUB_FIXTURES.values():
             self.assertEqual(
                 GitHubPullRequest.model_validate(fixture.model_dump()),
@@ -109,7 +110,7 @@ class ConnectorContractTests(unittest.TestCase):
         )
 
         with self.assertRaises(FixtureNotFoundError) as raised:
-            FakeGitHubConnector().get_pull_request(request)
+            asyncio.run(FakeGitHubConnector().get_pull_request(request))
 
         self.assertEqual(raised.exception.connector_name, "github")
         self.assertEqual(raised.exception.request, request)
@@ -132,8 +133,8 @@ class ConnectorContractTests(unittest.TestCase):
     def test_identical_inputs_always_return_identical_results(self) -> None:
         pass
 
-                                                                                
-                                                                                
+
+
         first_request = ConnectorRequest.model_validate(
             MERGE_READY_REQUEST.model_dump()
         )
@@ -144,8 +145,8 @@ class ConnectorContractTests(unittest.TestCase):
         jira = FakeJiraConnector()
 
         self.assertEqual(
-            github.get_pull_request(first_request),
-            github.get_pull_request(second_request),
+            asyncio.run(github.get_pull_request(first_request)),
+            asyncio.run(github.get_pull_request(second_request)),
         )
         self.assertEqual(
             jira.get_issue_for_pull_request(first_request),

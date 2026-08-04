@@ -38,7 +38,7 @@ same routing contract.
 | Path | Current responsibility |
 | --- | --- |
 | `apps/web` | Browser UI, runtime response validation, backend fixture selection, request submission, and evidence presentation |
-| `services/api` | Backend HTTP boundary, connector contracts, deterministic fixtures, synchronous runtime execution, PostgreSQL persistence, and pure merge-readiness policy |
+| `services/api` | Backend HTTP boundary, fake and live GitHub connectors, deterministic Jira fixtures, asynchronous workflow execution, PostgreSQL persistence, and pure merge-readiness policy |
 | `packages` | Reserved for reusable TypeScript packages; not yet present |
 | `docs` | Product, architecture, testing, decisions, work records, and learning |
 | `infra` | Reserved for future infrastructure configuration; not yet present |
@@ -121,11 +121,13 @@ apps/web/src/features/inspection/
   concrete cross-package need.
 - External browser and future connector data must be validated at their system
   boundaries.
-- The API contains frozen Pydantic contracts and deterministic in-memory GitHub
-  and Jira fakes for connector development. The V1 HTTP routes expose only
-  fictional fixture metadata and results; they do not call external systems.
+- The API contains frozen Pydantic contracts, deterministic in-memory GitHub
+  and Jira fakes, and an asynchronous read-only GitHub REST connector. The
+  default `fake` mode remains credential-free; explicit `github` mode requires
+  a token and never falls back to fixture data.
 - `GET /v1/demo/pull-request-scenarios` is explicitly demo-only. The separate
-  inspection contract can remain when real connectors replace the fakes.
+  raw-inspection route remains fixture-only. The merge-readiness workflow uses
+  the application-selected GitHub connector.
 - Raw inspection routes delegate to `app.inspection.service`. The readiness
   route delegates to `MergeReadinessWorkflowService`; routes contain neither
   connector sequencing nor policy rules.
@@ -134,6 +136,17 @@ apps/web/src/features/inspection/
   and returns every verified blocker plus explicit missing information and
   evidence references. `POST /v1/pull-request-merge-readiness` invokes it after
   recorded connector steps; the older inspection endpoint remains facts-only.
+- `GitHubConnector` is an asynchronous protocol shared by fake and HTTP
+  implementations. The application factory reads validated settings and
+  injects one implementation; the workflow neither knows nor branches on the
+  source. Raw REST JSON is validated and normalized inside `github_http.py`.
+- Required checks and approvals are facts only when branch rules or protection
+  evidence supplies their requirements. Missing permissions or indeterminate
+  evidence produces an `unknown` policy result unless another verified blocker
+  exists. GitHub's nullable `mergeable` field is likewise indeterminate.
+- Live GitHub mode uses `UnavailableJiraConnector` because a Jira HTTP connector
+  remains out of scope. Therefore a live run normally has missing Jira evidence;
+  it can still be `blocked` by verified GitHub facts but cannot be `ready`.
 - The basic runtime creates a unique run, records three ordered steps, enforces
   terminal state transitions, and returns immutable Pydantic snapshots. A
   completed run contains `result`; a failed run returns HTTP `500`, contains a
@@ -165,8 +178,8 @@ apps/web/src/features/inspection/
 
 ## Not implemented
 
-Crash recovery, cancellation APIs, retries, distributed workers, queues, real
-connectors, authentication and authorization, tenant isolation, retention,
+Crash recovery, cancellation APIs, retries, distributed workers, queues, a Jira
+HTTP connector, GitHub OAuth or App authentication, tenant isolation, retention,
 LLMOps, dashboards, alerting, OpenTelemetry log export, and evaluations are not
 implemented. Neon/Grafana resources and application deployment are not
 provisioned by this repository.

@@ -57,11 +57,19 @@ export interface RequiredCheck {
 }
 
 export interface GitHubPullRequest {
+  pr_number: number
+  title: string
+  url: string
+  head_branch: string
+  base_branch: string
   state: PullRequestState
   is_draft: boolean
   mergeability: Mergeability
   required_checks: RequiredCheck[]
+  required_checks_known: boolean
   approvals: GitHubUser[]
+  required_approval_count: number | null
+  reviews_known: boolean
   changes_requested: boolean
   author: GitHubUser
   assignees: GitHubUser[]

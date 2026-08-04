@@ -12,8 +12,14 @@ from app.api.v1.models import (
     ApiErrorCode,
     RuntimePersistenceApiError,
 )
-from app.config import DatabaseSettings
+from app.config import DatabaseSettings, GitHubConnectorMode, GitHubSettings
+from app.connectors.factory import (
+    create_github_connector,
+    create_github_http_client,
+)
+from app.connectors.fakes import FakeJiraConnector, UnavailableJiraConnector
 from app.connectors.errors import FixtureNotFoundError
+from app.connectors.github_http import HttpGitHubConnector
 from app.database import (
     create_database_engine,
     create_session_factory,
@@ -87,28 +93,53 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-def create_app(observability: Observability | None = None) -> FastAPI:
+def create_app(
+    observability: Observability | None = None,
+    github_settings: GitHubSettings | None = None,
+) -> FastAPI:
     pass
 
     app_observability = observability or create_observability()
+    resolved_github_settings = github_settings or GitHubSettings.from_environment()
+    github_http_client = (
+        create_github_http_client(resolved_github_settings)
+        if resolved_github_settings.mode is GitHubConnectorMode.GITHUB
+        else None
+    )
+    github_connector = create_github_connector(
+        resolved_github_settings,
+        app_observability.runtime_telemetry,
+        github_http_client,
+    )
+    jira_connector = (
+        UnavailableJiraConnector()
+        if resolved_github_settings.mode is GitHubConnectorMode.GITHUB
+        else FakeJiraConnector()
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         pass
 
-        settings = DatabaseSettings.from_environment()
-        engine = create_database_engine(settings)
+        engine = None
         try:
+            settings = DatabaseSettings.from_environment()
+            engine = create_database_engine(settings)
             verify_database_ready(engine)
             application.state.run_session_factory = create_session_factory(engine)
             yield
         finally:
             application.state.run_session_factory = None
-            engine.dispose()
+            if engine is not None:
+                engine.dispose()
+            if isinstance(github_connector, HttpGitHubConnector):
+                await github_connector.aclose()
             app_observability.shutdown()
 
     application = FastAPI(title="PromptQL API", lifespan=lifespan)
     application.state.runtime_telemetry = app_observability.runtime_telemetry
+    application.state.github_connector = github_connector
+    application.state.jira_connector = jira_connector
     application.include_router(connector_router)
     application.add_exception_handler(
         FixtureNotFoundError,

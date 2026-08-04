@@ -1,5 +1,6 @@
 pass
 
+import asyncio
 import json
 import io
 import logging
@@ -43,7 +44,10 @@ from opentelemetry.sdk.trace.export import (
 
 
 class FailingGitHubConnector:
-    def get_pull_request(self, _request: ConnectorRequest) -> GitHubPullRequest:
+    async def get_pull_request(
+        self,
+        _request: ConnectorRequest,
+    ) -> GitHubPullRequest:
         raise RuntimeError(
             "password=hunter2 token=abc db.internal SELECT * FROM secrets payload=x"
         )
@@ -97,7 +101,7 @@ class RuntimeObservabilityTests(unittest.TestCase):
             observed_repository,
             telemetry=self.harness.telemetry,
         )
-        return workflow.execute(request), inner_repository
+        return asyncio.run(workflow.execute(request)), inner_repository
 
     def test_completed_run_records_hierarchy_durations_and_one_counter(self) -> None:
         run, repository = self.run_workflow(FAILED_CI_REQUEST)
@@ -152,7 +156,7 @@ class RuntimeObservabilityTests(unittest.TestCase):
                         ),
                         telemetry=harness.telemetry,
                     )
-                    run = workflow.execute(request)
+                    run = asyncio.run(workflow.execute(request))
                     workflow_span = next(
                         span
                         for span in harness.span_exporter.get_finished_spans()
@@ -222,12 +226,14 @@ class RuntimeObservabilityTests(unittest.TestCase):
     def test_observed_repository_preserves_return_values_and_exceptions(self) -> None:
         inner = InMemoryRunRepository()
         observed = ObservedRunRepository(inner, self.harness.telemetry)
-        run = MergeReadinessWorkflowService(
-            FakeGitHubConnector(),
-            FakeJiraConnector(),
-            observed,
-            telemetry=self.harness.telemetry,
-        ).execute(MERGE_READY_REQUEST)
+        run = asyncio.run(
+            MergeReadinessWorkflowService(
+                FakeGitHubConnector(),
+                FakeJiraConnector(),
+                observed,
+                telemetry=self.harness.telemetry,
+            ).execute(MERGE_READY_REQUEST)
+        )
         self.assertEqual(observed.get(run.run_id), run)
         self.assertIsNone(observed.get(run.run_id.__class__(int=0)))
 
@@ -283,7 +289,7 @@ class RuntimeObservabilityTests(unittest.TestCase):
             telemetry=telemetry,
         )
 
-        run = workflow.execute(MERGE_READY_REQUEST)
+        run = asyncio.run(workflow.execute(MERGE_READY_REQUEST))
         provider.shutdown()
 
         self.assertEqual(run.status, RunStatus.COMPLETED)
@@ -319,12 +325,14 @@ class TelemetryConfigurationTests(unittest.TestCase):
         observability = create_observability(settings)
         repository = InMemoryRunRepository()
 
-        run = MergeReadinessWorkflowService(
-            FakeGitHubConnector(),
-            FakeJiraConnector(),
-            repository,
-            telemetry=observability.runtime_telemetry,
-        ).execute(MERGE_READY_REQUEST)
+        run = asyncio.run(
+            MergeReadinessWorkflowService(
+                FakeGitHubConnector(),
+                FakeJiraConnector(),
+                repository,
+                telemetry=observability.runtime_telemetry,
+            ).execute(MERGE_READY_REQUEST)
+        )
 
         self.assertEqual(run.status, RunStatus.COMPLETED)
         self.assertEqual(run.result.decision.value, "ready")

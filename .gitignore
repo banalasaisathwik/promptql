@@ -41,5 +41,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Local repository learning notes
 docs/learning/*
 
+# Local detailed Mermaid diagrams used to learn request and runtime flows
+docs/mermaid/*
+
 # Local-only Git clean-filter tooling requested for this checkout
 .local-tools/

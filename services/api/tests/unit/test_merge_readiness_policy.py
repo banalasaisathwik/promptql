@@ -1,5 +1,6 @@
 pass
 
+import asyncio
 import unittest
 from typing import Any
 
@@ -25,7 +26,9 @@ from app.policy import (
 def _ready_facts() -> tuple[GitHubPullRequest, JiraIssue]:
     pass
 
-    github = FakeGitHubConnector().get_pull_request(MERGE_READY_REQUEST)
+    github = asyncio.run(
+        FakeGitHubConnector().get_pull_request(MERGE_READY_REQUEST)
+    )
     jira = FakeJiraConnector().get_issue_for_pull_request(MERGE_READY_REQUEST)
     return github, jira
 
@@ -214,6 +217,43 @@ class MergeReadinessPolicyTests(unittest.TestCase):
             result.missing_information[0].evidence_reference_ids,
             ("github.linked_jira_key", "jira.issue_key"),
         )
+
+    def test_unknown_github_requirements_do_not_create_blockers(self) -> None:
+        _, jira = _ready_facts()
+        github = _github_with(
+            required_checks=(),
+            required_checks_known=False,
+            required_approval_count=None,
+        )
+
+        result = evaluate_merge_readiness(github, jira)
+
+        self.assertEqual(result.decision, MergeReadinessDecision.UNKNOWN)
+        self.assertEqual(result.blockers, ())
+        self.assertTrue(
+            all(
+                finding.reason_code is PolicyReasonCode.EVIDENCE_UNAVAILABLE
+                for finding in result.missing_information
+            )
+        )
+
+    def test_verified_blocker_wins_over_unknown_github_requirements(self) -> None:
+        _, jira = _ready_facts()
+        github = _github_with(
+            is_draft=True,
+            required_checks=(),
+            required_checks_known=False,
+            required_approval_count=None,
+        )
+
+        result = evaluate_merge_readiness(github, jira)
+
+        self.assertEqual(result.decision, MergeReadinessDecision.BLOCKED)
+        self.assertIn(
+            PolicyReasonCode.PR_IS_DRAFT,
+            {blocker.reason_code for blocker in result.blockers},
+        )
+        self.assertTrue(result.missing_information)
 
     def test_verified_blocker_takes_precedence_over_unavailable_evidence(self) -> None:
         github = _github_with(is_draft=True)

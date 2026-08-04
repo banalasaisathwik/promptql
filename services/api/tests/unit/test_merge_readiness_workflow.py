@@ -17,7 +17,10 @@ from app.workflows import MergeReadinessWorkflowService
 
 
 class FailingGitHubConnector:
-    def get_pull_request(self, _request: ConnectorRequest) -> GitHubPullRequest:
+    async def get_pull_request(
+        self,
+        _request: ConnectorRequest,
+    ) -> GitHubPullRequest:
         raise RuntimeError("secret-token-must-not-leak")
 
 
@@ -41,11 +44,11 @@ def create_workflow(
     return MergeReadinessWorkflowService(**arguments)
 
 
-class MergeReadinessWorkflowTests(unittest.TestCase):
-    def test_successful_ready_workflow_completes(self) -> None:
+class MergeReadinessWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_successful_ready_workflow_completes(self) -> None:
         repository = InMemoryRunRepository()
 
-        run = create_workflow(repository).execute(MERGE_READY_REQUEST)
+        run = await create_workflow(repository).execute(MERGE_READY_REQUEST)
 
         self.assertEqual(run.status, RunStatus.COMPLETED)
         self.assertEqual(run.result.decision, MergeReadinessDecision.READY)
@@ -55,8 +58,10 @@ class MergeReadinessWorkflowTests(unittest.TestCase):
         self.assertTrue(all(step.duration_ms is not None for step in run.steps))
         self.assertEqual(repository.get(run.run_id), run)
 
-    def test_failed_ci_is_completed_blocked_not_runtime_failed(self) -> None:
-        run = create_workflow(InMemoryRunRepository()).execute(FAILED_CI_REQUEST)
+    async def test_failed_ci_is_completed_blocked_not_runtime_failed(self) -> None:
+        run = await create_workflow(InMemoryRunRepository()).execute(
+            FAILED_CI_REQUEST
+        )
 
         self.assertEqual(run.status, RunStatus.COMPLETED)
         self.assertEqual(run.result.decision, MergeReadinessDecision.BLOCKED)
@@ -65,8 +70,8 @@ class MergeReadinessWorkflowTests(unittest.TestCase):
             all(step.status is StepStatus.COMPLETED for step in run.steps)
         )
 
-    def test_connector_exception_marks_step_and_run_failed(self) -> None:
-        run = create_workflow(
+    async def test_connector_exception_marks_step_and_run_failed(self) -> None:
+        run = await create_workflow(
             InMemoryRunRepository(),
             github_connector=FailingGitHubConnector(),
         ).execute(MERGE_READY_REQUEST)
@@ -81,9 +86,9 @@ class MergeReadinessWorkflowTests(unittest.TestCase):
         )
         self.assertNotIn("secret-token", run.error.message)
 
-    def test_policy_exception_marks_policy_step_and_run_failed(self) -> None:
+    async def test_policy_exception_marks_policy_step_and_run_failed(self) -> None:
         repository = InMemoryRunRepository()
-        run = create_workflow(
+        run = await create_workflow(
             repository,
             policy_evaluator=failing_policy,
         ).execute(MERGE_READY_REQUEST)
@@ -106,10 +111,10 @@ class MergeReadinessWorkflowTests(unittest.TestCase):
             )
         )
 
-    def test_policy_step_and_completed_run_share_one_saved_checkpoint(self) -> None:
+    async def test_policy_step_and_completed_run_share_one_saved_checkpoint(self) -> None:
         repository = InMemoryRunRepository()
 
-        run = create_workflow(repository).execute(MERGE_READY_REQUEST)
+        run = await create_workflow(repository).execute(MERGE_READY_REQUEST)
 
         self.assertEqual(run.status, RunStatus.COMPLETED)
         self.assertFalse(
@@ -123,8 +128,10 @@ class MergeReadinessWorkflowTests(unittest.TestCase):
             )
         )
 
-    def test_steps_are_recorded_in_execution_order(self) -> None:
-        run = create_workflow(InMemoryRunRepository()).execute(MERGE_READY_REQUEST)
+    async def test_steps_are_recorded_in_execution_order(self) -> None:
+        run = await create_workflow(InMemoryRunRepository()).execute(
+            MERGE_READY_REQUEST
+        )
 
         self.assertEqual(
             tuple(step.name for step in run.steps),
@@ -136,11 +143,11 @@ class MergeReadinessWorkflowTests(unittest.TestCase):
         )
         self.assertTrue(all(step.attempt == 1 for step in run.steps))
 
-    def test_every_execution_has_a_unique_run_id_and_same_policy_result(self) -> None:
+    async def test_every_execution_has_a_unique_run_id_and_same_policy_result(self) -> None:
         workflow = create_workflow(InMemoryRunRepository())
 
-        first = workflow.execute(MERGE_READY_REQUEST)
-        second = workflow.execute(MERGE_READY_REQUEST)
+        first = await workflow.execute(MERGE_READY_REQUEST)
+        second = await workflow.execute(MERGE_READY_REQUEST)
 
         self.assertNotEqual(first.run_id, second.run_id)
         self.assertEqual(first.result, second.result)

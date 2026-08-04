@@ -1,17 +1,17 @@
 pass
 
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-                                                                          
-                                                                               
+
+
 NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
-                                                                                
-                                                                                
-                                                                               
+
+
+
 JiraIssueKey = Annotated[
     str,
     StringConstraints(
@@ -66,6 +66,13 @@ class BlockerState(StrEnum):
     NOT_BLOCKED = "not_blocked"
 
 
+class ConnectorSource(StrEnum):
+    pass
+
+    FAKE = "fake"
+    LIVE = "live"
+
+
 class ConnectorRequest(ContractModel):
     pass
 
@@ -90,16 +97,34 @@ class RequiredCheck(ContractModel):
 class GitHubPullRequest(ContractModel):
     pass
 
+    pr_number: Annotated[int, Field(strict=True, gt=0)]
+    title: NonEmptyString
+    url: NonEmptyString
+    head_branch: NonEmptyString
+    base_branch: NonEmptyString
     state: PullRequestState
     is_draft: bool
     mergeability: Mergeability
     required_checks: tuple[RequiredCheck, ...]
+    required_checks_known: bool
     approvals: tuple[GitHubUser, ...]
+    required_approval_count: Annotated[int, Field(strict=True, ge=0)] | None
+    reviews_known: bool
     changes_requested: bool
     author: GitHubUser
     assignees: tuple[GitHubUser, ...]
     requested_reviewers: tuple[GitHubUser, ...]
     linked_jira_key: JiraIssueKey | None
+
+    @model_validator(mode="after")
+    def validate_evidence_availability(self) -> Self:
+        pass
+
+        if not self.required_checks_known and self.required_checks:
+            raise ValueError("unknown required checks cannot contain check facts")
+        if not self.reviews_known and (self.approvals or self.changes_requested):
+            raise ValueError("unknown reviews cannot contain review conclusions")
+        return self
 
 
 class JiraAssignee(ContractModel):

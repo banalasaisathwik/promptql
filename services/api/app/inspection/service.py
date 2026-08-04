@@ -26,12 +26,12 @@ def list_fixture_scenarios() -> FixtureScenarioCatalog:
     return FixtureScenarioCatalog(items=items)
 
 
-def inspect_pull_request(request: ConnectorRequest) -> PullRequestInspection:
+async def inspect_pull_request(request: ConnectorRequest) -> PullRequestInspection:
     pass
 
 
 
-    github = FakeGitHubConnector().get_pull_request(request)
+    github = await FakeGitHubConnector().get_pull_request(request)
     jira = FakeJiraConnector().get_issue_for_pull_request(request)
 
     return PullRequestInspection(

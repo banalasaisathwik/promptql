@@ -1,5 +1,6 @@
 pass
 
+import asyncio
 import unittest
 
 from fastapi.testclient import TestClient
@@ -29,7 +30,10 @@ class UnavailableJiraConnector:
 
 
 class FailingGitHubConnector:
-    def get_pull_request(self, _request: ConnectorRequest) -> GitHubPullRequest:
+    async def get_pull_request(
+        self,
+        _request: ConnectorRequest,
+    ) -> GitHubPullRequest:
         raise RuntimeError("secret-connector-detail")
 
 
@@ -40,7 +44,7 @@ class RecordingWorkflow:
         self.run = run
         self.requests: list[ConnectorRequest] = []
 
-    def execute(self, request: ConnectorRequest) -> MergeReadinessRun:
+    async def execute(self, request: ConnectorRequest) -> MergeReadinessRun:
         self.requests.append(request)
         return self.run
 
@@ -62,11 +66,13 @@ def provide_failing_github_connector() -> FailingGitHubConnector:
 
 
 def completed_ready_run() -> MergeReadinessRun:
-    return MergeReadinessWorkflowService(
-        FakeGitHubConnector(),
-        FakeJiraConnector(),
-        InMemoryRunRepository(),
-    ).execute(MERGE_READY_REQUEST)
+    return asyncio.run(
+        MergeReadinessWorkflowService(
+            FakeGitHubConnector(),
+            FakeJiraConnector(),
+            InMemoryRunRepository(),
+        ).execute(MERGE_READY_REQUEST)
+    )
 
 
 class MergeReadinessApiTests(unittest.TestCase):

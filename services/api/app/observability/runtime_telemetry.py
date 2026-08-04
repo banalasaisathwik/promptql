@@ -43,6 +43,12 @@ SPAN_ATTRIBUTE_ALLOWLIST = frozenset(
         "promptql.persistence.operation",
         "promptql.persistence.outcome",
         "promptql.persistence.checkpoint",
+        "promptql.connector.name",
+        "promptql.connector.source",
+        "promptql.connector.operation",
+        "promptql.connector.result",
+        "promptql.http.status_class",
+        "promptql.pagination.page_count",
         "error.type",
     }
 )
@@ -55,7 +61,7 @@ class SpanObservation:
     def __init__(self, span: Span) -> None:
         self._span = span
 
-    def set_attributes(self, **attributes: str) -> None:
+    def set_attributes(self, **attributes: str | int) -> None:
         try:
             if not attributes.keys() <= SPAN_ATTRIBUTE_ALLOWLIST:
                 raise ValueError("span attribute is not allowed")
@@ -123,7 +129,7 @@ class RuntimeTelemetry:
     def _observe_span(
         self,
         name: str,
-        attributes: dict[str, str],
+        attributes: dict[str, str | int],
     ) -> Iterator[SpanObservation]:
         safe_attributes = {
             key: value
@@ -189,6 +195,30 @@ class RuntimeTelemetry:
         return self._observe_span(
             f"runtime.persistence.{operation.value}",
             attributes,
+        )
+
+    def observe_connector(
+        self,
+        connector_name: str,
+        connector_source: str,
+        operation: str,
+    ) -> Iterator[SpanObservation]:
+        pass
+
+        allowed_identities = {
+            ("github", "fake", "get_pull_request"),
+            ("github", "live", "get_pull_request"),
+        }
+        identity = (connector_name, connector_source, operation)
+        if identity not in allowed_identities:
+            return self._observe_span("connector.invalid", {})
+        return self._observe_span(
+            f"connector.{connector_name}.{operation}",
+            {
+                "promptql.connector.name": connector_name,
+                "promptql.connector.source": connector_source,
+                "promptql.connector.operation": operation,
+            },
         )
 
     def checkpoint(self, checkpoint: PersistenceCheckpoint) -> Iterator[None]:
