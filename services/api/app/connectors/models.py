@@ -64,6 +64,7 @@ class BlockerState(StrEnum):
 
     BLOCKED = "blocked"
     NOT_BLOCKED = "not_blocked"
+    UNKNOWN = "unknown"
 
 
 class ConnectorSource(StrEnum):
@@ -141,3 +142,6 @@ class JiraIssue(ContractModel):
     status: JiraIssueStatus
     blocker_state: BlockerState
     assignee: JiraAssignee | None
+    status_id: NonEmptyString | None = None
+    status_name: NonEmptyString | None = None
+    is_resolved: bool | None = None

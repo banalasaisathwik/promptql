@@ -9,7 +9,7 @@ from urllib.parse import unquote, urlsplit
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
-from app.connectors.errors import GitHubConfigurationError
+from app.connectors.errors import GitHubConfigurationError, JiraConfigurationError
 
 
 class DatabaseConfigurationError(RuntimeError):
@@ -25,6 +25,13 @@ class GitHubConnectorMode(StrEnum):
 
     FAKE = "fake"
     GITHUB = "github"
+
+
+class JiraConnectorMode(StrEnum):
+    pass
+
+    FAKE = "fake"
+    JIRA = "jira"
 
 
 def _parse_github_api_base_url(raw_url: str) -> str:
@@ -54,6 +61,51 @@ def _parse_github_timeout(raw_timeout: str) -> float:
     if not isfinite(timeout) or timeout <= 0 or timeout > 60:
         raise GitHubConfigurationError(
             "GITHUB_REQUEST_TIMEOUT_SECONDS must be greater than 0 and at most 60."
+        )
+    return timeout
+
+
+def _parse_jira_base_url(raw_url: str) -> str:
+    url = raw_url.strip().rstrip("/")
+    parsed_url = urlsplit(url)
+    hostname = (parsed_url.hostname or "").lower()
+    if (
+        parsed_url.scheme != "https"
+        or not hostname.endswith(".atlassian.net")
+        or hostname == "atlassian.net"
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_url.path not in {"", "/"}
+        or parsed_url.query
+        or parsed_url.fragment
+    ):
+        raise JiraConfigurationError(
+            "JIRA_BASE_URL must be a credential-free Jira Cloud HTTPS site URL."
+        )
+    return url
+
+
+def _is_valid_jira_email(email: str | None) -> bool:
+    if email is None or email.count("@") != 1:
+        return False
+    local_part, domain = email.split("@", 1)
+    return bool(
+        local_part
+        and domain
+        and not any(character.isspace() for character in email)
+    )
+
+
+def _parse_jira_timeout(raw_timeout: str) -> float:
+    try:
+        timeout = float(raw_timeout)
+    except ValueError:
+        raise JiraConfigurationError(
+            "JIRA_REQUEST_TIMEOUT_SECONDS must be a number."
+        ) from None
+    if not isfinite(timeout) or timeout <= 0 or timeout > 60:
+        raise JiraConfigurationError(
+            "JIRA_REQUEST_TIMEOUT_SECONDS must be greater than 0 and at most 60."
         )
     return timeout
 
@@ -198,6 +250,58 @@ class GitHubSettings:
             ),
             request_timeout_seconds=_parse_github_timeout(
                 os.environ.get("GITHUB_REQUEST_TIMEOUT_SECONDS", "10")
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class JiraSettings:
+    pass
+
+    mode: JiraConnectorMode
+    base_url: str | None
+    email: str | None = field(repr=False)
+    api_token: str | None = field(repr=False)
+    request_timeout_seconds: float = 10
+
+    @classmethod
+    def from_environment(cls) -> "JiraSettings":
+        raw_mode = os.environ.get("PROMPTQL_JIRA_CONNECTOR", "fake").strip()
+        try:
+            mode = JiraConnectorMode(raw_mode)
+        except ValueError:
+            raise JiraConfigurationError(
+                "PROMPTQL_JIRA_CONNECTOR must be fake or jira."
+            ) from None
+
+        raw_base_url = os.environ.get("JIRA_BASE_URL", "").strip()
+        email = os.environ.get("JIRA_EMAIL", "").strip() or None
+        api_token = os.environ.get("JIRA_API_TOKEN", "").strip() or None
+        if mode is JiraConnectorMode.JIRA:
+            if not raw_base_url:
+                raise JiraConfigurationError(
+                    "JIRA_BASE_URL is required when the Jira connector mode is jira."
+                )
+            if not _is_valid_jira_email(email):
+                raise JiraConfigurationError(
+                    "JIRA_EMAIL must be a non-empty account email in Jira mode."
+                )
+            if api_token is None:
+                raise JiraConfigurationError(
+                    "JIRA_API_TOKEN is required when the Jira connector mode is jira."
+                )
+
+        return cls(
+            mode=mode,
+            base_url=(
+                _parse_jira_base_url(raw_base_url)
+                if raw_base_url
+                else None
+            ),
+            email=email,
+            api_token=api_token,
+            request_timeout_seconds=_parse_jira_timeout(
+                os.environ.get("JIRA_REQUEST_TIMEOUT_SECONDS", "10")
             ),
         )
 

@@ -7,6 +7,8 @@ flowchart LR
     Browser --> Web["Vite React application<br/>apps/web"]
     Web --> API["FastAPI API<br/>services/api"]
     API --> PostgreSQL["Managed PostgreSQL<br/>Neon"]
+    API -. "read-only REST" .-> GitHub["GitHub"]
+    API -. "read-only REST" .-> Jira["Jira Cloud"]
     API -. "OTLP traces and metrics" .-> Observability["Hosted observability<br/>Grafana Cloud"]
 ```
 
@@ -38,7 +40,7 @@ same routing contract.
 | Path | Current responsibility |
 | --- | --- |
 | `apps/web` | Browser UI, runtime response validation, backend fixture selection, request submission, and evidence presentation |
-| `services/api` | Backend HTTP boundary, fake and live GitHub connectors, deterministic Jira fixtures, asynchronous workflow execution, PostgreSQL persistence, and pure merge-readiness policy |
+| `services/api` | Backend HTTP boundary, independently selected fake/live GitHub and Jira connectors, asynchronous workflow execution, PostgreSQL persistence, and pure merge-readiness policy |
 | `packages` | Reserved for reusable TypeScript packages; not yet present |
 | `docs` | Product, architecture, testing, decisions, work records, and learning |
 | `infra` | Reserved for future infrastructure configuration; not yet present |
@@ -122,9 +124,9 @@ apps/web/src/features/inspection/
 - External browser and future connector data must be validated at their system
   boundaries.
 - The API contains frozen Pydantic contracts, deterministic in-memory GitHub
-  and Jira fakes, and an asynchronous read-only GitHub REST connector. The
-  default `fake` mode remains credential-free; explicit `github` mode requires
-  a token and never falls back to fixture data.
+  and Jira fakes, and asynchronous read-only REST connectors for GitHub and
+  Jira Cloud. Both default to credential-free `fake` mode and neither live mode
+  falls back to fixture data.
 - `GET /v1/demo/pull-request-scenarios` is explicitly demo-only. The separate
   raw-inspection route remains fixture-only. The merge-readiness workflow uses
   the application-selected GitHub connector.
@@ -140,13 +142,23 @@ apps/web/src/features/inspection/
   implementations. The application factory reads validated settings and
   injects one implementation; the workflow neither knows nor branches on the
   source. Raw REST JSON is validated and normalized inside `github_http.py`.
+- `JiraConnector` is an asynchronous key-based protocol. GitHub owns issue-key
+  extraction; the workflow passes the validated key to the independently
+  selected Jira connector. Raw Jira JSON and Basic authentication remain inside
+  `jira_http.py` and the application factory.
 - Required checks and approvals are facts only when branch rules or protection
   evidence supplies their requirements. Missing permissions or indeterminate
   evidence produces an `unknown` policy result unless another verified blocker
   exists. GitHub's nullable `mergeable` field is likewise indeterminate.
-- Live GitHub mode uses `UnavailableJiraConnector` because a Jira HTTP connector
-  remains out of scope. Therefore a live run normally has missing Jira evidence;
-  it can still be `blocked` by verified GitHub facts but cannot be `ready`.
+- Jira custom status names are display evidence only. Jira status-category keys
+  normalize to the existing to-do, in-progress, and done facts consumed by the
+  pure policy. Standard Jira has no universal blocker field, so live Jira marks
+  blocker evidence unknown rather than inventing a site-specific fact.
+- GitHub and Jira source modes are selected independently, supporting all four
+  fake/live combinations. A bounded `runtime.connector_sources.selected`
+  startup event makes the selected pair visible in server logs, and connector
+  spans identify the source used by each operation. Public run source metadata
+  remains deferred to avoid a database/API migration.
 - The basic runtime creates a unique run, records three ordered steps, enforces
   terminal state transitions, and returns immutable Pydantic snapshots. A
   completed run contains `result`; a failed run returns HTTP `500`, contains a
@@ -178,8 +190,9 @@ apps/web/src/features/inspection/
 
 ## Not implemented
 
-Crash recovery, cancellation APIs, retries, distributed workers, queues, a Jira
-HTTP connector, GitHub OAuth or App authentication, tenant isolation, retention,
-LLMOps, dashboards, alerting, OpenTelemetry log export, and evaluations are not
+Crash recovery, cancellation APIs, retries, distributed workers, queues, GitHub
+or Jira OAuth/app authentication, multi-tenant connector credentials,
+site-specific Jira blocker mapping, tenant isolation, retention, LLMOps,
+dashboards, alerting, OpenTelemetry log export, and evaluations are not
 implemented. Neon/Grafana resources and application deployment are not
 provisioned by this repository.

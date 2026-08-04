@@ -23,9 +23,9 @@ an asynchronous merge-readiness workflow that records connector and policy
 steps. Runtime runs and ordered steps can be persisted in managed PostgreSQL and
 retrieved by run ID. The UI loads demo fixture choices, submits a typed
 connector request, and displays the deterministic decision, findings, actions,
-missing information, and evidence returned by the API. GitHub evidence can
-come from deterministic fixtures or an explicitly configured read-only REST
-connector; Jira remains fixture-only.
+missing information, and evidence returned by the API. GitHub and Jira evidence
+can independently come from deterministic fixtures or explicitly configured
+read-only REST connectors.
 
 ## Later directions
 

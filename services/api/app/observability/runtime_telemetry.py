@@ -208,6 +208,8 @@ class RuntimeTelemetry:
         allowed_identities = {
             ("github", "fake", "get_pull_request"),
             ("github", "live", "get_pull_request"),
+            ("jira", "fake", "get_issue"),
+            ("jira", "live", "get_issue"),
         }
         identity = (connector_name, connector_source, operation)
         if identity not in allowed_identities:

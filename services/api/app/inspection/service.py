@@ -32,7 +32,9 @@ async def inspect_pull_request(request: ConnectorRequest) -> PullRequestInspecti
 
 
     github = await FakeGitHubConnector().get_pull_request(request)
-    jira = FakeJiraConnector().get_issue_for_pull_request(request)
+    if github.linked_jira_key is None:
+        raise RuntimeError("fixture GitHub facts must contain a Jira key")
+    jira = await FakeJiraConnector().get_issue(github.linked_jira_key)
 
     return PullRequestInspection(
         request=request,

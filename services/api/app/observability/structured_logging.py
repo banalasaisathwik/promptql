@@ -23,6 +23,8 @@ ALLOWED_EVENT_FIELDS = frozenset(
         "persistence_operation",
         "persistence_checkpoint",
         "failure_category",
+        "github_source",
+        "jira_source",
         "telemetry_signal",
     }
 )

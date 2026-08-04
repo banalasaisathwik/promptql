@@ -39,25 +39,32 @@ class FakeGitHubConnector:
 class FakeJiraConnector:
     pass
 
+    source = ConnectorSource.FAKE
+
     def __init__(
         self,
         fixtures: Mapping[ConnectorRequest, JiraIssue] = JIRA_FIXTURES,
     ) -> None:
-        self._fixtures = fixtures
+        self._fixtures_by_key = {
+            issue.issue_key: issue for issue in fixtures.values()
+        }
 
-    def get_issue_for_pull_request(self, request: ConnectorRequest) -> JiraIssue:
+    async def get_issue(self, issue_key: str) -> JiraIssue:
         pass
 
         try:
-            return self._fixtures[request]
+            return self._fixtures_by_key[issue_key]
         except KeyError:
 
 
-            raise FixtureNotFoundError("jira", request) from None
+
+            raise FixtureNotFoundError("jira") from None
 
 
 class UnavailableJiraConnector:
     pass
 
-    def get_issue_for_pull_request(self, _request: ConnectorRequest) -> JiraIssue:
+    source = ConnectorSource.LIVE
+
+    async def get_issue(self, _issue_key: str) -> JiraIssue:
         raise ConnectorUnavailableError("jira")

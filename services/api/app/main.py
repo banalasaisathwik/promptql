@@ -12,14 +12,22 @@ from app.api.v1.models import (
     ApiErrorCode,
     RuntimePersistenceApiError,
 )
-from app.config import DatabaseSettings, GitHubConnectorMode, GitHubSettings
+from app.config import (
+    DatabaseSettings,
+    GitHubConnectorMode,
+    GitHubSettings,
+    JiraConnectorMode,
+    JiraSettings,
+)
 from app.connectors.factory import (
     create_github_connector,
     create_github_http_client,
+    create_jira_connector,
+    create_jira_http_client,
 )
-from app.connectors.fakes import FakeJiraConnector, UnavailableJiraConnector
 from app.connectors.errors import FixtureNotFoundError
 from app.connectors.github_http import HttpGitHubConnector
+from app.connectors.jira_http import HttpJiraConnector
 from app.database import (
     create_database_engine,
     create_session_factory,
@@ -96,11 +104,13 @@ async def health() -> dict[str, str]:
 def create_app(
     observability: Observability | None = None,
     github_settings: GitHubSettings | None = None,
+    jira_settings: JiraSettings | None = None,
 ) -> FastAPI:
     pass
 
     app_observability = observability or create_observability()
     resolved_github_settings = github_settings or GitHubSettings.from_environment()
+    resolved_jira_settings = jira_settings or JiraSettings.from_environment()
     github_http_client = (
         create_github_http_client(resolved_github_settings)
         if resolved_github_settings.mode is GitHubConnectorMode.GITHUB
@@ -111,10 +121,15 @@ def create_app(
         app_observability.runtime_telemetry,
         github_http_client,
     )
-    jira_connector = (
-        UnavailableJiraConnector()
-        if resolved_github_settings.mode is GitHubConnectorMode.GITHUB
-        else FakeJiraConnector()
+    jira_http_client = (
+        create_jira_http_client(resolved_jira_settings)
+        if resolved_jira_settings.mode is JiraConnectorMode.JIRA
+        else None
+    )
+    jira_connector = create_jira_connector(
+        resolved_jira_settings,
+        app_observability.runtime_telemetry,
+        jira_http_client,
     )
 
     @asynccontextmanager
@@ -123,6 +138,12 @@ def create_app(
 
         engine = None
         try:
+            if app_observability.event_logger is not None:
+                app_observability.event_logger.emit(
+                    "runtime.connector_sources.selected",
+                    github_source=github_connector.source,
+                    jira_source=jira_connector.source,
+                )
             settings = DatabaseSettings.from_environment()
             engine = create_database_engine(settings)
             verify_database_ready(engine)
@@ -134,6 +155,8 @@ def create_app(
                 engine.dispose()
             if isinstance(github_connector, HttpGitHubConnector):
                 await github_connector.aclose()
+            if isinstance(jira_connector, HttpJiraConnector):
+                await jira_connector.aclose()
             app_observability.shutdown()
 
     application = FastAPI(title="PromptQL API", lifespan=lifespan)

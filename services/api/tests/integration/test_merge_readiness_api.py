@@ -25,7 +25,7 @@ from app.workflows import MergeReadinessWorkflowService
 
 
 class UnavailableJiraConnector:
-    def get_issue_for_pull_request(self, _request: ConnectorRequest) -> JiraIssue:
+    async def get_issue(self, _issue_key: str) -> JiraIssue:
         raise ConnectorUnavailableError("jira")
 
 

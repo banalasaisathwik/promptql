@@ -45,7 +45,7 @@ export type PullRequestState = 'open' | 'closed' | 'merged'
 export type Mergeability = 'mergeable' | 'conflicting' | 'unknown'
 export type CheckStatus = 'pending' | 'passed' | 'failed'
 export type JiraIssueStatus = 'to_do' | 'in_progress' | 'done'
-export type BlockerState = 'blocked' | 'not_blocked'
+export type BlockerState = 'blocked' | 'not_blocked' | 'unknown'
 
 export interface GitHubUser {
   login: string
@@ -87,6 +87,9 @@ export interface JiraIssue {
   status: JiraIssueStatus
   blocker_state: BlockerState
   assignee: JiraAssignee | null
+  status_id: string | null
+  status_name: string | null
+  is_resolved: boolean | null
 }
 
 export type MergeReadinessDecision = 'ready' | 'blocked' | 'unknown'

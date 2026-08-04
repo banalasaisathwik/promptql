@@ -378,9 +378,29 @@ class MergeReadinessWorkflowService:
             run,
             jira_step.name,
         ) as jira_observation:
+            jira_source = getattr(
+                self._jira_connector,
+                "source",
+                ConnectorSource.FAKE,
+            )
+            jira_observation.set_attributes(
+                **{
+                    "promptql.connector.name": "jira",
+                    "promptql.connector.source": jira_source.value,
+                    "promptql.connector.operation": "get_issue",
+                }
+            )
             try:
-                jira = self._jira_connector.get_issue_for_pull_request(request)
-                jira_outcome = StepOutcome.COMPLETED
+                jira_key = github.linked_jira_key if github is not None else None
+                if jira_key is None:
+
+
+
+                    jira = None
+                    jira_outcome = StepOutcome.UNAVAILABLE
+                else:
+                    jira = await self._jira_connector.get_issue(jira_key)
+                    jira_outcome = StepOutcome.COMPLETED
             except ConnectorUnavailableError:
                 jira = None
                 jira_outcome = StepOutcome.UNAVAILABLE

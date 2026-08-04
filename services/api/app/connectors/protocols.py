@@ -24,4 +24,6 @@ class GitHubConnector(Protocol):
 class JiraConnector(Protocol):
     pass
 
-    def get_issue_for_pull_request(self, request: ConnectorRequest) -> JiraIssue: ...
+    source: ConnectorSource
+
+    async def get_issue(self, issue_key: str) -> JiraIssue: ...

@@ -5,9 +5,10 @@ from enum import StrEnum
 from app.connectors.models import ConnectorRequest
 
 
-class GitHubErrorCategory(StrEnum):
+class ConnectorErrorCategory(StrEnum):
     pass
 
+    INVALID_REQUEST = "invalid_request"
     UNAUTHORIZED = "unauthorized"
     FORBIDDEN = "forbidden"
     NOT_FOUND = "not_found"
@@ -16,6 +17,12 @@ class GitHubErrorCategory(StrEnum):
     UPSTREAM_UNAVAILABLE = "upstream_unavailable"
     INVALID_RESPONSE = "invalid_response"
     CONFIGURATION_ERROR = "configuration_error"
+
+
+
+
+
+GitHubErrorCategory = ConnectorErrorCategory
 
 
 class GitHubConnectorError(RuntimeError):
@@ -92,6 +99,91 @@ class GitHubConfigurationError(GitHubConnectorError):
         super().__init__(GitHubErrorCategory.CONFIGURATION_ERROR, message)
 
 
+class JiraConnectorError(RuntimeError):
+    pass
+
+    category: ConnectorErrorCategory
+
+    def __init__(self, category: ConnectorErrorCategory, message: str) -> None:
+        self.category = category
+        super().__init__(message)
+
+
+class JiraInvalidIssueKeyError(JiraConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.INVALID_REQUEST,
+            "The Jira issue key is invalid.",
+        )
+
+
+class JiraUnauthorizedError(JiraConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.UNAUTHORIZED,
+            "Jira authentication failed.",
+        )
+
+
+class JiraForbiddenError(JiraConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.FORBIDDEN,
+            "Jira denied access to the requested operation.",
+        )
+
+
+class JiraIssueUnavailableError(JiraConnectorError):
+    def __init__(self) -> None:
+
+
+        super().__init__(
+            ConnectorErrorCategory.NOT_FOUND,
+            "The Jira issue is unavailable or was not found.",
+        )
+
+
+class JiraRateLimitedError(JiraConnectorError):
+    def __init__(self, retry_after_seconds: int | None = None) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(
+            ConnectorErrorCategory.RATE_LIMITED,
+            "Jira rate limiting prevented the operation.",
+        )
+
+
+class JiraTimeoutError(JiraConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.TIMEOUT,
+            "The Jira request timed out.",
+        )
+
+
+class JiraUpstreamUnavailableError(JiraConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.UPSTREAM_UNAVAILABLE,
+            "Jira is currently unavailable.",
+        )
+
+
+class JiraInvalidResponseError(JiraConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.INVALID_RESPONSE,
+            "Jira returned an invalid response.",
+        )
+
+
+class JiraConfigurationError(JiraConnectorError):
+    def __init__(
+        self,
+        message: str = "Jira connector configuration is invalid.",
+    ) -> None:
+        super().__init__(ConnectorErrorCategory.CONFIGURATION_ERROR, message)
+
+
 class ConnectorUnavailableError(RuntimeError):
     pass
 
@@ -103,13 +195,19 @@ class ConnectorUnavailableError(RuntimeError):
 class FixtureNotFoundError(LookupError):
     pass
 
-    def __init__(self, connector_name: str, request: ConnectorRequest) -> None:
+    def __init__(
+        self,
+        connector_name: str,
+        request: ConnectorRequest | None = None,
+    ) -> None:
 
 
         self.connector_name = connector_name
         self.request = request
-        super().__init__(
-            f"{connector_name} fixture not found for "
-            f"{request.repository_owner}/{request.repository_name}"
-            f"#{request.pr_number}"
-        )
+        message = f"{connector_name} fixture not found"
+        if request is not None:
+            message += (
+                f" for {request.repository_owner}/{request.repository_name}"
+                f"#{request.pr_number}"
+            )
+        super().__init__(message)

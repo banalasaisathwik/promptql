@@ -560,3 +560,82 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   rather than remain transitively provided by `fastapi[standard]`? Direct
   ownership is clearer, but adding it requires a separately approved manifest
   and lockfile decision.
+
+### 2026-08-04 — Normalize custom Jira workflows through status categories
+
+- **Concept:** External display names are not always business semantics. Jira
+  administrators can create arbitrary status names, while the stable category
+  keys `new`, `indeterminate`, and `done` provide the broad lifecycle fact this
+  policy needs. The connector reports normalized evidence; the pure policy
+  remains the only place that decides readiness.
+- **Important syntax:** An async `Protocol` lets fake and HTTP Jira satisfy the
+  same key-based operation without inheritance. `httpx.BasicAuth(email, token)`
+  constructs the secret header without putting credentials in a URL.
+  `httpx.Timeout(connect=..., read=..., write=..., pool=...)` makes each wait
+  boundary explicit. Pydantic `Literal` restricts raw status-category keys, and
+  optional model defaults keep older JSONB snapshots reconstructible.
+- **Implementation locations:** `app/connectors/jira_http_models.py` validates
+  the minimal REST v3 response; `jira_http.py` handles key validation, HTTP,
+  error mapping, and normalization; `config.py`, `factory.py`, and `main.py`
+  select and own the client; `merge_readiness.py` awaits the key-based protocol;
+  `evaluator.py` handles unknown blocker evidence deterministically.
+- **Design decision:** Jira and GitHub source modes are independent. The live
+  Jira request fetches only status, assignee, and resolution and needs no
+  pagination. Email/API-token Basic authentication is accepted only for this
+  single-user V1; OAuth or an Atlassian app is deferred.
+- **Invariant or failure behavior:** A malformed Jira key causes no HTTP call.
+  A live failure never returns fake facts. Status names never determine
+  completion. Because standard Jira has no universal blocker field, live facts
+  say `blocker_state=unknown`; a verified incomplete status still makes the
+  result blocked, while a done issue with unknown blocker evidence is unknown.
+  Secrets, provider bodies, issue identity, account data, and URLs never enter
+  runtime errors or telemetry.
+- **Trade-off:** Restricting base URLs to HTTPS `*.atlassian.net` reduces SSRF
+  surface but excludes custom-domain aliases. Avoiding site-specific custom
+  fields keeps the connector portable but prevents a fully ready live result
+  until blocker evidence is configured. Source provenance stays in spans, so
+  this task needs no public response or PostgreSQL migration.
+- **Validation evidence:** The Jira-focused suite ran 18 tests. Backend
+  discovery ran 111 tests successfully, with four PostgreSQL tests skipped
+  because `TEST_DATABASE_URL` was absent. Seven frontend tests, the
+  TypeScript/Vite build, Oxlint, Python compileall, and `git diff --check`
+  passed. Every Jira connector test client that sends requests uses
+  `httpx.MockTransport`; no Atlassian or GitHub request was made.
+- **Unresolved question:** Which explicit Jira field or link convention should
+  become the repository's site-specific blocker source before live Jira can
+  prove `not_blocked` rather than `unknown`?
+
+### 2026-08-04 — Make connector selection visible without logging credentials
+
+- **Concept:** Configuration provenance is operational evidence. Logging the
+  selected connector implementations once at application startup answers
+  whether GitHub and Jira are using live HTTP or deterministic fixtures without
+  putting that provenance into every request, database row, or public response.
+- **Important syntax:** FastAPI's async lifespan runs when a server process
+  starts and stops, unlike module-level code that also runs during imports.
+  Passing `ConnectorSource` enums to `StructuredEventLogger.emit()` produces
+  stable `live` or `fake` JSON strings through the logger's enum conversion.
+- **Implementation locations:** `app/main.py` emits
+  `runtime.connector_sources.selected` when lifespan startup begins;
+  `app/observability/structured_logging.py` explicitly allows only the two new
+  source fields; `test_application_startup_logging.py` exercises the real
+  lifespan with live GitHub and fake Jira settings.
+- **Design decision:** Emit one startup event rather than one event per request.
+  This avoids noisy duplicate logs while operation spans continue to prove the
+  source used by individual connector calls. The event occurs before database
+  readiness, so connector selection remains visible when database startup
+  subsequently fails.
+- **Invariant or failure behavior:** The event contains only
+  `github_source` and `jira_source`; it excludes tokens, emails, URLs, request
+  identity, provider payloads, and raw errors. Structured logging remains best
+  effort and cannot change application or workflow behavior.
+- **Trade-off:** A development reload emits the event again because it creates
+  a new server process. The source pair is not queryable through the run API or
+  durable database, avoiding a schema/API migration at the cost of relying on
+  server logs for this application-level configuration fact.
+- **Validation evidence:** The focused startup test passed. Full backend
+  discovery ran 112 tests successfully, with four PostgreSQL integration tests
+  skipped because `TEST_DATABASE_URL` was absent. Python `compileall` passed.
+- **Unresolved question:** If connector mode later becomes tenant-specific,
+  should bounded source provenance move from application startup into each run
+  record without exposing tenant-controlled identifiers as metric labels?

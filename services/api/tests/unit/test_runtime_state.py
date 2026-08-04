@@ -28,7 +28,9 @@ class RuntimeStateTests(unittest.TestCase):
         github = asyncio.run(
             FakeGitHubConnector().get_pull_request(MERGE_READY_REQUEST)
         )
-        jira = FakeJiraConnector().get_issue_for_pull_request(MERGE_READY_REQUEST)
+        jira = asyncio.run(
+            FakeJiraConnector().get_issue(github.linked_jira_key)
+        )
         result = evaluate_merge_readiness(github, jira)
 
         running = transition_run(

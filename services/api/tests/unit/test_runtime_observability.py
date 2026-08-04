@@ -54,7 +54,7 @@ class FailingGitHubConnector:
 
 
 class UnavailableJiraConnector:
-    def get_issue_for_pull_request(self, _request):
+    async def get_issue(self, _issue_key):
         raise ConnectorUnavailableError("jira")
 
 

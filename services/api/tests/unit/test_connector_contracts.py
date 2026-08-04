@@ -118,17 +118,12 @@ class ConnectorContractTests(unittest.TestCase):
     def test_unknown_jira_fixture_raises_typed_error(self) -> None:
         pass
 
-        request = ConnectorRequest(
-            repository_owner="acme",
-            repository_name="unknown",
-            pr_number=404,
-        )
-
         with self.assertRaises(FixtureNotFoundError) as raised:
-            FakeJiraConnector().get_issue_for_pull_request(request)
+            asyncio.run(FakeJiraConnector().get_issue("UNKNOWN-404"))
 
         self.assertEqual(raised.exception.connector_name, "jira")
-        self.assertEqual(raised.exception.request, request)
+        self.assertIsNone(raised.exception.request)
+        self.assertNotIn("UNKNOWN-404", str(raised.exception))
 
     def test_identical_inputs_always_return_identical_results(self) -> None:
         pass
@@ -149,8 +144,12 @@ class ConnectorContractTests(unittest.TestCase):
             asyncio.run(github.get_pull_request(second_request)),
         )
         self.assertEqual(
-            jira.get_issue_for_pull_request(first_request),
-            jira.get_issue_for_pull_request(second_request),
+            asyncio.run(
+                jira.get_issue(JIRA_FIXTURES[first_request].issue_key)
+            ),
+            asyncio.run(
+                jira.get_issue(JIRA_FIXTURES[second_request].issue_key)
+            ),
         )
 
 

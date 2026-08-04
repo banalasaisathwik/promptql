@@ -167,8 +167,11 @@ function isJiraIssue(value: unknown): value is JiraIssue {
   return (
     isNonEmptyString(value.issue_key) &&
     isOneOf(value.status, ['to_do', 'in_progress', 'done']) &&
-    isOneOf(value.blocker_state, ['blocked', 'not_blocked']) &&
-    assigneeIsValid
+    isOneOf(value.blocker_state, ['blocked', 'not_blocked', 'unknown']) &&
+    assigneeIsValid &&
+    (value.status_id === null || isNonEmptyString(value.status_id)) &&
+    (value.status_name === null || isNonEmptyString(value.status_name)) &&
+    (value.is_resolved === null || typeof value.is_resolved === 'boolean')
   )
 }
 

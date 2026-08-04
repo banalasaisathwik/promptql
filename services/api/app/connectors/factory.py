@@ -2,11 +2,17 @@ pass
 
 import httpx
 
-from app.config import GitHubConnectorMode, GitHubSettings
-from app.connectors.errors import GitHubConfigurationError
-from app.connectors.fakes import FakeGitHubConnector
+from app.config import (
+    GitHubConnectorMode,
+    GitHubSettings,
+    JiraConnectorMode,
+    JiraSettings,
+)
+from app.connectors.errors import GitHubConfigurationError, JiraConfigurationError
+from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.github_http import HttpGitHubConnector
-from app.connectors.protocols import GitHubConnector
+from app.connectors.jira_http import HttpJiraConnector
+from app.connectors.protocols import GitHubConnector, JiraConnector
 from app.observability import RuntimeTelemetry
 
 
@@ -43,3 +49,48 @@ def create_github_connector(
             "GitHub mode requires an application-scoped HTTP client."
         )
     return HttpGitHubConnector(http_client, telemetry)
+
+
+def create_jira_http_client(settings: JiraSettings) -> httpx.AsyncClient:
+    pass
+
+    if (
+        settings.mode is not JiraConnectorMode.JIRA
+        or settings.base_url is None
+        or settings.email is None
+        or settings.api_token is None
+    ):
+        raise JiraConfigurationError()
+    timeout = settings.request_timeout_seconds
+    return httpx.AsyncClient(
+        base_url=settings.base_url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "promptql-api",
+        },
+        auth=httpx.BasicAuth(settings.email, settings.api_token),
+        timeout=httpx.Timeout(
+            connect=timeout,
+            read=timeout,
+            write=timeout,
+            pool=timeout,
+        ),
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        follow_redirects=False,
+    )
+
+
+def create_jira_connector(
+    settings: JiraSettings,
+    telemetry: RuntimeTelemetry,
+    http_client: httpx.AsyncClient | None = None,
+) -> JiraConnector:
+    pass
+
+    if settings.mode is JiraConnectorMode.FAKE:
+        return FakeJiraConnector()
+    if http_client is None:
+        raise JiraConfigurationError(
+            "Jira mode requires an application-scoped HTTP client."
+        )
+    return HttpJiraConnector(http_client, telemetry)

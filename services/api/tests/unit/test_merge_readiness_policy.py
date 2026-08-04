@@ -29,7 +29,7 @@ def _ready_facts() -> tuple[GitHubPullRequest, JiraIssue]:
     github = asyncio.run(
         FakeGitHubConnector().get_pull_request(MERGE_READY_REQUEST)
     )
-    jira = FakeJiraConnector().get_issue_for_pull_request(MERGE_READY_REQUEST)
+    jira = asyncio.run(FakeJiraConnector().get_issue(github.linked_jira_key))
     return github, jira
 
 
@@ -189,6 +189,37 @@ class MergeReadinessPolicyTests(unittest.TestCase):
         self.assertEqual(result.decision, MergeReadinessDecision.UNKNOWN)
         self.assertEqual(result.reason_code, PolicyReasonCode.EVIDENCE_UNAVAILABLE)
         self.assertEqual(result.blockers, ())
+
+    def test_unknown_jira_blocker_evidence_is_unknown_when_status_is_done(self) -> None:
+        github, _ = _ready_facts()
+
+        result = evaluate_merge_readiness(
+            github,
+            _jira_with(blocker_state=BlockerState.UNKNOWN),
+        )
+
+        self.assertEqual(result.decision, MergeReadinessDecision.UNKNOWN)
+        self.assertIn(
+            "Jira blocker evidence is unavailable.",
+            {information.message for information in result.missing_information},
+        )
+
+    def test_verified_incomplete_jira_wins_over_unknown_blocker_evidence(self) -> None:
+        github, _ = _ready_facts()
+
+        result = evaluate_merge_readiness(
+            github,
+            _jira_with(
+                status=JiraIssueStatus.IN_PROGRESS,
+                blocker_state=BlockerState.UNKNOWN,
+            ),
+        )
+
+        self.assertEqual(result.decision, MergeReadinessDecision.BLOCKED)
+        self.assertIn(
+            PolicyReasonCode.JIRA_NOT_COMPLETE,
+            {blocker.reason_code for blocker in result.blockers},
+        )
 
     def test_indeterminate_mergeability_is_unknown(self) -> None:
         github = _github_with(mergeability=Mergeability.UNKNOWN)

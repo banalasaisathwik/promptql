@@ -348,9 +348,16 @@ def evaluate_merge_readiness(
                 jira_status_reference = _record_evidence(
                     evidence_references,
                     EvidenceSource.JIRA,
-                    "status",
+                    "status_category",
                     jira.status.value,
                 )
+                if jira.status_name is not None:
+                    _record_evidence(
+                        evidence_references,
+                        EvidenceSource.JIRA,
+                        "status_name",
+                        jira.status_name,
+                    )
                 jira_blocker_reference = _record_evidence(
                     evidence_references,
                     EvidenceSource.JIRA,
@@ -378,6 +385,13 @@ def evaluate_merge_readiness(
                         (jira_key_reference, jira_blocker_reference),
                         PendingActionCode.CLEAR_JIRA_BLOCKER,
                         "Clear the blocker on the linked Jira issue.",
+                    )
+                elif jira.blocker_state is BlockerState.UNKNOWN:
+                    _add_missing_information(
+                        missing_information,
+                        pending_actions,
+                        "Jira blocker evidence is unavailable.",
+                        (jira_key_reference, jira_blocker_reference),
                     )
 
     if blockers:
