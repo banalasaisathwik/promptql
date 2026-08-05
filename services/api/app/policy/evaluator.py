@@ -1,5 +1,3 @@
-pass
-
 from app.connectors.models import (
     BlockerState,
     CheckStatus,
@@ -27,8 +25,6 @@ def _record_evidence(
     field: str,
     value: str | bool | int | None,
 ) -> str:
-    pass
-
     reference_id = f"{source.value}.{field}"
     evidence_references.append(
         EvidenceReference(
@@ -50,8 +46,6 @@ def _add_blocker(
     action_code: PendingActionCode,
     action_message: str,
 ) -> None:
-    pass
-
     blockers.append(
         PolicyFinding(
             reason_code=reason_code,
@@ -74,8 +68,6 @@ def _add_missing_information(
     message: str,
     evidence_reference_ids: tuple[str, ...] = (),
 ) -> None:
-    pass
-
     missing_information.append(
         PolicyFinding(
             reason_code=PolicyReasonCode.EVIDENCE_UNAVAILABLE,
@@ -96,8 +88,6 @@ def evaluate_merge_readiness(
     github: GitHubPullRequest | None,
     jira: JiraIssue | None,
 ) -> MergeReadinessResult:
-    pass
-
     blockers: list[PolicyFinding] = []
     pending_actions: list[PendingAction] = []
     missing_information: list[PolicyFinding] = []
@@ -188,7 +178,6 @@ def evaluate_merge_readiness(
             check_references.append((check_name_reference, check_status_reference))
 
 
-
         if github.is_draft:
             _add_blocker(
                 blockers,
@@ -237,9 +226,6 @@ def evaluate_merge_readiness(
                 (checks_known_reference,),
             )
         else:
-
-
-
             for expected_status, reason_code, action_code in (
                 (
                     CheckStatus.FAILED,
@@ -256,6 +242,12 @@ def evaluate_merge_readiness(
                     if check.status is not expected_status:
                         continue
                     check_evidence = check_references[check_index]
+                    if check.status is CheckStatus.FAILED:
+                        action_message = f"Fix required CI check '{check.name}'."
+                    else:
+                        action_message = (
+                            f"Wait for required CI check '{check.name}' to finish."
+                        )
                     _add_blocker(
                         blockers,
                         pending_actions,
@@ -263,13 +255,7 @@ def evaluate_merge_readiness(
                         f"Required CI check '{check.name}' is {check.status.value}.",
                         check_evidence,
                         action_code,
-                        (
-                            f"Fix required CI check '{check.name}'."
-                            if check.status is CheckStatus.FAILED
-                            else (
-                                f"Wait for required CI check '{check.name}' to finish."
-                            )
-                        ),
+                        action_message,
                     )
 
         if not github.reviews_known:
@@ -333,8 +319,6 @@ def evaluate_merge_readiness(
                 "issue_key",
                 jira.issue_key,
             )
-
-
 
 
             if jira.issue_key != github.linked_jira_key:

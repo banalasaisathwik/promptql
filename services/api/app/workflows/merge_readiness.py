@@ -1,5 +1,3 @@
-pass
-
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -57,16 +55,12 @@ def _utc_now() -> datetime:
 
 
 def _replace_run(run: MergeReadinessRun, **updates) -> MergeReadinessRun:
-    pass
-
     values = run.model_dump()
     values.update(updates)
     return MergeReadinessRun.model_validate(values)
 
 
 class MergeReadinessWorkflowService:
-    pass
-
     def __init__(
         self,
         github_connector: GitHubConnector,
@@ -98,10 +92,6 @@ class MergeReadinessWorkflowService:
         run: MergeReadinessRun,
         checkpoint: PersistenceCheckpoint,
     ) -> MergeReadinessRun:
-
-
-
-
         await asyncio.to_thread(self._save_synchronously, run, checkpoint)
         return run
 
@@ -110,8 +100,6 @@ class MergeReadinessWorkflowService:
         run: MergeReadinessRun,
         name: WorkflowStepName,
     ) -> tuple[MergeReadinessRun, RuntimeStep, int]:
-        pass
-
         pending_step = create_pending_step(name)
         run = await self._save(
             _replace_run(run, steps=(*run.steps, pending_step)),
@@ -155,8 +143,6 @@ class MergeReadinessWorkflowService:
         step: RuntimeStep,
         started_at_ns: int,
     ) -> RuntimeStep:
-        pass
-
         return transition_step(
             step,
             StepStatus.COMPLETED,
@@ -190,8 +176,33 @@ class MergeReadinessWorkflowService:
         )
 
 
-
         return await self._save(failed_run, PersistenceCheckpoint.RUN_FAILED)
+
+    async def _persist_failed_step_and_run(
+        self,
+        run: MergeReadinessRun,
+        step: RuntimeStep,
+        started_at_ns: int,
+        runtime_error: RuntimeErrorInfo,
+        failure_category: FailureCategory,
+        step_observation: SpanObservation,
+    ) -> MergeReadinessRun:
+        step_observation.set_attributes(
+            **{"promptql.step.outcome": StepOutcome.FAILED.value}
+        )
+        step_observation.mark_error(failure_category)
+        failed_run = await self._fail_step_and_run(
+            run,
+            step,
+            started_at_ns,
+            runtime_error,
+        )
+        self._record_terminal_step(
+            failed_run,
+            StepOutcome.FAILED,
+            failure_category,
+        )
+        return failed_run
 
     def _record_terminal_step(
         self,
@@ -236,8 +247,6 @@ class MergeReadinessWorkflowService:
         return FailureCategory.PERSISTENCE_UNAVAILABLE
 
     async def execute(self, request: ConnectorRequest) -> MergeReadinessRun:
-        pass
-
         run = create_pending_run(request)
         with self._telemetry.observe_workflow(run) as workflow_observation:
             try:
@@ -270,8 +279,6 @@ class MergeReadinessWorkflowService:
         run: MergeReadinessRun,
         workflow_observation: SpanObservation,
     ) -> MergeReadinessRun:
-        pass
-
         run = await self._save(run, PersistenceCheckpoint.RUN_CREATED)
         run = await self._save(
             transition_run(
@@ -282,6 +289,35 @@ class MergeReadinessWorkflowService:
             PersistenceCheckpoint.RUN_STARTED,
         )
 
+        run, github_facts, workflow_must_stop = await self._fetch_github_facts(
+            run,
+            request,
+            workflow_observation,
+        )
+        if workflow_must_stop:
+            return run
+
+        run, jira_facts, workflow_must_stop = await self._fetch_jira_facts(
+            run,
+            github_facts,
+            workflow_observation,
+        )
+        if workflow_must_stop:
+            return run
+
+        return await self._evaluate_policy(
+            run,
+            github_facts,
+            jira_facts,
+            workflow_observation,
+        )
+
+    async def _fetch_github_facts(
+        self,
+        run: MergeReadinessRun,
+        request: ConnectorRequest,
+        workflow_observation: SpanObservation,
+    ) -> tuple[MergeReadinessRun, GitHubPullRequest | None, bool]:
         run, github_step, github_started_ns = await self._start_step(
             run,
             WorkflowStepName.FETCH_GITHUB_FACTS,
@@ -303,18 +339,14 @@ class MergeReadinessWorkflowService:
                 }
             )
             try:
-                github = await self._github_connector.get_pull_request(request)
+                github_facts = await self._github_connector.get_pull_request(request)
                 github_outcome = StepOutcome.COMPLETED
             except ConnectorUnavailableError:
-                github = None
+                github_facts = None
                 github_outcome = StepOutcome.UNAVAILABLE
             except FixtureNotFoundError:
                 category = FailureCategory.FIXTURE_NOT_FOUND
-                github_observation.set_attributes(
-                    **{"promptql.step.outcome": StepOutcome.FAILED.value}
-                )
-                github_observation.mark_error(category)
-                failed_run = await self._fail_step_and_run(
+                failed_run = await self._persist_failed_step_and_run(
                     run,
                     github_step,
                     github_started_ns,
@@ -322,11 +354,8 @@ class MergeReadinessWorkflowService:
                         code=RuntimeErrorCode.FIXTURE_NOT_FOUND,
                         message="GitHub facts were not found for this request.",
                     ),
-                )
-                self._record_terminal_step(
-                    failed_run,
-                    StepOutcome.FAILED,
                     category,
+                    github_observation,
                 )
                 self._record_terminal_run(
                     failed_run,
@@ -336,11 +365,7 @@ class MergeReadinessWorkflowService:
                 raise
             except Exception:
                 category = FailureCategory.CONNECTOR_FAILURE
-                github_observation.set_attributes(
-                    **{"promptql.step.outcome": StepOutcome.FAILED.value}
-                )
-                github_observation.mark_error(category)
-                failed_run = await self._fail_step_and_run(
+                failed_run = await self._persist_failed_step_and_run(
                     run,
                     github_step,
                     github_started_ns,
@@ -348,17 +373,15 @@ class MergeReadinessWorkflowService:
                         code=RuntimeErrorCode.CONNECTOR_EXECUTION_FAILED,
                         message="The GitHub connector step failed unexpectedly.",
                     ),
-                )
-                self._record_terminal_step(
-                    failed_run,
-                    StepOutcome.FAILED,
                     category,
+                    github_observation,
                 )
-                return self._record_terminal_run(
+                terminal_run = self._record_terminal_run(
                     failed_run,
                     workflow_observation,
                     category,
                 )
+                return terminal_run, None, True
             github_observation.set_attributes(
                 **{"promptql.step.outcome": github_outcome.value}
             )
@@ -366,10 +389,17 @@ class MergeReadinessWorkflowService:
             run,
             github_step,
             github_started_ns,
-            github=github,
+            github=github_facts,
         )
         self._record_terminal_step(run, github_outcome)
+        return run, github_facts, False
 
+    async def _fetch_jira_facts(
+        self,
+        run: MergeReadinessRun,
+        github_facts: GitHubPullRequest | None,
+        workflow_observation: SpanObservation,
+    ) -> tuple[MergeReadinessRun, JiraIssue | None, bool]:
         run, jira_step, jira_started_ns = await self._start_step(
             run,
             WorkflowStepName.FETCH_JIRA_FACTS,
@@ -391,26 +421,22 @@ class MergeReadinessWorkflowService:
                 }
             )
             try:
-                jira_key = github.linked_jira_key if github is not None else None
+                jira_key = None
+                if github_facts is not None:
+                    jira_key = github_facts.linked_jira_key
+
                 if jira_key is None:
-
-
-
-                    jira = None
+                    jira_facts = None
                     jira_outcome = StepOutcome.UNAVAILABLE
                 else:
-                    jira = await self._jira_connector.get_issue(jira_key)
+                    jira_facts = await self._jira_connector.get_issue(jira_key)
                     jira_outcome = StepOutcome.COMPLETED
             except ConnectorUnavailableError:
-                jira = None
+                jira_facts = None
                 jira_outcome = StepOutcome.UNAVAILABLE
             except FixtureNotFoundError:
                 category = FailureCategory.FIXTURE_NOT_FOUND
-                jira_observation.set_attributes(
-                    **{"promptql.step.outcome": StepOutcome.FAILED.value}
-                )
-                jira_observation.mark_error(category)
-                failed_run = await self._fail_step_and_run(
+                failed_run = await self._persist_failed_step_and_run(
                     run,
                     jira_step,
                     jira_started_ns,
@@ -418,11 +444,8 @@ class MergeReadinessWorkflowService:
                         code=RuntimeErrorCode.FIXTURE_NOT_FOUND,
                         message="Jira facts were not found for this request.",
                     ),
-                )
-                self._record_terminal_step(
-                    failed_run,
-                    StepOutcome.FAILED,
                     category,
+                    jira_observation,
                 )
                 self._record_terminal_run(
                     failed_run,
@@ -432,11 +455,7 @@ class MergeReadinessWorkflowService:
                 raise
             except Exception:
                 category = FailureCategory.CONNECTOR_FAILURE
-                jira_observation.set_attributes(
-                    **{"promptql.step.outcome": StepOutcome.FAILED.value}
-                )
-                jira_observation.mark_error(category)
-                failed_run = await self._fail_step_and_run(
+                failed_run = await self._persist_failed_step_and_run(
                     run,
                     jira_step,
                     jira_started_ns,
@@ -444,17 +463,15 @@ class MergeReadinessWorkflowService:
                         code=RuntimeErrorCode.CONNECTOR_EXECUTION_FAILED,
                         message="The Jira connector step failed unexpectedly.",
                     ),
-                )
-                self._record_terminal_step(
-                    failed_run,
-                    StepOutcome.FAILED,
                     category,
+                    jira_observation,
                 )
-                return self._record_terminal_run(
+                terminal_run = self._record_terminal_run(
                     failed_run,
                     workflow_observation,
                     category,
                 )
+                return terminal_run, None, True
             jira_observation.set_attributes(
                 **{"promptql.step.outcome": jira_outcome.value}
             )
@@ -462,10 +479,18 @@ class MergeReadinessWorkflowService:
             run,
             jira_step,
             jira_started_ns,
-            jira=jira,
+            jira=jira_facts,
         )
         self._record_terminal_step(run, jira_outcome)
+        return run, jira_facts, False
 
+    async def _evaluate_policy(
+        self,
+        run: MergeReadinessRun,
+        github_facts: GitHubPullRequest | None,
+        jira_facts: JiraIssue | None,
+        workflow_observation: SpanObservation,
+    ) -> MergeReadinessRun:
         run, policy_step, policy_started_ns = await self._start_step(
             run,
             WorkflowStepName.EVALUATE_MERGE_READINESS,
@@ -475,14 +500,13 @@ class MergeReadinessWorkflowService:
             policy_step.name,
         ) as policy_observation:
             try:
-                result = self._policy_evaluator(github, jira)
+                policy_result = self._policy_evaluator(
+                    github_facts,
+                    jira_facts,
+                )
             except Exception:
                 category = FailureCategory.POLICY_FAILURE
-                policy_observation.set_attributes(
-                    **{"promptql.step.outcome": StepOutcome.FAILED.value}
-                )
-                policy_observation.mark_error(category)
-                failed_run = await self._fail_step_and_run(
+                failed_run = await self._persist_failed_step_and_run(
                     run,
                     policy_step,
                     policy_started_ns,
@@ -492,11 +516,8 @@ class MergeReadinessWorkflowService:
                             "The merge-readiness policy step failed unexpectedly."
                         ),
                     ),
-                )
-                self._record_terminal_step(
-                    failed_run,
-                    StepOutcome.FAILED,
                     category,
+                    policy_observation,
                 )
                 return self._record_terminal_run(
                     failed_run,
@@ -518,7 +539,7 @@ class MergeReadinessWorkflowService:
             run_with_completed_policy,
             RunStatus.COMPLETED,
             self._timestamp_clock(),
-            result=result,
+            result=policy_result,
         )
 
 

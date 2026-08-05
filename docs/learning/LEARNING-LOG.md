@@ -639,3 +639,73 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** If connector mode later becomes tenant-specific,
   should bounded source provenance move from application startup into each run
   record without exposing tenant-controlled identifiers as metric labels?
+
+### 2026-08-05 — Readable orchestration exposes sequence without removing boundaries
+
+- **Concept:** A top-level workflow should name business operations in their
+  execution order, while step methods own the persistence, timing, telemetry,
+  and sanitized failure behavior required by each operation. Readability comes
+  from separating levels of detail, not from deleting resource and safety
+  boundaries.
+- **Important syntax:** FastAPI's `@asynccontextmanager` runs code before
+  `yield` at startup and the `finally` block at shutdown. Explicit `if value is
+  not None` branches distinguish injected dependencies from environment
+  defaults. Frozen Pydantic snapshots are updated by dumping, changing, and
+  revalidating a new model. `asyncio.to_thread()` keeps synchronous SQLAlchemy
+  saves outside the event-loop thread.
+- **Implementation locations:** `app/main.py:create_app` shows assembly,
+  startup, and shutdown phases; `connector_router.py:analyze_pull_request`
+  shows HTTP input, workflow call, and output; and
+  `workflows/merge_readiness.py:_execute_workflow` shows GitHub, Jira, and
+  policy order. `runtime/state.py` has type-specific immutable replacements,
+  and `database/postgres_run_repository.py:_read_run` explicitly reconstructs
+  typed storage values.
+- **Design decision:** Keep the workflow service class because it shares
+  connectors, repository, clocks, and telemetry across several operations.
+  Extract only complete workflow steps and the repeated atomic failure
+  checkpoint; avoid a generic executor, decorator, or new result framework.
+- **Invariant or failure behavior:** Three steps retain their existing names and
+  order. Connector and policy calls run outside database transactions. A failed
+  step and run commit together, and the completed policy step and result commit
+  together, before terminal telemetry and HTTP output. Public routes, JSON,
+  status codes, fake/live selection, and sanitized errors remain unchanged.
+- **Misconception corrected:** Fewer functions are not automatically easier to
+  read. One long workflow path mixed business sequence with several necessary
+  detail levels; named step methods make the sequence traceable while retaining
+  the same class and file.
+- **Trade-off learned:** The refactor adds a few explicit branches and helper
+  calls, so total line count is not the optimization target. In exchange, each
+  function has one reading level and can be debugged at a meaningful workflow
+  boundary without introducing more modules or production dependencies.
+- **Validation evidence:** Pre-refactor backend discovery ran 112 tests with
+  four guarded PostgreSQL skips. Focused startup/API, workflow/observability,
+  and runtime/policy tests passed after their respective changes. Final
+  compile, complete discovery, and diff checks are recorded in the execution
+  plan and task response.
+- **Unresolved question:** If a fourth workflow step is added, does the explicit
+  step-method pattern remain clearer, or has enough real duplication appeared
+  to justify a small typed step result?
+
+### 2026-08-05 — Generated Git source should not add empty statements
+
+- **Concept:** A Git clean filter is a source transformation boundary. Its
+  generated representation must stay valid and readable without changing the
+  commented working-tree source used for learning.
+- **Important syntax:** Python needs `pass` only when a suite would otherwise be
+  empty. Removing a docstring from a function that still has executable
+  statements does not require a replacement statement.
+- **Implementation location:** The local `comment-strip` filter now preserves
+  `pass` only for genuinely empty suites. The committed cleanup touches the
+  previously refactored API workflow files and is validated through full
+  backend discovery, `compileall`, and `git diff --check`.
+- **Design decision:** Correct the local Git transformation instead of deleting
+  useful workspace docstrings. Also use `terminal_run` at the route boundary
+  because both completed and failed runs are terminal responses.
+- **Invariant or failure behavior:** Workspace comments remain available;
+  committed Python compiles; public API, state, persistence, policy, connector,
+  and telemetry behavior remains unchanged.
+- **Trade-off learned:** The index representation no longer preserves exact
+  blank-line positions for removed teaching text, but reviewers receive cleaner
+  source without meaningless statements or excessive gaps.
+- **Validation evidence:** Recorded in the cleanup commit and task response.
+- **Unresolved question:** None for this mechanical cleanup.

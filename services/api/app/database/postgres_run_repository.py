@@ -1,5 +1,3 @@
-pass
-
 from typing import Any
 from uuid import UUID
 
@@ -27,8 +25,6 @@ from app.runtime.state import ALLOWED_RUN_TRANSITIONS, ALLOWED_STEP_TRANSITIONS
 
 
 def _json_value(model) -> dict[str, Any] | None:
-    pass
-
     if model is None:
         return None
     return model.model_dump(mode="json")
@@ -84,8 +80,6 @@ def _step_row_values(step: WorkflowStepRow) -> dict[str, Any]:
 
 
 class PostgresRunRepository:
-    pass
-
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
@@ -93,8 +87,6 @@ class PostgresRunRepository:
         self._confirmed_run_ids: set[UUID] = set()
 
     def save(self, run: MergeReadinessRun) -> None:
-        pass
-
         try:
             with self._session_factory.begin() as session:
                 stored_run = session.get(WorkflowRunRow, run.run_id)
@@ -118,8 +110,6 @@ class PostgresRunRepository:
             ) from None
 
     def get(self, run_id: UUID) -> MergeReadinessRun | None:
-        pass
-
         try:
             with self._session_factory() as session:
                 stored_run = session.get(WorkflowRunRow, run_id)
@@ -139,41 +129,57 @@ class PostgresRunRepository:
 
         try:
             self._validate_step_sequence(stored_steps, run_id)
-            return MergeReadinessRun(
-                run_id=stored_run.run_id,
-                workflow_name=stored_run.workflow_name,
-                workflow_version=stored_run.workflow_version,
-                status=stored_run.status,
-                started_at=stored_run.started_at,
-                completed_at=stored_run.completed_at,
-                steps=tuple(self._read_step(step) for step in stored_steps),
-                error=(
-                    RuntimeErrorInfo.model_validate(stored_run.runtime_error)
-                    if stored_run.runtime_error is not None
-                    else None
-                ),
-                result=(
-                    MergeReadinessResult.model_validate(stored_run.result)
-                    if stored_run.result is not None
-                    else None
-                ),
-                request=ConnectorRequest.model_validate(stored_run.request_payload),
-                github=(
-                    GitHubPullRequest.model_validate(stored_run.github_facts)
-                    if stored_run.github_facts is not None
-                    else None
-                ),
-                jira=(
-                    JiraIssue.model_validate(stored_run.jira_facts)
-                    if stored_run.jira_facts is not None
-                    else None
-                ),
-            )
+            return self._read_run(stored_run, stored_steps)
         except (ValidationError, ValueError, TypeError):
             raise RunRecordInvalidError(
                 "The stored runtime record could not be reconstructed.",
                 run_id,
             ) from None
+
+    def _read_run(
+        self,
+        stored_run: WorkflowRunRow,
+        stored_steps: tuple[WorkflowStepRow, ...],
+    ) -> MergeReadinessRun:
+        runtime_error = None
+        if stored_run.runtime_error is not None:
+            runtime_error = RuntimeErrorInfo.model_validate(stored_run.runtime_error)
+
+        policy_result = None
+        if stored_run.result is not None:
+            policy_result = MergeReadinessResult.model_validate(
+                stored_run.result
+            )
+
+        github_facts = None
+        if stored_run.github_facts is not None:
+            github_facts = GitHubPullRequest.model_validate(stored_run.github_facts)
+
+        jira_facts = None
+        if stored_run.jira_facts is not None:
+            jira_facts = JiraIssue.model_validate(stored_run.jira_facts)
+
+        runtime_steps = tuple(
+            self._read_step(stored_step) for stored_step in stored_steps
+        )
+        connector_request = ConnectorRequest.model_validate(
+            stored_run.request_payload
+        )
+
+        return MergeReadinessRun(
+            run_id=stored_run.run_id,
+            workflow_name=stored_run.workflow_name,
+            workflow_version=stored_run.workflow_version,
+            status=stored_run.status,
+            started_at=stored_run.started_at,
+            completed_at=stored_run.completed_at,
+            steps=runtime_steps,
+            error=runtime_error,
+            result=policy_result,
+            request=connector_request,
+            github=github_facts,
+            jira=jira_facts,
+        )
 
     def _confirmed_run_id(self, run_id: UUID) -> UUID | None:
         return run_id if run_id in self._confirmed_run_ids else None
@@ -225,8 +231,8 @@ class PostgresRunRepository:
             )
             .values(**_run_values(run))
         )
-        result = session.execute(statement)
-        if result.rowcount != 1:
+        update_result = session.execute(statement)
+        if update_result.rowcount != 1:
             raise RunStateConflictError(
                 "The stored runtime state changed concurrently.",
                 run.run_id,
@@ -285,8 +291,8 @@ class PostgresRunRepository:
                 )
                 .values(**update_values)
             )
-            result = session.execute(statement)
-            if result.rowcount != 1:
+            update_result = session.execute(statement)
+            if update_result.rowcount != 1:
                 raise RunStateConflictError(
                     "The stored runtime step changed concurrently.",
                     run.run_id,

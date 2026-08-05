@@ -1,5 +1,3 @@
-pass
-
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -19,13 +17,13 @@ from app.config import (
     JiraConnectorMode,
     JiraSettings,
 )
+from app.connectors.errors import FixtureNotFoundError
 from app.connectors.factory import (
     create_github_connector,
     create_github_http_client,
     create_jira_connector,
     create_jira_http_client,
 )
-from app.connectors.errors import FixtureNotFoundError
 from app.connectors.github_http import HttpGitHubConnector
 from app.connectors.jira_http import HttpJiraConnector
 from app.database import (
@@ -45,8 +43,6 @@ async def fixture_not_found_handler(
     _request: Request,
     _error: FixtureNotFoundError,
 ) -> JSONResponse:
-    pass
-
     error = ApiError(
         code=ApiErrorCode.FIXTURE_NOT_FOUND,
         message="No connector fixture exists for this pull request.",
@@ -58,8 +54,6 @@ async def run_persistence_error_handler(
     _request: Request,
     error: RunPersistenceError,
 ) -> JSONResponse:
-    pass
-
     response = RuntimePersistenceApiError(
         code=ApiErrorCode.RUNTIME_PERSISTENCE_UNAVAILABLE,
         message="Runtime persistence is unavailable.",
@@ -72,8 +66,6 @@ async def run_state_conflict_handler(
     _request: Request,
     error: RunStateConflictError,
 ) -> JSONResponse:
-    pass
-
     response = RuntimePersistenceApiError(
         code=ApiErrorCode.RUNTIME_STATE_CONFLICT,
         message="The stored runtime state changed and could not be updated.",
@@ -86,8 +78,6 @@ async def run_record_invalid_handler(
     _request: Request,
     _error: RunRecordInvalidError,
 ) -> JSONResponse:
-    pass
-
     response = ApiError(
         code=ApiErrorCode.RUNTIME_RECORD_INVALID,
         message="The stored runtime record could not be reconstructed.",
@@ -96,8 +86,6 @@ async def run_record_invalid_handler(
 
 
 async def health() -> dict[str, str]:
-    pass
-
     return {"status": "ok"}
 
 
@@ -106,26 +94,35 @@ def create_app(
     github_settings: GitHubSettings | None = None,
     jira_settings: JiraSettings | None = None,
 ) -> FastAPI:
-    pass
+    if observability is not None:
+        app_observability = observability
+    else:
+        app_observability = create_observability()
 
-    app_observability = observability or create_observability()
-    resolved_github_settings = github_settings or GitHubSettings.from_environment()
-    resolved_jira_settings = jira_settings or JiraSettings.from_environment()
-    github_http_client = (
-        create_github_http_client(resolved_github_settings)
-        if resolved_github_settings.mode is GitHubConnectorMode.GITHUB
-        else None
-    )
+    if github_settings is not None:
+        resolved_github_settings = github_settings
+    else:
+        resolved_github_settings = GitHubSettings.from_environment()
+
+    if jira_settings is not None:
+        resolved_jira_settings = jira_settings
+    else:
+        resolved_jira_settings = JiraSettings.from_environment()
+
+    github_http_client = None
+    if resolved_github_settings.mode is GitHubConnectorMode.GITHUB:
+        github_http_client = create_github_http_client(resolved_github_settings)
+
     github_connector = create_github_connector(
         resolved_github_settings,
         app_observability.runtime_telemetry,
         github_http_client,
     )
-    jira_http_client = (
-        create_jira_http_client(resolved_jira_settings)
-        if resolved_jira_settings.mode is JiraConnectorMode.JIRA
-        else None
-    )
+
+    jira_http_client = None
+    if resolved_jira_settings.mode is JiraConnectorMode.JIRA:
+        jira_http_client = create_jira_http_client(resolved_jira_settings)
+
     jira_connector = create_jira_connector(
         resolved_jira_settings,
         app_observability.runtime_telemetry,
@@ -134,8 +131,6 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-        pass
-
         engine = None
         try:
             if app_observability.event_logger is not None:
@@ -183,7 +178,6 @@ def create_app(
     application.add_api_route("/health", health, methods=["GET"])
     app_observability.instrument_app(application)
     return application
-
 
 
 app = create_app()
