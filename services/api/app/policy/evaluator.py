@@ -256,6 +256,12 @@ def evaluate_merge_readiness(
                     if check.status is not expected_status:
                         continue
                     check_evidence = check_references[check_index]
+                    if check.status is CheckStatus.FAILED:
+                        action_message = f"Fix required CI check '{check.name}'."
+                    else:
+                        action_message = (
+                            f"Wait for required CI check '{check.name}' to finish."
+                        )
                     _add_blocker(
                         blockers,
                         pending_actions,
@@ -263,13 +269,7 @@ def evaluate_merge_readiness(
                         f"Required CI check '{check.name}' is {check.status.value}.",
                         check_evidence,
                         action_code,
-                        (
-                            f"Fix required CI check '{check.name}'."
-                            if check.status is CheckStatus.FAILED
-                            else (
-                                f"Wait for required CI check '{check.name}' to finish."
-                            )
-                        ),
+                        action_message,
                     )
 
         if not github.reviews_known:

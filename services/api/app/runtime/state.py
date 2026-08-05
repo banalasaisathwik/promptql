@@ -44,12 +44,20 @@ ALLOWED_STEP_TRANSITIONS = {
 }
 
 
-def _replace_model(model, **updates):
+def _replace_run(run: MergeReadinessRun, **updates) -> MergeReadinessRun:
     pass
 
-    values = model.model_dump()
-    values.update(updates)
-    return type(model).model_validate(values)
+    run_values = run.model_dump()
+    run_values.update(updates)
+    return MergeReadinessRun.model_validate(run_values)
+
+
+def _replace_step(step: RuntimeStep, **updates) -> RuntimeStep:
+    pass
+
+    step_values = step.model_dump()
+    step_values.update(updates)
+    return RuntimeStep.model_validate(step_values)
 
 
 def create_pending_run(
@@ -108,9 +116,9 @@ def transition_run(
         )
 
     if new_status is RunStatus.RUNNING:
-        return _replace_model(run, status=new_status, started_at=changed_at)
+        return _replace_run(run, status=new_status, started_at=changed_at)
 
-    return _replace_model(
+    return _replace_run(
         run,
         status=new_status,
         started_at=run.started_at or changed_at,
@@ -136,9 +144,9 @@ def transition_step(
         )
 
     if new_status is StepStatus.RUNNING:
-        return _replace_model(step, status=new_status, started_at=changed_at)
+        return _replace_step(step, status=new_status, started_at=changed_at)
 
-    return _replace_model(
+    return _replace_step(
         step,
         status=new_status,
         started_at=step.started_at or changed_at,

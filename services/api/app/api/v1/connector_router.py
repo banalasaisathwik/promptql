@@ -53,7 +53,9 @@ def get_runtime_telemetry(request: Request) -> RuntimeTelemetry:
     pass
 
     telemetry = getattr(request.app.state, "runtime_telemetry", None)
-    return telemetry if telemetry is not None else NoOpRuntimeTelemetry()
+    if telemetry is not None:
+        return telemetry
+    return NoOpRuntimeTelemetry()
 
 
 def get_run_repository(
@@ -129,14 +131,14 @@ async def analyze_pull_request(
 ) -> MergeReadinessRun | JSONResponse:
     pass
 
-    run = await workflow.execute(request)
-    telemetry.correlate_current_span(run)
-    if run.status is RunStatus.FAILED:
+    completed_run = await workflow.execute(request)
+    telemetry.correlate_current_span(completed_run)
+    if completed_run.status is RunStatus.FAILED:
         return JSONResponse(
             status_code=500,
-            content=run.model_dump(mode="json"),
+            content=completed_run.model_dump(mode="json"),
         )
-    return run
+    return completed_run
 
 
 @router.get(
@@ -154,11 +156,11 @@ def get_runtime_run(
 ) -> MergeReadinessRun | JSONResponse:
     pass
 
-    run = run_repository.get(run_id)
-    if run is None:
+    stored_run = run_repository.get(run_id)
+    if stored_run is None:
         error = ApiError(
             code=ApiErrorCode.RUN_NOT_FOUND,
             message="No runtime run exists for this ID.",
         )
         return JSONResponse(status_code=404, content=error.model_dump(mode="json"))
-    return run
+    return stored_run

@@ -19,13 +19,13 @@ from app.config import (
     JiraConnectorMode,
     JiraSettings,
 )
+from app.connectors.errors import FixtureNotFoundError
 from app.connectors.factory import (
     create_github_connector,
     create_github_http_client,
     create_jira_connector,
     create_jira_http_client,
 )
-from app.connectors.errors import FixtureNotFoundError
 from app.connectors.github_http import HttpGitHubConnector
 from app.connectors.jira_http import HttpJiraConnector
 from app.database import (
@@ -108,24 +108,38 @@ def create_app(
 ) -> FastAPI:
     pass
 
-    app_observability = observability or create_observability()
-    resolved_github_settings = github_settings or GitHubSettings.from_environment()
-    resolved_jira_settings = jira_settings or JiraSettings.from_environment()
-    github_http_client = (
-        create_github_http_client(resolved_github_settings)
-        if resolved_github_settings.mode is GitHubConnectorMode.GITHUB
-        else None
-    )
+
+
+
+    if observability is not None:
+        app_observability = observability
+    else:
+        app_observability = create_observability()
+
+    if github_settings is not None:
+        resolved_github_settings = github_settings
+    else:
+        resolved_github_settings = GitHubSettings.from_environment()
+
+    if jira_settings is not None:
+        resolved_jira_settings = jira_settings
+    else:
+        resolved_jira_settings = JiraSettings.from_environment()
+
+    github_http_client = None
+    if resolved_github_settings.mode is GitHubConnectorMode.GITHUB:
+        github_http_client = create_github_http_client(resolved_github_settings)
+
     github_connector = create_github_connector(
         resolved_github_settings,
         app_observability.runtime_telemetry,
         github_http_client,
     )
-    jira_http_client = (
-        create_jira_http_client(resolved_jira_settings)
-        if resolved_jira_settings.mode is JiraConnectorMode.JIRA
-        else None
-    )
+
+    jira_http_client = None
+    if resolved_jira_settings.mode is JiraConnectorMode.JIRA:
+        jira_http_client = create_jira_http_client(resolved_jira_settings)
+
     jira_connector = create_jira_connector(
         resolved_jira_settings,
         app_observability.runtime_telemetry,
@@ -135,6 +149,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         pass
+
 
         engine = None
         try:
@@ -150,6 +165,9 @@ def create_app(
             application.state.run_session_factory = create_session_factory(engine)
             yield
         finally:
+
+
+
             application.state.run_session_factory = None
             if engine is not None:
                 engine.dispose()
