@@ -1,5 +1,3 @@
-pass
-
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -45,8 +43,6 @@ async def fixture_not_found_handler(
     _request: Request,
     _error: FixtureNotFoundError,
 ) -> JSONResponse:
-    pass
-
     error = ApiError(
         code=ApiErrorCode.FIXTURE_NOT_FOUND,
         message="No connector fixture exists for this pull request.",
@@ -58,8 +54,6 @@ async def run_persistence_error_handler(
     _request: Request,
     error: RunPersistenceError,
 ) -> JSONResponse:
-    pass
-
     response = RuntimePersistenceApiError(
         code=ApiErrorCode.RUNTIME_PERSISTENCE_UNAVAILABLE,
         message="Runtime persistence is unavailable.",
@@ -72,8 +66,6 @@ async def run_state_conflict_handler(
     _request: Request,
     error: RunStateConflictError,
 ) -> JSONResponse:
-    pass
-
     response = RuntimePersistenceApiError(
         code=ApiErrorCode.RUNTIME_STATE_CONFLICT,
         message="The stored runtime state changed and could not be updated.",
@@ -86,8 +78,6 @@ async def run_record_invalid_handler(
     _request: Request,
     _error: RunRecordInvalidError,
 ) -> JSONResponse:
-    pass
-
     response = ApiError(
         code=ApiErrorCode.RUNTIME_RECORD_INVALID,
         message="The stored runtime record could not be reconstructed.",
@@ -96,8 +86,6 @@ async def run_record_invalid_handler(
 
 
 async def health() -> dict[str, str]:
-    pass
-
     return {"status": "ok"}
 
 
@@ -106,11 +94,6 @@ def create_app(
     github_settings: GitHubSettings | None = None,
     jira_settings: JiraSettings | None = None,
 ) -> FastAPI:
-    pass
-
-
-
-
     if observability is not None:
         app_observability = observability
     else:
@@ -148,9 +131,6 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-        pass
-
-
         engine = None
         try:
             if app_observability.event_logger is not None:
@@ -165,9 +145,6 @@ def create_app(
             application.state.run_session_factory = create_session_factory(engine)
             yield
         finally:
-
-
-
             application.state.run_session_factory = None
             if engine is not None:
                 engine.dispose()
@@ -201,7 +178,6 @@ def create_app(
     application.add_api_route("/health", health, methods=["GET"])
     app_observability.instrument_app(application)
     return application
-
 
 
 app = create_app()

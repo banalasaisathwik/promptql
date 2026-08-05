@@ -1,5 +1,3 @@
-pass
-
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -45,16 +43,12 @@ ALLOWED_STEP_TRANSITIONS = {
 
 
 def _replace_run(run: MergeReadinessRun, **updates) -> MergeReadinessRun:
-    pass
-
     run_values = run.model_dump()
     run_values.update(updates)
     return MergeReadinessRun.model_validate(run_values)
 
 
 def _replace_step(step: RuntimeStep, **updates) -> RuntimeStep:
-    pass
-
     step_values = step.model_dump()
     step_values.update(updates)
     return RuntimeStep.model_validate(step_values)
@@ -64,8 +58,6 @@ def create_pending_run(
     request: ConnectorRequest,
     run_id: UUID | None = None,
 ) -> MergeReadinessRun:
-    pass
-
     return MergeReadinessRun(
         run_id=run_id or uuid4(),
         workflow_name="merge_readiness",
@@ -86,8 +78,6 @@ def create_pending_step(
     name: WorkflowStepName,
     step_id: UUID | None = None,
 ) -> RuntimeStep:
-    pass
-
     return RuntimeStep(
         step_id=step_id or uuid4(),
         name=name,
@@ -108,8 +98,6 @@ def transition_run(
     error: RuntimeErrorInfo | None = None,
     result: MergeReadinessResult | None = None,
 ) -> MergeReadinessRun:
-    pass
-
     if new_status not in ALLOWED_RUN_TRANSITIONS[run.status]:
         raise InvalidStateTransitionError(
             f"run cannot move from {run.status.value} to {new_status.value}"
@@ -136,8 +124,6 @@ def transition_step(
     duration_ms: int | None = None,
     error: RuntimeErrorInfo | None = None,
 ) -> RuntimeStep:
-    pass
-
     if new_status not in ALLOWED_STEP_TRANSITIONS[step.status]:
         raise InvalidStateTransitionError(
             f"step cannot move from {step.status.value} to {new_status.value}"

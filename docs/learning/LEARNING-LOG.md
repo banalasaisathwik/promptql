@@ -685,3 +685,27 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** If a fourth workflow step is added, does the explicit
   step-method pattern remain clearer, or has enough real duplication appeared
   to justify a small typed step result?
+
+### 2026-08-05 — Generated Git source should not add empty statements
+
+- **Concept:** A Git clean filter is a source transformation boundary. Its
+  generated representation must stay valid and readable without changing the
+  commented working-tree source used for learning.
+- **Important syntax:** Python needs `pass` only when a suite would otherwise be
+  empty. Removing a docstring from a function that still has executable
+  statements does not require a replacement statement.
+- **Implementation location:** The local `comment-strip` filter now preserves
+  `pass` only for genuinely empty suites. The committed cleanup touches the
+  previously refactored API workflow files and is validated through full
+  backend discovery, `compileall`, and `git diff --check`.
+- **Design decision:** Correct the local Git transformation instead of deleting
+  useful workspace docstrings. Also use `terminal_run` at the route boundary
+  because both completed and failed runs are terminal responses.
+- **Invariant or failure behavior:** Workspace comments remain available;
+  committed Python compiles; public API, state, persistence, policy, connector,
+  and telemetry behavior remains unchanged.
+- **Trade-off learned:** The index representation no longer preserves exact
+  blank-line positions for removed teaching text, but reviewers receive cleaner
+  source without meaningless statements or excessive gaps.
+- **Validation evidence:** Recorded in the cleanup commit and task response.
+- **Unresolved question:** None for this mechanical cleanup.

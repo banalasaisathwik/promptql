@@ -1,5 +1,3 @@
-pass
-
 from typing import Any
 from uuid import UUID
 
@@ -27,8 +25,6 @@ from app.runtime.state import ALLOWED_RUN_TRANSITIONS, ALLOWED_STEP_TRANSITIONS
 
 
 def _json_value(model) -> dict[str, Any] | None:
-    pass
-
     if model is None:
         return None
     return model.model_dump(mode="json")
@@ -84,8 +80,6 @@ def _step_row_values(step: WorkflowStepRow) -> dict[str, Any]:
 
 
 class PostgresRunRepository:
-    pass
-
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
@@ -93,8 +87,6 @@ class PostgresRunRepository:
         self._confirmed_run_ids: set[UUID] = set()
 
     def save(self, run: MergeReadinessRun) -> None:
-        pass
-
         try:
             with self._session_factory.begin() as session:
                 stored_run = session.get(WorkflowRunRow, run.run_id)
@@ -118,8 +110,6 @@ class PostgresRunRepository:
             ) from None
 
     def get(self, run_id: UUID) -> MergeReadinessRun | None:
-        pass
-
         try:
             with self._session_factory() as session:
                 stored_run = session.get(WorkflowRunRow, run_id)
@@ -151,15 +141,13 @@ class PostgresRunRepository:
         stored_run: WorkflowRunRow,
         stored_steps: tuple[WorkflowStepRow, ...],
     ) -> MergeReadinessRun:
-        pass
-
         runtime_error = None
         if stored_run.runtime_error is not None:
             runtime_error = RuntimeErrorInfo.model_validate(stored_run.runtime_error)
 
-        merge_readiness_result = None
+        policy_result = None
         if stored_run.result is not None:
-            merge_readiness_result = MergeReadinessResult.model_validate(
+            policy_result = MergeReadinessResult.model_validate(
                 stored_run.result
             )
 
@@ -187,7 +175,7 @@ class PostgresRunRepository:
             completed_at=stored_run.completed_at,
             steps=runtime_steps,
             error=runtime_error,
-            result=merge_readiness_result,
+            result=policy_result,
             request=connector_request,
             github=github_facts,
             jira=jira_facts,
@@ -243,8 +231,8 @@ class PostgresRunRepository:
             )
             .values(**_run_values(run))
         )
-        result = session.execute(statement)
-        if result.rowcount != 1:
+        update_result = session.execute(statement)
+        if update_result.rowcount != 1:
             raise RunStateConflictError(
                 "The stored runtime state changed concurrently.",
                 run.run_id,
@@ -303,8 +291,8 @@ class PostgresRunRepository:
                 )
                 .values(**update_values)
             )
-            result = session.execute(statement)
-            if result.rowcount != 1:
+            update_result = session.execute(statement)
+            if update_result.rowcount != 1:
                 raise RunStateConflictError(
                     "The stored runtime step changed concurrently.",
                     run.run_id,

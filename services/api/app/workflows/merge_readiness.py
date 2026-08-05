@@ -1,5 +1,3 @@
-pass
-
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -57,16 +55,12 @@ def _utc_now() -> datetime:
 
 
 def _replace_run(run: MergeReadinessRun, **updates) -> MergeReadinessRun:
-    pass
-
     values = run.model_dump()
     values.update(updates)
     return MergeReadinessRun.model_validate(values)
 
 
 class MergeReadinessWorkflowService:
-    pass
-
     def __init__(
         self,
         github_connector: GitHubConnector,
@@ -98,10 +92,6 @@ class MergeReadinessWorkflowService:
         run: MergeReadinessRun,
         checkpoint: PersistenceCheckpoint,
     ) -> MergeReadinessRun:
-
-
-
-
         await asyncio.to_thread(self._save_synchronously, run, checkpoint)
         return run
 
@@ -110,8 +100,6 @@ class MergeReadinessWorkflowService:
         run: MergeReadinessRun,
         name: WorkflowStepName,
     ) -> tuple[MergeReadinessRun, RuntimeStep, int]:
-        pass
-
         pending_step = create_pending_step(name)
         run = await self._save(
             _replace_run(run, steps=(*run.steps, pending_step)),
@@ -155,8 +143,6 @@ class MergeReadinessWorkflowService:
         step: RuntimeStep,
         started_at_ns: int,
     ) -> RuntimeStep:
-        pass
-
         return transition_step(
             step,
             StepStatus.COMPLETED,
@@ -190,7 +176,6 @@ class MergeReadinessWorkflowService:
         )
 
 
-
         return await self._save(failed_run, PersistenceCheckpoint.RUN_FAILED)
 
     async def _persist_failed_step_and_run(
@@ -202,8 +187,6 @@ class MergeReadinessWorkflowService:
         failure_category: FailureCategory,
         step_observation: SpanObservation,
     ) -> MergeReadinessRun:
-        pass
-
         step_observation.set_attributes(
             **{"promptql.step.outcome": StepOutcome.FAILED.value}
         )
@@ -264,8 +247,6 @@ class MergeReadinessWorkflowService:
         return FailureCategory.PERSISTENCE_UNAVAILABLE
 
     async def execute(self, request: ConnectorRequest) -> MergeReadinessRun:
-        pass
-
         run = create_pending_run(request)
         with self._telemetry.observe_workflow(run) as workflow_observation:
             try:
@@ -298,8 +279,6 @@ class MergeReadinessWorkflowService:
         run: MergeReadinessRun,
         workflow_observation: SpanObservation,
     ) -> MergeReadinessRun:
-        pass
-
         run = await self._save(run, PersistenceCheckpoint.RUN_CREATED)
         run = await self._save(
             transition_run(
@@ -339,8 +318,6 @@ class MergeReadinessWorkflowService:
         request: ConnectorRequest,
         workflow_observation: SpanObservation,
     ) -> tuple[MergeReadinessRun, GitHubPullRequest | None, bool]:
-        pass
-
         run, github_step, github_started_ns = await self._start_step(
             run,
             WorkflowStepName.FETCH_GITHUB_FACTS,
@@ -423,8 +400,6 @@ class MergeReadinessWorkflowService:
         github_facts: GitHubPullRequest | None,
         workflow_observation: SpanObservation,
     ) -> tuple[MergeReadinessRun, JiraIssue | None, bool]:
-        pass
-
         run, jira_step, jira_started_ns = await self._start_step(
             run,
             WorkflowStepName.FETCH_JIRA_FACTS,
@@ -451,9 +426,6 @@ class MergeReadinessWorkflowService:
                     jira_key = github_facts.linked_jira_key
 
                 if jira_key is None:
-
-
-
                     jira_facts = None
                     jira_outcome = StepOutcome.UNAVAILABLE
                 else:
@@ -519,8 +491,6 @@ class MergeReadinessWorkflowService:
         jira_facts: JiraIssue | None,
         workflow_observation: SpanObservation,
     ) -> MergeReadinessRun:
-        pass
-
         run, policy_step, policy_started_ns = await self._start_step(
             run,
             WorkflowStepName.EVALUATE_MERGE_READINESS,
@@ -530,7 +500,7 @@ class MergeReadinessWorkflowService:
             policy_step.name,
         ) as policy_observation:
             try:
-                merge_readiness_result = self._policy_evaluator(
+                policy_result = self._policy_evaluator(
                     github_facts,
                     jira_facts,
                 )
@@ -569,7 +539,7 @@ class MergeReadinessWorkflowService:
             run_with_completed_policy,
             RunStatus.COMPLETED,
             self._timestamp_clock(),
-            result=merge_readiness_result,
+            result=policy_result,
         )
 
 

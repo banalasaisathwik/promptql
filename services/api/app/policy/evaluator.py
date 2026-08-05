@@ -1,5 +1,3 @@
-pass
-
 from app.connectors.models import (
     BlockerState,
     CheckStatus,
@@ -27,8 +25,6 @@ def _record_evidence(
     field: str,
     value: str | bool | int | None,
 ) -> str:
-    pass
-
     reference_id = f"{source.value}.{field}"
     evidence_references.append(
         EvidenceReference(
@@ -50,8 +46,6 @@ def _add_blocker(
     action_code: PendingActionCode,
     action_message: str,
 ) -> None:
-    pass
-
     blockers.append(
         PolicyFinding(
             reason_code=reason_code,
@@ -74,8 +68,6 @@ def _add_missing_information(
     message: str,
     evidence_reference_ids: tuple[str, ...] = (),
 ) -> None:
-    pass
-
     missing_information.append(
         PolicyFinding(
             reason_code=PolicyReasonCode.EVIDENCE_UNAVAILABLE,
@@ -96,8 +88,6 @@ def evaluate_merge_readiness(
     github: GitHubPullRequest | None,
     jira: JiraIssue | None,
 ) -> MergeReadinessResult:
-    pass
-
     blockers: list[PolicyFinding] = []
     pending_actions: list[PendingAction] = []
     missing_information: list[PolicyFinding] = []
@@ -188,7 +178,6 @@ def evaluate_merge_readiness(
             check_references.append((check_name_reference, check_status_reference))
 
 
-
         if github.is_draft:
             _add_blocker(
                 blockers,
@@ -237,9 +226,6 @@ def evaluate_merge_readiness(
                 (checks_known_reference,),
             )
         else:
-
-
-
             for expected_status, reason_code, action_code in (
                 (
                     CheckStatus.FAILED,
@@ -333,8 +319,6 @@ def evaluate_merge_readiness(
                 "issue_key",
                 jira.issue_key,
             )
-
-
 
 
             if jira.issue_key != github.linked_jira_key:

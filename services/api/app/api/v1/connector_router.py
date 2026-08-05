@@ -1,5 +1,3 @@
-pass
-
 from typing import Annotated
 
 from uuid import UUID
@@ -38,20 +36,14 @@ router = APIRouter(prefix="/v1", tags=["pull-request-inspections"])
 
 
 def get_github_connector(request: Request) -> GitHubConnector:
-    pass
-
     return request.app.state.github_connector
 
 
 def get_jira_connector(request: Request) -> JiraConnector:
-    pass
-
     return request.app.state.jira_connector
 
 
 def get_runtime_telemetry(request: Request) -> RuntimeTelemetry:
-    pass
-
     telemetry = getattr(request.app.state, "runtime_telemetry", None)
     if telemetry is not None:
         return telemetry
@@ -62,12 +54,8 @@ def get_run_repository(
     request: Request,
     telemetry: Annotated[RuntimeTelemetry, Depends(get_runtime_telemetry)],
 ) -> RunRepository:
-    pass
-
     session_factory = getattr(request.app.state, "run_session_factory", None)
     if session_factory is None:
-
-
         raise RunPersistenceError("Runtime persistence is unavailable.")
     return ObservedRunRepository(
         inner=PostgresRunRepository(session_factory),
@@ -81,8 +69,6 @@ def get_merge_readiness_workflow(
     run_repository: Annotated[RunRepository, Depends(get_run_repository)],
     telemetry: Annotated[RuntimeTelemetry, Depends(get_runtime_telemetry)],
 ) -> MergeReadinessWorkflowService:
-    pass
-
     return MergeReadinessWorkflowService(
         github_connector,
         jira_connector,
@@ -96,8 +82,6 @@ def get_merge_readiness_workflow(
     response_model=FixtureScenarioCatalog,
 )
 async def list_pull_request_scenarios() -> FixtureScenarioCatalog:
-    pass
-
     return list_fixture_scenarios()
 
 
@@ -107,8 +91,6 @@ async def list_pull_request_scenarios() -> FixtureScenarioCatalog:
     responses={404: {"model": ApiError}},
 )
 async def inspect_pull_request(request: ConnectorRequest) -> PullRequestInspection:
-    pass
-
     return await run_pull_request_inspection(request)
 
 
@@ -129,16 +111,14 @@ async def analyze_pull_request(
     ],
     telemetry: Annotated[RuntimeTelemetry, Depends(get_runtime_telemetry)],
 ) -> MergeReadinessRun | JSONResponse:
-    pass
-
-    completed_run = await workflow.execute(request)
-    telemetry.correlate_current_span(completed_run)
-    if completed_run.status is RunStatus.FAILED:
+    terminal_run = await workflow.execute(request)
+    telemetry.correlate_current_span(terminal_run)
+    if terminal_run.status is RunStatus.FAILED:
         return JSONResponse(
             status_code=500,
-            content=completed_run.model_dump(mode="json"),
+            content=terminal_run.model_dump(mode="json"),
         )
-    return completed_run
+    return terminal_run
 
 
 @router.get(
@@ -154,8 +134,6 @@ def get_runtime_run(
     run_id: UUID,
     run_repository: Annotated[RunRepository, Depends(get_run_repository)],
 ) -> MergeReadinessRun | JSONResponse:
-    pass
-
     stored_run = run_repository.get(run_id)
     if stored_run is None:
         error = ApiError(
