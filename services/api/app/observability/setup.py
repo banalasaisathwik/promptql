@@ -353,8 +353,6 @@ def create_observability(
             event_logger=event_logger,
         )
     except Exception:
-
-
         event_logger.emit(
             "runtime.telemetry.export_failed",
             logging.WARNING,
