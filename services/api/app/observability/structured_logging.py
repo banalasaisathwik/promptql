@@ -89,8 +89,6 @@ class StructuredEventLogger:
                 json.dumps(record, separators=(",", ":"), sort_keys=True),
             )
         except Exception:
-
-
             return
 
 
