@@ -31,6 +31,11 @@ from app.database import (
     create_session_factory,
     verify_database_ready,
 )
+from app.explanations import (
+    FakeLLMClient,
+    LLMClient,
+    MergeReadinessExplanationService,
+)
 from app.observability import Observability, create_observability
 from app.runtime import (
     RunPersistenceError,
@@ -93,6 +98,7 @@ def create_app(
     observability: Observability | None = None,
     github_settings: GitHubSettings | None = None,
     jira_settings: JiraSettings | None = None,
+    llm_client: LLMClient | None = None,
 ) -> FastAPI:
     if observability is not None:
         app_observability = observability
@@ -129,6 +135,15 @@ def create_app(
         jira_http_client,
     )
 
+    if llm_client is not None:
+        selected_llm_client = llm_client
+    else:
+        selected_llm_client = FakeLLMClient()
+    explanation_service = MergeReadinessExplanationService(
+        selected_llm_client,
+        telemetry=app_observability.runtime_telemetry,
+    )
+
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         engine = None
@@ -158,6 +173,7 @@ def create_app(
     application.state.runtime_telemetry = app_observability.runtime_telemetry
     application.state.github_connector = github_connector
     application.state.jira_connector = jira_connector
+    application.state.merge_readiness_explanation_service = explanation_service
     application.include_router(connector_router)
     application.add_exception_handler(
         FixtureNotFoundError,

@@ -530,6 +530,14 @@
   font-size: 13px;
 }
 
+.explanation-card {
+  border-left: 4px solid var(--accent);
+}
+
+.explanation-card h4 {
+  margin: 1rem 0 0.5rem;
+}
+
 .result-list {
   display: grid;
   gap: 9px;

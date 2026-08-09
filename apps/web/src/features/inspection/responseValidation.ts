@@ -10,11 +10,13 @@ import { ConnectorApiError } from './apiError'
 import type {
   ConnectorRequest,
   EvidenceReference,
+  ExplanationApiError,
   FixtureScenario,
   GitHubPullRequest,
   GitHubUser,
   JiraIssue,
   MergeReadinessResult,
+  MergeReadinessExplanation,
   PendingAction,
   PolicyFinding,
   PullRequestMergeReadiness,
@@ -71,6 +73,12 @@ const WORKFLOW_STEP_NAMES = [
   'fetch_github_facts',
   'fetch_jira_facts',
   'evaluate_merge_readiness',
+] as const
+
+const EXPLANATION_ERROR_CODES = [
+  'provider_failure',
+  'invalid_output',
+  'validation_failed',
 ] as const
 
 
@@ -255,6 +263,30 @@ function isMergeReadinessResult(value: unknown): value is MergeReadinessResult {
 }
 
 
+function isMergeReadinessExplanation(
+  value: unknown,
+): value is MergeReadinessExplanation {
+  return (
+    isRecord(value) &&
+    isOneOf(value.decision, ['ready', 'blocked', 'unknown']) &&
+    isNonEmptyString(value.summary) &&
+    Array.isArray(value.reasons) &&
+    value.reasons.every(isNonEmptyString) &&
+    Array.isArray(value.recommended_actions) &&
+    value.recommended_actions.every(isNonEmptyString)
+  )
+}
+
+
+function isExplanationApiError(value: unknown): value is ExplanationApiError {
+  return (
+    isRecord(value) &&
+    isOneOf(value.code, EXPLANATION_ERROR_CODES) &&
+    isNonEmptyString(value.message)
+  )
+}
+
+
 function isTimestamp(value: unknown): value is string {
   return typeof value === 'string' && !Number.isNaN(Date.parse(value))
 }
@@ -290,6 +322,19 @@ function isRuntimeStep(value: unknown): value is RuntimeStep {
 export function parseMergeReadiness(
   value: unknown,
 ): PullRequestMergeReadiness {
+  const explanationIsValid =
+    isRecord(value) &&
+    (value.explanation === null ||
+      isMergeReadinessExplanation(value.explanation))
+  const explanationErrorIsValid =
+    isRecord(value) &&
+    (value.explanation_error === null ||
+      isExplanationApiError(value.explanation_error))
+  const hasExactlyOneExplanationOutcome =
+    isRecord(value) &&
+    ((value.explanation !== null && value.explanation_error === null) ||
+      (value.explanation === null && value.explanation_error !== null))
+
   if (
     !isRecord(value) ||
     !isNonEmptyString(value.run_id) ||
@@ -304,7 +349,12 @@ export function parseMergeReadiness(
     !isMergeReadinessResult(value.result) ||
     !isConnectorRequest(value.request) ||
     !(value.github === null || isGitHubPullRequest(value.github)) ||
-    !(value.jira === null || isJiraIssue(value.jira))
+    !(value.jira === null || isJiraIssue(value.jira)) ||
+    !explanationIsValid ||
+    !explanationErrorIsValid ||
+    !hasExactlyOneExplanationOutcome ||
+    (isMergeReadinessExplanation(value.explanation) &&
+      value.explanation.decision !== value.result.decision)
   ) {
     throw new ConnectorApiError('The merge-readiness response is malformed.')
   }
@@ -325,5 +375,11 @@ export function parseMergeReadiness(
     request: value.request,
     github: value.github,
     jira: value.jira,
+    explanation: isMergeReadinessExplanation(value.explanation)
+      ? value.explanation
+      : null,
+    explanation_error: isExplanationApiError(value.explanation_error)
+      ? value.explanation_error
+      : null,
   }
 }

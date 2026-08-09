@@ -1,0 +1,163 @@
+from collections.abc import Callable
+from time import perf_counter_ns
+
+from pydantic import ValidationError
+
+from app.explanations.errors import (
+    ExplanationErrorCode,
+    MergeReadinessExplanationError,
+)
+from app.explanations.models import (
+    LLMStructuredResponse,
+    LLMTokenUsage,
+    MergeReadinessExplanation,
+    MergeReadinessExplanationInput,
+)
+from app.explanations.protocols import LLMClient
+from app.explanations.validator import (
+    StrictExplanationValidationError,
+    StrictMergeReadinessExplanationValidator,
+)
+from app.observability import (
+    FailureCategory,
+    LLMCallResult,
+    NoOpRuntimeTelemetry,
+    RuntimeTelemetry,
+)
+from app.policy import MergeReadinessResult
+
+
+DurationClock = Callable[[], int]
+
+
+def build_explanation_input(
+    policy_result: MergeReadinessResult,
+) -> MergeReadinessExplanationInput:
+    return MergeReadinessExplanationInput(
+        decision=policy_result.decision,
+        primary_reason_code=policy_result.reason_code,
+        blocker_reason_codes=tuple(
+            blocker.reason_code for blocker in policy_result.blockers
+        ),
+        missing_information_reason_codes=tuple(
+            finding.reason_code
+            for finding in policy_result.missing_information
+        ),
+        pending_action_codes=tuple(
+            action.action_code for action in policy_result.pending_actions
+        ),
+    )
+
+
+class MergeReadinessExplanationService:
+    def __init__(
+        self,
+        client: LLMClient,
+        telemetry: RuntimeTelemetry | None = None,
+        duration_clock: DurationClock = perf_counter_ns,
+        validator: StrictMergeReadinessExplanationValidator | None = None,
+    ) -> None:
+        self._client = client
+        self._telemetry = telemetry or NoOpRuntimeTelemetry()
+        self._duration_clock = duration_clock
+        self._validator = validator or StrictMergeReadinessExplanationValidator()
+
+    def _duration_ms(self, started_at_ns: int) -> int:
+        elapsed_ns = max(0, self._duration_clock() - started_at_ns)
+        return elapsed_ns // 1_000_000
+
+    def _record_call(
+        self,
+        started_at_ns: int,
+        result: LLMCallResult,
+        token_usage: LLMTokenUsage | None,
+    ) -> None:
+        self._telemetry.record_llm_explanation(
+            duration_ms=self._duration_ms(started_at_ns),
+            result=result,
+            input_tokens=(
+                token_usage.input_tokens if token_usage is not None else None
+            ),
+            output_tokens=(
+                token_usage.output_tokens if token_usage is not None else None
+            ),
+        )
+
+    async def explain(
+        self,
+        policy_result: MergeReadinessResult,
+    ) -> MergeReadinessExplanation:
+        explanation_input = build_explanation_input(policy_result)
+        started_at_ns = self._duration_clock()
+
+        with self._telemetry.observe_llm_explanation() as observation:
+            try:
+                generated_response = await self._client.generate_structured(
+                    explanation_input
+                )
+            except Exception:
+                result = LLMCallResult.PROVIDER_FAILURE
+                observation.set_attributes(
+                    **{"promptql.llm.result": result.value}
+                )
+                observation.mark_error(FailureCategory.LLM_PROVIDER_FAILURE)
+                self._record_call(started_at_ns, result, None)
+                raise MergeReadinessExplanationError(
+                    ExplanationErrorCode.PROVIDER_FAILURE,
+                    "The explanation provider failed.",
+                ) from None
+
+            try:
+                generated = LLMStructuredResponse.model_validate(
+                    generated_response
+                )
+                explanation = MergeReadinessExplanation.model_validate(
+                    generated.output
+                )
+            except (TypeError, ValidationError):
+                result = LLMCallResult.INVALID_OUTPUT
+                observation.set_attributes(
+                    **{"promptql.llm.result": result.value}
+                )
+                observation.mark_error(FailureCategory.LLM_INVALID_OUTPUT)
+                self._record_call(started_at_ns, result, generated.token_usage)
+                raise MergeReadinessExplanationError(
+                    ExplanationErrorCode.INVALID_OUTPUT,
+                    "The explanation provider returned invalid structured output.",
+                ) from None
+
+            try:
+                validated_explanation = self._validator.validate(
+                    explanation_input,
+                    explanation,
+                )
+            except StrictExplanationValidationError:
+                result = LLMCallResult.VALIDATION_FAILURE
+                observation.set_attributes(
+                    **{"promptql.llm.result": result.value}
+                )
+                observation.mark_error(FailureCategory.LLM_VALIDATION_FAILURE)
+                self._record_call(started_at_ns, result, generated.token_usage)
+                raise MergeReadinessExplanationError(
+                    ExplanationErrorCode.VALIDATION_FAILED,
+                    "The generated explanation did not pass validation.",
+                ) from None
+
+            result = LLMCallResult.SUCCESS
+            safe_attributes: dict[str, str | int] = {
+                "promptql.llm.result": result.value,
+            }
+            if generated.token_usage is not None:
+                safe_attributes.update(
+                    {
+                        "promptql.llm.input_tokens": (
+                            generated.token_usage.input_tokens
+                        ),
+                        "promptql.llm.output_tokens": (
+                            generated.token_usage.output_tokens
+                        ),
+                    }
+                )
+            observation.set_attributes(**safe_attributes)
+            self._record_call(started_at_ns, result, generated.token_usage)
+            return validated_explanation

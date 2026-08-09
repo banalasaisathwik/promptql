@@ -1,5 +1,3 @@
-pass
-
 import logging
 from contextlib import contextmanager
 from typing import Iterator
@@ -11,12 +9,16 @@ from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
 from app.observability.contracts import (
     METRIC_LABEL_ALLOWLISTS,
+    LLM_EXPLANATION_DURATION_METRIC,
+    LLM_TOKEN_USAGE_METRIC,
     PERSISTENCE_FAILURES_METRIC,
     WORKFLOW_RUN_DURATION_METRIC,
     WORKFLOW_RUNS_METRIC,
     WORKFLOW_STEP_DURATION_METRIC,
     WORKFLOW_STEP_FAILURES_METRIC,
     FailureCategory,
+    LLMCallResult,
+    LLMTokenType,
     PersistenceCheckpoint,
     PersistenceOperation,
     PersistenceOutcome,
@@ -49,6 +51,10 @@ SPAN_ATTRIBUTE_ALLOWLIST = frozenset(
         "promptql.connector.result",
         "promptql.http.status_class",
         "promptql.pagination.page_count",
+        "promptql.llm.operation",
+        "promptql.llm.result",
+        "promptql.llm.input_tokens",
+        "promptql.llm.output_tokens",
         "error.type",
     }
 )
@@ -56,8 +62,6 @@ SUPPORTED_WORKFLOWS = frozenset({("merge_readiness", "1")})
 
 
 class SpanObservation:
-    pass
-
     def __init__(self, span: Span) -> None:
         self._span = span
 
@@ -79,8 +83,6 @@ class SpanObservation:
 
 
 class RuntimeTelemetry:
-    pass
-
     def __init__(
         self,
         tracer: Tracer,
@@ -113,6 +115,16 @@ class RuntimeTelemetry:
             PERSISTENCE_FAILURES_METRIC,
             unit="1",
             description="Failed runtime repository operations.",
+        )
+        self._llm_explanation_duration = meter.create_histogram(
+            LLM_EXPLANATION_DURATION_METRIC,
+            unit="s",
+            description="Duration of internal merge-readiness explanations.",
+        )
+        self._llm_token_usage = meter.create_counter(
+            LLM_TOKEN_USAGE_METRIC,
+            unit="1",
+            description="Provider-reported tokens for internal explanations.",
         )
 
     @staticmethod
@@ -203,8 +215,6 @@ class RuntimeTelemetry:
         connector_source: str,
         operation: str,
     ) -> Iterator[SpanObservation]:
-        pass
-
         allowed_identities = {
             ("github", "fake", "get_pull_request"),
             ("github", "live", "get_pull_request"),
@@ -223,12 +233,53 @@ class RuntimeTelemetry:
             },
         )
 
+    def observe_llm_explanation(self) -> Iterator[SpanObservation]:
+        return self._observe_span(
+            "merge_readiness.explanation.generate",
+            {"promptql.llm.operation": "merge_readiness_explanation"},
+        )
+
+    def record_llm_explanation(
+        self,
+        duration_ms: int,
+        result: LLMCallResult,
+        input_tokens: int | None,
+        output_tokens: int | None,
+    ) -> None:
+        try:
+            duration_labels = {
+                "llm.operation": "merge_readiness_explanation",
+                "llm.result": result.value,
+            }
+            validate_metric_labels(
+                LLM_EXPLANATION_DURATION_METRIC,
+                duration_labels,
+            )
+            self._llm_explanation_duration.record(
+                max(0, duration_ms) / 1_000,
+                duration_labels,
+            )
+
+            token_counts = (
+                (LLMTokenType.INPUT, input_tokens),
+                (LLMTokenType.OUTPUT, output_tokens),
+            )
+            for token_type, token_count in token_counts:
+                if token_count is None:
+                    continue
+                token_labels = {
+                    "llm.operation": "merge_readiness_explanation",
+                    "llm.token.type": token_type.value,
+                }
+                validate_metric_labels(LLM_TOKEN_USAGE_METRIC, token_labels)
+                self._llm_token_usage.add(max(0, token_count), token_labels)
+        except Exception:
+            self._warn_telemetry_failure("metrics")
+
     def checkpoint(self, checkpoint: PersistenceCheckpoint) -> Iterator[None]:
         return use_persistence_checkpoint(checkpoint)
 
     def correlate_current_span(self, run: MergeReadinessRun) -> None:
-        pass
-
         try:
             span = trace.get_current_span()
             span.set_attribute("promptql.run.id", str(run.run_id))
@@ -237,8 +288,6 @@ class RuntimeTelemetry:
             self._warn_telemetry_failure("traces")
 
     def record_terminal_workflow(self, run: MergeReadinessRun) -> None:
-        pass
-
         try:
             if run.status not in {RunStatus.COMPLETED, RunStatus.FAILED}:
                 raise ValueError("workflow is not terminal")
@@ -350,8 +399,6 @@ class RuntimeTelemetry:
 
 
 class NoOpRuntimeTelemetry(RuntimeTelemetry):
-    pass
-
     def __init__(self) -> None:
         tracer = trace.NoOpTracerProvider().get_tracer("promptql.runtime")
         meter = metrics.NoOpMeterProvider().get_meter("promptql.runtime")

@@ -35,6 +35,13 @@ function analysisWithDecision(
       missing_information: [],
       evidence_references: [],
     },
+    explanation: {
+      decision,
+      summary: `Validated explanation for ${decision}.`,
+      reasons: [`Explanation reason for ${decision}.`],
+      recommended_actions: [],
+    },
+    explanation_error: null,
   }
 }
 
@@ -51,6 +58,48 @@ describe('MergeReadinessPanel', () => {
     expect(markup).toContain('decision-card--ready')
     expect(markup).toContain('id="decision-heading">ready</h3>')
     expect(markup).toContain('Backend returned ready.')
+    expect(markup).toContain('Validated fake LLM explanation')
+    expect(markup).toContain('Validated explanation for ready.')
+  })
+
+  test('renders every validated explanation reason and action', () => {
+    const analysis = analysisWithDecision('blocked')
+    analysis.explanation = {
+      decision: 'blocked',
+      summary: 'The deterministic policy found verified merge blockers.',
+      reasons: ['A required CI check failed.', 'A required approval is missing.'],
+      recommended_actions: [
+        'Fix the failed required CI check.',
+        'Obtain the missing required approval.',
+      ],
+    }
+
+    const markup = renderToStaticMarkup(
+      <MergeReadinessPanel analysis={analysis} loading={false} />,
+    )
+
+    expect(markup).toContain('A required CI check failed.')
+    expect(markup).toContain('A required approval is missing.')
+    expect(markup).toContain('Fix the failed required CI check.')
+    expect(markup).toContain('Obtain the missing required approval.')
+  })
+
+  test('shows explanation failure without changing the policy decision', () => {
+    const analysis = analysisWithDecision('ready')
+    analysis.explanation = null
+    analysis.explanation_error = {
+      code: 'validation_failed',
+      message: 'The generated explanation did not pass validation.',
+    }
+
+    const markup = renderToStaticMarkup(
+      <MergeReadinessPanel analysis={analysis} loading={false} />,
+    )
+
+    expect(markup).toContain('decision-card--ready')
+    expect(markup).toContain('id="decision-heading">ready</h3>')
+    expect(markup).toContain('Explanation unavailable')
+    expect(markup).toContain('validation_failed')
   })
 
   test('renders every blocker and every pending action', () => {

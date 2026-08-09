@@ -1,7 +1,6 @@
-pass
-
 from app.observability.contracts import (
     FailureCategory,
+    LLMCallResult,
     PersistenceCheckpoint,
     PersistenceOperation,
     StepOutcome,
@@ -15,6 +14,7 @@ from app.observability.setup import Observability, create_observability
 
 __all__ = [
     "FailureCategory",
+    "LLMCallResult",
     "NoOpRuntimeTelemetry",
     "Observability",
     "ObservedRunRepository",

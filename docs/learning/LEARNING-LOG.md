@@ -743,3 +743,84 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** If tenant-specific blocker mappings are introduced,
   how will their configuration be validated, versioned, authorized, and
   audited before they can strengthen the normalized blocker fact?
+
+### 2026-08-09 — Put probabilistic explanation behind a deterministic boundary
+
+- **Concept:** An LLM harness owns minimized input, provider substitution,
+  structured-output validation, sanitized failures, and safe telemetry. It does
+  not own the deterministic business decision it explains.
+- **Important syntax:** A Python `Protocol` defines the async
+  `generate_structured(...)` operation without requiring inheritance.
+  `Annotated[str, StringConstraints(...)]` bounds explanation text, while
+  frozen Pydantic models reject extra fields. Application injection uses an
+  optional protocol argument and stores the assembled service in FastAPI state.
+- **Implementation locations:** `app/explanations` contains the models, client
+  contract, fake, error, and service boundaries. `app/main.py` selects the fake
+  or injected client. `observability/contracts.py` and
+  `runtime_telemetry.py` add allowlisted model-call spans and metrics.
+  `test_merge_readiness_explanations.py` proves the security and failure rules.
+- **Decision:** Keep explanation generation internal and independent of
+  `MergeReadinessWorkflowService` until a deterministic semantic validator
+  exists.
+- **Reason:** Pydantic proves output shape and the service proves decision
+  equality, but neither proves that arbitrary explanation sentences are
+  supported by policy evidence.
+- **Alternative considered:** Add the model call as a runtime step now or choose
+  a real provider SDK first.
+- **Tradeoff:** The trust boundary and telemetry are testable without network,
+  credentials, cost, or vendor coupling, but no user can receive an LLM
+  explanation yet.
+- **Invariant or failure behavior:** Only decision and stable reason/action
+  codes reach the client. A provider exception, malformed shape, or changed
+  decision becomes a typed sanitized error and cannot modify the immutable
+  policy result or persisted run. Prompts, outputs, evidence values, identities,
+  credentials, and raw errors never enter logs, spans, or metric labels.
+- **Validation evidence:** Eight focused explanation tests and thirteen focused
+  observability regressions passed. Complete backend discovery ran 122 tests
+  successfully, with four PostgreSQL tests skipped because `TEST_DATABASE_URL`
+  was absent. `python -m compileall -q app tests` and `git diff --check` passed.
+  No backend formatter, linter, or static type checker is configured, and no
+  automated test contacted an external model service.
+- **Unresolved question:** What deterministic rules should the next validator
+  use to prove each reason and recommended action is supported by the supplied
+  policy codes before API exposure?
+
+### 2026-08-09 — Validate generated wording before crossing the API boundary
+
+- **Concept:** Structured-output validation has two layers. Pydantic proves the
+  JSON shape, while a deterministic semantic validator proves that every word,
+  reason, action, and ordering matches backend-owned policy templates.
+- **Important syntax:** Python dictionary lookups keyed by `StrEnum` values turn
+  stable reason/action codes into exact text. Pydantic model equality compares
+  the complete immutable explanation. In TypeScript, runtime type guards narrow
+  network `unknown`, and the parser additionally checks
+  `explanation.decision === result.decision` before returning a typed value.
+- **Implementation locations:** `app/explanations/templates.py` owns the closed
+  wording maps; `validator.py` rejects any complete-object mismatch; `service.py`
+  converts rejection into a sanitized typed failure. `app/api/v1/models.py` and
+  `connector_router.py` add read-time response enrichment. The frontend types,
+  `responseValidation.ts`, and `MergeReadinessPanel.tsx` validate and render the
+  accepted explanation separately from the policy result. ADR-010 records the
+  cross-layer decision.
+- **Design decision:** Enrich both POST and GET responses after the durable run
+  boundary, without adding explanation fields to the runtime repository.
+  Deterministic fake generation preserves POST/GET equality and avoids a schema
+  migration for non-authoritative wording.
+- **Invariant or failure behavior:** The persisted policy result remains the
+  only merge-readiness authority. A completed response contains either an exact
+  validated explanation or a sanitized `explanation_error`; runtime failure
+  contains neither. Rejected output cannot reach the browser, telemetry, or
+  storage and never changes HTTP 200, runtime status, or policy decision.
+- **Trade-off:** Exact templates are easy to prove and safe to expose but allow
+  no free-form variation. Read-time regeneration is appropriate for the fake
+  only; a future real, paid, or probabilistic provider requires a new decision
+  about generation timing and persistence.
+- **Validation evidence:** Eleven focused explanation tests and fourteen focused
+  API integration tests passed. Complete backend discovery ran 127 tests with
+  four PostgreSQL tests skipped because `TEST_DATABASE_URL` was absent.
+  Frontend testing passed 10 tests; Oxlint, TypeScript/Vite production build,
+  and Python `compileall` passed. No external model or network service was
+  contacted.
+- **Unresolved question:** Before integrating a real provider, should accepted
+  explanations be generated once and persisted, or regenerated through a
+  separately versioned read model?

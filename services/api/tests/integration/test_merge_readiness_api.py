@@ -1,20 +1,25 @@
-pass
-
 import asyncio
 import unittest
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
 from app.api.v1.connector_router import (
     get_github_connector,
     get_jira_connector,
+    get_merge_readiness_explanation_service,
     get_merge_readiness_workflow,
     get_run_repository,
 )
+from app.api.v1.models import MergeReadinessResponse
 from app.connectors.errors import ConnectorUnavailableError
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.fixture_catalog import FAILED_CI_REQUEST, MERGE_READY_REQUEST
 from app.connectors.models import ConnectorRequest, GitHubPullRequest, JiraIssue
+from app.explanations import (
+    LLMStructuredResponse,
+    MergeReadinessExplanationService,
+)
 from app.main import app
 from app.runtime import (
     InMemoryRunRepository,
@@ -37,9 +42,19 @@ class FailingGitHubConnector:
         raise RuntimeError("secret-connector-detail")
 
 
-class RecordingWorkflow:
-    pass
+class AlteredExplanationClient:
+    async def generate_structured(self, explanation_input):
+        return LLMStructuredResponse(
+            output={
+                "decision": explanation_input.decision.value,
+                "summary": "Unapproved generated wording must not reach the UI.",
+                "reasons": ("An unsupported claim.",),
+                "recommended_actions": (),
+            }
+        )
 
+
+class RecordingWorkflow:
     def __init__(self, run: MergeReadinessRun) -> None:
         self.run = run
         self.requests: list[ConnectorRequest] = []
@@ -81,8 +96,6 @@ class MergeReadinessApiTests(unittest.TestCase):
         cls.client = TestClient(app)
 
     def setUp(self) -> None:
-
-
         self.repository = InMemoryRunRepository()
         app.dependency_overrides[get_run_repository] = lambda: self.repository
 
@@ -134,7 +147,7 @@ class MergeReadinessApiTests(unittest.TestCase):
         response = self.post_request(MERGE_READY_REQUEST)
 
         self.assertEqual(response.status_code, 500)
-        run = MergeReadinessRun.model_validate(response.json())
+        run = MergeReadinessResponse.model_validate(response.json())
         self.assertEqual(run.status.value, "failed")
         self.assertIsNone(run.result)
         self.assertIsNotNone(run.run_id)
@@ -142,6 +155,8 @@ class MergeReadinessApiTests(unittest.TestCase):
         self.assertIsNotNone(run.completed_at)
         self.assertEqual(run.steps[-1].status.value, "failed")
         self.assertNotIn("secret-connector-detail", run.error.message)
+        self.assertIsNone(run.explanation)
+        self.assertIsNone(run.explanation_error)
 
     def test_route_delegates_to_workflow_service(self) -> None:
         workflow = RecordingWorkflow(completed_ready_run())
@@ -156,9 +171,47 @@ class MergeReadinessApiTests(unittest.TestCase):
         response = self.post_request(MERGE_READY_REQUEST)
 
         self.assertEqual(response.status_code, 200)
-        validated = MergeReadinessRun.model_validate(response.json())
+        validated = MergeReadinessResponse.model_validate(response.json())
         self.assertEqual(validated.request, MERGE_READY_REQUEST)
         self.assertEqual(validated.result.decision.value, "ready")
+        self.assertEqual(validated.explanation.decision.value, "ready")
+        self.assertIsNone(validated.explanation_error)
+
+    def test_blocked_and_unknown_responses_include_validated_explanations(self) -> None:
+        blocked = self.post_request(FAILED_CI_REQUEST)
+        app.dependency_overrides[get_jira_connector] = (
+            provide_unavailable_jira_connector
+        )
+        unknown = self.post_request(MERGE_READY_REQUEST)
+
+        self.assertEqual(
+            blocked.json()["explanation"]["decision"],
+            blocked.json()["result"]["decision"],
+        )
+        self.assertEqual(
+            unknown.json()["explanation"]["decision"],
+            unknown.json()["result"]["decision"],
+        )
+
+    def test_rejected_explanation_does_not_change_completed_policy_result(self) -> None:
+        app.dependency_overrides[get_merge_readiness_explanation_service] = (
+            lambda: MergeReadinessExplanationService(AlteredExplanationClient())
+        )
+
+        response = self.post_request(MERGE_READY_REQUEST)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["result"]["decision"], "ready")
+        self.assertIsNone(body["explanation"])
+        self.assertEqual(
+            body["explanation_error"]["code"],
+            "validation_failed",
+        )
+        self.assertNotIn("Unapproved generated wording", response.text)
+        stored = self.repository.get(UUID(body["run_id"]))
+        self.assertEqual(stored.result.decision.value, "ready")
 
     def test_completed_run_can_be_retrieved_by_run_id(self) -> None:
         created_response = self.post_request(MERGE_READY_REQUEST)

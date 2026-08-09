@@ -100,6 +100,17 @@ services/api/app/observability/
 `-- setup.py                     # Providers, exporters, FastAPI setup, shutdown
 ```
 
+Internal merge-readiness explanation adds a provider-neutral model boundary:
+
+```text
+services/api/app/explanations/
+|-- models.py                    # Minimized input and structured output
+|-- protocols.py                 # LLMClient operation contract
+|-- fakes.py                     # Deterministic local/test implementation
+|-- errors.py                    # Typed sanitized failure categories
+`-- service.py                   # Model call and structural validation
+```
+
 ```text
 apps/web/src/features/inspection/
 ├── types.ts                  # What data shapes exist in TypeScript?
@@ -138,6 +149,14 @@ apps/web/src/features/inspection/
   and returns every verified blocker plus explicit missing information and
   evidence references. `POST /v1/pull-request-merge-readiness` invokes it after
   recorded connector steps; the older inspection endpoint remains facts-only.
+- `MergeReadinessExplanationService` is an internal, separately invoked harness
+  that accepts only a completed `MergeReadinessResult`. It minimizes that
+  result to stable decision/reason/action enums before calling an injected
+  `LLMClient`. The deterministic fake is the only current implementation.
+  Pydantic validates the structured shape and the service rejects a changed
+  decision, but semantic evidence-grounding validation is deferred. Therefore
+  the workflow, API response, frontend, and persistence do not expose or store
+  explanations yet.
 - `GitHubConnector` is an asynchronous protocol shared by fake and HTTP
   implementations. The application factory reads validated settings and
   injects one implementation; the workflow neither knows nor branches on the
@@ -184,6 +203,11 @@ apps/web/src/features/inspection/
   explicit persistence spans. `run_id` may correlate spans and safe JSON logs,
   but IDs and user-controlled values are forbidden metric labels. Terminal run
   measurements and logs occur only after the terminal database commit.
+- An independently invoked explanation call creates one
+  `merge_readiness.explanation.generate` span and bounded duration/token
+  metrics. Attributes contain only fixed operation, result, failure, and token
+  categories/counts; prompts, outputs, model/provider names, identities, and
+  exception text are excluded.
 - OpenTelemetry exports traces and metrics through OTLP HTTP/protobuf when
   explicitly enabled. Grafana Cloud is configuration, not a domain dependency;
   setup and exporter failures degrade safely without changing HTTP, runtime,
@@ -195,7 +219,22 @@ apps/web/src/features/inspection/
 
 Crash recovery, cancellation APIs, retries, distributed workers, queues, GitHub
 or Jira OAuth/app authentication, multi-tenant connector credentials,
-site-specific Jira blocker mapping, tenant isolation, retention, LLMOps,
+site-specific Jira blocker mapping, tenant isolation, retention, a real LLM
+provider, deterministic semantic explanation validation, prompt management,
 dashboards, alerting, OpenTelemetry log export, and evaluations are not
 implemented. Neon/Grafana resources and application deployment are not
 provisioned by this repository.
+## Validated explanation response boundary
+
+Completed merge-readiness POST and GET responses add a non-authoritative
+explanation after the durable policy run is loaded or committed.
+`MergeReadinessExplanationService` sends only policy decision and stable
+reason/action codes to the injected client. A strict backend-owned template
+validator must accept the complete output before `MergeReadinessResponse`
+exposes it. The frontend validates the network shape and renders it separately
+from the authoritative policy result.
+
+The explanation is currently produced by `FakeLLMClient` and is not persisted.
+Validation or provider failure returns a sanitized `explanation_error` while
+the completed policy run remains usable. A real or probabilistic provider is
+not part of this architecture and would require a new persistence decision.

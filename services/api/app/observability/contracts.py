@@ -1,5 +1,3 @@
-pass
-
 from contextlib import contextmanager
 from contextvars import ContextVar
 from enum import StrEnum
@@ -15,6 +13,21 @@ class FailureCategory(StrEnum):
     RECORD_INVALID = "record_invalid"
     SYSTEM_FAILURE = "system_failure"
     TELEMETRY_EXPORT_FAILURE = "telemetry_export_failure"
+    LLM_PROVIDER_FAILURE = "llm_provider_failure"
+    LLM_INVALID_OUTPUT = "llm_invalid_output"
+    LLM_VALIDATION_FAILURE = "llm_validation_failure"
+
+
+class LLMCallResult(StrEnum):
+    SUCCESS = "success"
+    PROVIDER_FAILURE = "provider_failure"
+    INVALID_OUTPUT = "invalid_output"
+    VALIDATION_FAILURE = "validation_failure"
+
+
+class LLMTokenType(StrEnum):
+    INPUT = "input"
+    OUTPUT = "output"
 
 
 class StepOutcome(StrEnum):
@@ -49,6 +62,8 @@ WORKFLOW_RUN_DURATION_METRIC = "promptql.workflow.run.duration"
 WORKFLOW_STEP_DURATION_METRIC = "promptql.workflow.step.duration"
 WORKFLOW_STEP_FAILURES_METRIC = "promptql.workflow.step.failures"
 PERSISTENCE_FAILURES_METRIC = "promptql.runtime.persistence.failures"
+LLM_EXPLANATION_DURATION_METRIC = "promptql.llm.explanation.duration"
+LLM_TOKEN_USAGE_METRIC = "promptql.llm.tokens"
 
 METRIC_LABEL_ALLOWLISTS: dict[str, frozenset[str]] = {
     WORKFLOW_RUNS_METRIC: frozenset(
@@ -76,6 +91,12 @@ METRIC_LABEL_ALLOWLISTS: dict[str, frozenset[str]] = {
     PERSISTENCE_FAILURES_METRIC: frozenset(
         {"persistence.operation", "failure.category"}
     ),
+    LLM_EXPLANATION_DURATION_METRIC: frozenset(
+        {"llm.operation", "llm.result"}
+    ),
+    LLM_TOKEN_USAGE_METRIC: frozenset(
+        {"llm.operation", "llm.token.type"}
+    ),
 }
 
 _current_checkpoint: ContextVar[PersistenceCheckpoint | None] = ContextVar(
@@ -88,8 +109,6 @@ _current_checkpoint: ContextVar[PersistenceCheckpoint | None] = ContextVar(
 def use_persistence_checkpoint(
     checkpoint: PersistenceCheckpoint,
 ) -> Iterator[None]:
-    pass
-
     token = _current_checkpoint.set(checkpoint)
     try:
         yield
@@ -105,8 +124,6 @@ def validate_metric_labels(
     metric_name: str,
     labels: dict[str, str],
 ) -> None:
-    pass
-
     allowed_keys = METRIC_LABEL_ALLOWLISTS.get(metric_name)
     if allowed_keys is None or frozenset(labels) != allowed_keys:
         raise ValueError(f"metric labels are not allowed for {metric_name}")

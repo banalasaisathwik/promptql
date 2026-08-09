@@ -84,6 +84,39 @@ function AnalysisResult({ analysis }: { analysis: PullRequestMergeReadiness }) {
         <code>{policyResult.reason_code}</code>
       </section>
 
+      {analysis.explanation ? (
+        <section className="result-section explanation-card">
+          <p className="step-label">Validated fake LLM explanation</p>
+          <h3>Why this decision was returned</h3>
+          <p>{analysis.explanation.summary}</p>
+          <h4>Reasons</h4>
+          <ul className="result-list">
+            {analysis.explanation.reasons.map((reason, index) => (
+              <li key={`explanation-reason-${index}`}>{reason}</li>
+            ))}
+          </ul>
+          {analysis.explanation.recommended_actions.length > 0 && (
+            <>
+              <h4>Recommended actions</h4>
+              <ul className="result-list">
+                {analysis.explanation.recommended_actions.map(
+                  (action, index) => (
+                    <li key={`explanation-action-${index}`}>{action}</li>
+                  ),
+                )}
+              </ul>
+            </>
+          )}
+        </section>
+      ) : (
+        <section className="result-section explanation-card">
+          <p className="step-label">Explanation unavailable</p>
+          <h3>The policy result is still authoritative</h3>
+          <p>{analysis.explanation_error?.message}</p>
+          <code>{analysis.explanation_error?.code}</code>
+        </section>
+      )}
+
       <FindingList title="Blockers" findings={policyResult.blockers} />
       <ActionList actions={policyResult.pending_actions} />
       <FindingList

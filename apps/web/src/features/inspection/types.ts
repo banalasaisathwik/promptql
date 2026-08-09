@@ -152,6 +152,23 @@ export interface MergeReadinessResult {
   evidence_references: EvidenceReference[]
 }
 
+export interface MergeReadinessExplanation {
+  decision: MergeReadinessDecision
+  summary: string
+  reasons: string[]
+  recommended_actions: string[]
+}
+
+export type ExplanationErrorCode =
+  | 'provider_failure'
+  | 'invalid_output'
+  | 'validation_failed'
+
+export interface ExplanationApiError {
+  code: ExplanationErrorCode
+  message: string
+}
+
 export type RuntimeStatus =
   | 'pending'
   | 'running'
@@ -198,4 +215,6 @@ export interface PullRequestMergeReadiness {
   request: ConnectorRequest
   github: GitHubPullRequest | null
   jira: JiraIssue | null
+  explanation: MergeReadinessExplanation | null
+  explanation_error: ExplanationApiError | null
 }

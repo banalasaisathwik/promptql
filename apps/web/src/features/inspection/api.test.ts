@@ -29,6 +29,13 @@ const READY_RESPONSE: PullRequestMergeReadiness = {
     missing_information: [],
     evidence_references: [],
   },
+  explanation: {
+    decision: 'ready',
+    summary: 'The deterministic policy found the pull request ready.',
+    reasons: ['All required merge-readiness evidence is satisfied.'],
+    recommended_actions: [],
+  },
+  explanation_error: null,
 }
 
 
@@ -90,6 +97,30 @@ describe('merge-readiness API client', () => {
       name: 'ConnectorApiError',
       status: 500,
       message: 'The GitHub connector step failed unexpectedly.',
+    } satisfies Partial<ConnectorApiError>)
+  })
+
+  test('rejects an explanation that changes the backend policy decision', async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          ...READY_RESPONSE,
+          explanation: {
+            ...READY_RESPONSE.explanation,
+            decision: 'blocked',
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )) as typeof fetch
+
+    await expect(
+      analyzePullRequestMergeReadiness(READY_RESPONSE.request),
+    ).rejects.toMatchObject({
+      name: 'ConnectorApiError',
+      message: 'The merge-readiness response is malformed.',
     } satisfies Partial<ConnectorApiError>)
   })
 })

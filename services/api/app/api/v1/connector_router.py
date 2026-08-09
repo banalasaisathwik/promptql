@@ -5,9 +5,20 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from app.api.v1.models import ApiError, ApiErrorCode, RuntimePersistenceApiError
+from app.api.v1.models import (
+    ApiError,
+    ApiErrorCode,
+    ExplanationApiError,
+    MergeReadinessResponse,
+    RuntimePersistenceApiError,
+)
 from app.connectors.models import ConnectorRequest
 from app.connectors.protocols import GitHubConnector, JiraConnector
+from app.database import PostgresRunRepository
+from app.explanations import (
+    MergeReadinessExplanationError,
+    MergeReadinessExplanationService,
+)
 from app.inspection.models import (
     FixtureScenarioCatalog,
     PullRequestInspection,
@@ -18,7 +29,6 @@ from app.inspection.service import (
 from app.inspection.service import (
     list_fixture_scenarios,
 )
-from app.database import PostgresRunRepository
 from app.observability import (
     NoOpRuntimeTelemetry,
     ObservedRunRepository,
@@ -77,6 +87,36 @@ def get_merge_readiness_workflow(
     )
 
 
+def get_merge_readiness_explanation_service(
+    request: Request,
+) -> MergeReadinessExplanationService:
+    return request.app.state.merge_readiness_explanation_service
+
+
+async def build_merge_readiness_response(
+    run: MergeReadinessRun,
+    explanation_service: MergeReadinessExplanationService,
+) -> MergeReadinessResponse:
+    explanation = None
+    explanation_error = None
+    if run.status is RunStatus.COMPLETED and run.result is not None:
+        try:
+            explanation = await explanation_service.explain(run.result)
+        except MergeReadinessExplanationError as error:
+            explanation_error = ExplanationApiError(
+                code=error.code,
+                message=error.message,
+            )
+
+    return MergeReadinessResponse.model_validate(
+        {
+            **run.model_dump(),
+            "explanation": explanation,
+            "explanation_error": explanation_error,
+        }
+    )
+
+
 @router.get(
     "/demo/pull-request-scenarios",
     response_model=FixtureScenarioCatalog,
@@ -96,10 +136,10 @@ async def inspect_pull_request(request: ConnectorRequest) -> PullRequestInspecti
 
 @router.post(
     "/pull-request-merge-readiness",
-    response_model=MergeReadinessRun,
+    response_model=MergeReadinessResponse,
     responses={
         404: {"model": ApiError},
-        500: {"model": MergeReadinessRun},
+        500: {"model": MergeReadinessResponse},
         503: {"model": RuntimePersistenceApiError},
     },
 )
@@ -110,30 +150,42 @@ async def analyze_pull_request(
         Depends(get_merge_readiness_workflow),
     ],
     telemetry: Annotated[RuntimeTelemetry, Depends(get_runtime_telemetry)],
-) -> MergeReadinessRun | JSONResponse:
+    explanation_service: Annotated[
+        MergeReadinessExplanationService,
+        Depends(get_merge_readiness_explanation_service),
+    ],
+) -> MergeReadinessResponse | JSONResponse:
     terminal_run = await workflow.execute(request)
     telemetry.correlate_current_span(terminal_run)
+    response = await build_merge_readiness_response(
+        terminal_run,
+        explanation_service,
+    )
     if terminal_run.status is RunStatus.FAILED:
         return JSONResponse(
             status_code=500,
-            content=terminal_run.model_dump(mode="json"),
+            content=response.model_dump(mode="json"),
         )
-    return terminal_run
+    return response
 
 
 @router.get(
     "/runs/{run_id}",
-    response_model=MergeReadinessRun,
+    response_model=MergeReadinessResponse,
     responses={
         404: {"model": ApiError},
         500: {"model": ApiError},
         503: {"model": RuntimePersistenceApiError},
     },
 )
-def get_runtime_run(
+async def get_runtime_run(
     run_id: UUID,
     run_repository: Annotated[RunRepository, Depends(get_run_repository)],
-) -> MergeReadinessRun | JSONResponse:
+    explanation_service: Annotated[
+        MergeReadinessExplanationService,
+        Depends(get_merge_readiness_explanation_service),
+    ],
+) -> MergeReadinessResponse | JSONResponse:
     stored_run = run_repository.get(run_id)
     if stored_run is None:
         error = ApiError(
@@ -141,4 +193,4 @@ def get_runtime_run(
             message="No runtime run exists for this ID.",
         )
         return JSONResponse(status_code=404, content=error.model_dump(mode="json"))
-    return stored_run
+    return await build_merge_readiness_response(stored_run, explanation_service)

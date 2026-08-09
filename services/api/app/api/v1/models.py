@@ -1,14 +1,15 @@
-pass
-
 from enum import StrEnum
+from typing import Self
 from uuid import UUID
 
+from pydantic import model_validator
+
 from app.connectors.models import ContractModel, NonEmptyString
+from app.explanations import ExplanationErrorCode, MergeReadinessExplanation
+from app.runtime import MergeReadinessRun, RunStatus
 
 
 class ApiErrorCode(StrEnum):
-    pass
-
     FIXTURE_NOT_FOUND = "fixture_not_found"
     RUN_NOT_FOUND = "run_not_found"
     RUNTIME_PERSISTENCE_UNAVAILABLE = "runtime_persistence_unavailable"
@@ -17,13 +18,40 @@ class ApiErrorCode(StrEnum):
 
 
 class ApiError(ContractModel):
-    pass
-
     code: ApiErrorCode
     message: NonEmptyString
 
 
 class RuntimePersistenceApiError(ApiError):
-    pass
-
     run_id: UUID | None
+
+
+class ExplanationApiError(ContractModel):
+    code: ExplanationErrorCode
+    message: NonEmptyString
+
+
+class MergeReadinessResponse(MergeReadinessRun):
+    explanation: MergeReadinessExplanation | None
+    explanation_error: ExplanationApiError | None
+
+    @model_validator(mode="after")
+    def validate_explanation_state(self) -> Self:
+        if self.status is not RunStatus.COMPLETED:
+            if self.explanation is not None or self.explanation_error is not None:
+                raise ValueError("only a completed run may have an explanation")
+            return self
+
+        has_explanation = self.explanation is not None
+        has_error = self.explanation_error is not None
+        if has_explanation == has_error:
+            raise ValueError(
+                "a completed run needs either an explanation or an explanation error"
+            )
+        if (
+            self.explanation is not None
+            and self.result is not None
+            and self.explanation.decision is not self.result.decision
+        ):
+            raise ValueError("the explanation cannot change the policy decision")
+        return self
