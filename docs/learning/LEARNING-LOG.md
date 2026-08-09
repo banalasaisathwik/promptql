@@ -709,3 +709,37 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   source without meaningless statements or excessive gaps.
 - **Validation evidence:** Recorded in the cleanup commit and task response.
 - **Unresolved question:** None for this mechanical cleanup.
+
+### 2026-08-09 — Separate unknown optional evidence from unknown required evidence
+
+- **Concept:** A three-valued provider fact can remain honestly `unknown`
+  without making the whole decision unknown when that fact is optional. This
+  differs from required evidence such as mergeability or required-check rules,
+  whose absence still prevents a proven ready result.
+- **Important syntax:** The evaluator needs only the positive
+  `if jira.blocker_state is BlockerState.BLOCKED` branch. Omitting an
+  `UNKNOWN` decision branch does not relabel the enum; the earlier
+  `_record_evidence(...)` call still serializes its exact `"unknown"` value.
+- **Implementation locations:** `app/policy/evaluator.py` removes the promotion
+  of optional blocker metadata into missing information.
+  `test_merge_readiness_policy.py` covers all three blocker states and confirms
+  required GitHub uncertainty still produces `unknown`. ADR-008 records why
+  this narrowly supersedes ADR-007's earlier policy consequence.
+- **Design decision:** Jira blocker metadata is optional supplementary evidence
+  in V1 because standard Jira has no portable blocker field. An explicit
+  `BLOCKED` fact remains authoritative, but `UNKNOWN` adds no retry action or
+  missing-information finding.
+- **Invariant or failure behavior:** Decision precedence remains verified
+  blocker, then missing required evidence, then ready. `UNKNOWN` is never
+  rewritten as `NOT_BLOCKED`, and connector facts, API shapes, persistence,
+  frontend rendering, and telemetry remain unchanged.
+- **Trade-off:** Standard live Jira can now participate in a useful ready
+  decision without tenant-specific setup, but V1 cannot detect blockers stored
+  only in custom fields or local Jira conventions.
+- **Validation evidence:** The focused policy suite passed 16 tests. Complete
+  backend discovery passed 114 tests with four PostgreSQL integration tests
+  skipped because `TEST_DATABASE_URL` was absent. `python -m compileall -q app
+  tests` passed. No automated test contacted an external provider.
+- **Unresolved question:** If tenant-specific blocker mappings are introduced,
+  how will their configuration be validated, versioned, authorized, and
+  audited before they can strengthen the normalized blocker fact?

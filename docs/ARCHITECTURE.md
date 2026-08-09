@@ -153,7 +153,10 @@ apps/web/src/features/inspection/
 - Jira custom status names are display evidence only. Jira status-category keys
   normalize to the existing to-do, in-progress, and done facts consumed by the
   pure policy. Standard Jira has no universal blocker field, so live Jira marks
-  blocker evidence unknown rather than inventing a site-specific fact.
+  blocker evidence unknown rather than inventing a site-specific fact. V1
+  treats this metadata as optional: an explicit `BLOCKED` fact blocks, while
+  `UNKNOWN` remains visible in evidence but creates neither missing required
+  information nor a retry action.
 - GitHub and Jira source modes are selected independently, supporting all four
   fake/live combinations. A bounded `runtime.connector_sources.selected`
   startup event makes the selected pair visible in server logs, and connector

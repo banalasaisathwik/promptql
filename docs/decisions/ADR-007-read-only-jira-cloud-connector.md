@@ -4,7 +4,7 @@
 - Date: 2026-08-04
 - Owners: Repository owner
 - Supersedes: None
-- Superseded by: None
+- Superseded by: ADR-008 only for the policy treatment of unknown blocker evidence
 
 ## Context
 
@@ -56,6 +56,11 @@ or coupling the workflow and policy to Atlassian response shapes.
   configuration.
 
 ### Unknown standard blocker evidence
+
+> **Partially superseded by ADR-008.** Live Jira still returns
+> `BlockerState.UNKNOWN`, but V1 now treats that metadata as optional rather
+> than required missing information. The connector normalization and every
+> other decision in this ADR remain authoritative.
 
 - **Decision:** Live Jira returns `BlockerState.UNKNOWN`. The standard issue
   endpoint has no universal blocker field, and the policy treats unknown

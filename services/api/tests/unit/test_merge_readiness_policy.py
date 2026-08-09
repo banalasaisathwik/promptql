@@ -190,7 +190,9 @@ class MergeReadinessPolicyTests(unittest.TestCase):
         self.assertEqual(result.reason_code, PolicyReasonCode.EVIDENCE_UNAVAILABLE)
         self.assertEqual(result.blockers, ())
 
-    def test_unknown_jira_blocker_evidence_is_unknown_when_status_is_done(self) -> None:
+    def test_done_jira_with_unknown_blocker_is_ready_and_preserves_evidence(
+        self,
+    ) -> None:
         github, _ = _ready_facts()
 
         result = evaluate_merge_readiness(
@@ -198,11 +200,47 @@ class MergeReadinessPolicyTests(unittest.TestCase):
             _jira_with(blocker_state=BlockerState.UNKNOWN),
         )
 
-        self.assertEqual(result.decision, MergeReadinessDecision.UNKNOWN)
-        self.assertIn(
-            "Jira blocker evidence is unavailable.",
-            {information.message for information in result.missing_information},
+        self.assertEqual(result.decision, MergeReadinessDecision.READY)
+        self.assertEqual(result.reason_code, PolicyReasonCode.READY)
+        self.assertEqual(result.blockers, ())
+        self.assertEqual(result.missing_information, ())
+        self.assertEqual(result.pending_actions, ())
+        blocker_evidence = next(
+            reference
+            for reference in result.evidence_references
+            if reference.reference_id == "jira.blocker_state"
         )
+        self.assertEqual(blocker_evidence.value, BlockerState.UNKNOWN.value)
+
+    def test_done_jira_with_not_blocked_is_ready(self) -> None:
+        github, _ = _ready_facts()
+
+        result = evaluate_merge_readiness(
+            github,
+            _jira_with(blocker_state=BlockerState.NOT_BLOCKED),
+        )
+
+        self.assertEqual(result.decision, MergeReadinessDecision.READY)
+        self.assertEqual(result.reason_code, PolicyReasonCode.READY)
+        self.assertEqual(result.blockers, ())
+        self.assertEqual(result.missing_information, ())
+        self.assertEqual(result.pending_actions, ())
+
+    def test_done_jira_with_blocker_is_blocked(self) -> None:
+        github, _ = _ready_facts()
+
+        result = evaluate_merge_readiness(
+            github,
+            _jira_with(blocker_state=BlockerState.BLOCKED),
+        )
+
+        self.assertEqual(result.decision, MergeReadinessDecision.BLOCKED)
+        self.assertEqual(result.reason_code, PolicyReasonCode.JIRA_BLOCKER_PRESENT)
+        self.assertEqual(
+            tuple(blocker.reason_code for blocker in result.blockers),
+            (PolicyReasonCode.JIRA_BLOCKER_PRESENT,),
+        )
+        self.assertEqual(result.missing_information, ())
 
     def test_verified_incomplete_jira_wins_over_unknown_blocker_evidence(self) -> None:
         github, _ = _ready_facts()

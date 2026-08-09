@@ -370,13 +370,6 @@ def evaluate_merge_readiness(
                         PendingActionCode.CLEAR_JIRA_BLOCKER,
                         "Clear the blocker on the linked Jira issue.",
                     )
-                elif jira.blocker_state is BlockerState.UNKNOWN:
-                    _add_missing_information(
-                        missing_information,
-                        pending_actions,
-                        "Jira blocker evidence is unavailable.",
-                        (jira_key_reference, jira_blocker_reference),
-                    )
 
     if blockers:
         decision = MergeReadinessDecision.BLOCKED

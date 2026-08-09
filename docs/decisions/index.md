@@ -25,4 +25,5 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-004](ADR-004-durable-runtime-persistence.md) | Accepted | Neon PostgreSQL persistence through SQLAlchemy, Alembic migrations, short transactions, and run retrieval |
 | [ADR-005](ADR-005-opentelemetry-observability.md) | Accepted | Provider-neutral OpenTelemetry traces and metrics, Grafana Cloud OTLP export, bounded telemetry, and post-commit terminal reporting |
 | [ADR-006](ADR-006-read-only-github-rest-connector.md) | Accepted | Async read-only GitHub REST connector selected by configuration, normalized evidence, bounded pagination, and no fake fallback |
-| [ADR-007](ADR-007-read-only-jira-cloud-connector.md) | Accepted | Async read-only Jira Cloud REST connector, category-based status semantics, independent source selection, and unknown blocker evidence |
+| [ADR-007](ADR-007-read-only-jira-cloud-connector.md) | Partially superseded by ADR-008 | Async read-only Jira Cloud REST connector, category-based status semantics, independent source selection, and honest unknown blocker normalization |
+| [ADR-008](ADR-008-optional-jira-blocker-evidence.md) | Accepted | Treat unknown Jira blocker metadata as optional V1 evidence while explicit blockers remain blocking |
