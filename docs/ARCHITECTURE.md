@@ -108,7 +108,9 @@ services/api/app/explanations/
 |-- protocols.py                 # LLMClient operation contract
 |-- fakes.py                     # Deterministic local/test implementation
 |-- errors.py                    # Typed sanitized failure categories
-`-- service.py                   # Model call and structural validation
+|-- validator.py                # Ground generated codes in policy facts
+|-- templates.py                # Render approved user-facing wording
+`-- service.py                   # Generation, parsing, validation, rendering
 ```
 
 ```text
@@ -149,14 +151,15 @@ apps/web/src/features/inspection/
   and returns every verified blocker plus explicit missing information and
   evidence references. `POST /v1/pull-request-merge-readiness` invokes it after
   recorded connector steps; the older inspection endpoint remains facts-only.
-- `MergeReadinessExplanationService` is an internal, separately invoked harness
-  that accepts only a completed `MergeReadinessResult`. It minimizes that
-  result to stable decision/reason/action enums before calling an injected
-  `LLMClient`. The deterministic fake is the only current implementation.
-  Pydantic validates the structured shape and the service rejects a changed
-  decision, but semantic evidence-grounding validation is deferred. Therefore
-  the workflow, API response, frontend, and persistence do not expose or store
-  explanations yet.
+- `MergeReadinessExplanationService` accepts only a completed
+  `MergeReadinessResult`. It minimizes that result to stable decision,
+  reason, and action enums before calling an injected `LLMClient`; the
+  deterministic fake is the only current implementation. Pydantic validates
+  generated structure, then `StrictMergeReadinessExplanationValidator`
+  requires the generated decision/reason/action codes to be supported and
+  complete relative to the full policy result. Generated prose is discarded.
+  Approved templates render the existing API/frontend explanation after a
+  terminal run commits or is retrieved; explanations are not persisted.
 - `GitHubConnector` is an asynchronous protocol shared by fake and HTTP
   implementations. The application factory reads validated settings and
   injects one implementation; the workflow neither knows nor branches on the
@@ -220,19 +223,23 @@ apps/web/src/features/inspection/
 Crash recovery, cancellation APIs, retries, distributed workers, queues, GitHub
 or Jira OAuth/app authentication, multi-tenant connector credentials,
 site-specific Jira blocker mapping, tenant isolation, retention, a real LLM
-provider, deterministic semantic explanation validation, prompt management,
-dashboards, alerting, OpenTelemetry log export, and evaluations are not
+provider, prompt management, dashboards, alerting, OpenTelemetry log export,
+and evaluations are not
 implemented. Neon/Grafana resources and application deployment are not
 provisioned by this repository.
+
 ## Validated explanation response boundary
 
 Completed merge-readiness POST and GET responses add a non-authoritative
 explanation after the durable policy run is loaded or committed.
 `MergeReadinessExplanationService` sends only policy decision and stable
-reason/action codes to the injected client. A strict backend-owned template
-validator must accept the complete output before `MergeReadinessResponse`
-exposes it. The frontend validates the network shape and renders it separately
-from the authoritative policy result.
+reason/action codes to the injected client. Generated output is parsed as an
+untrusted `GeneratedExplanation`; its codes must exactly cover the policy's
+required code sets without inventions, omissions, duplicates, or
+contradictions. The code-only `ValidatedExplanation` is rendered through
+backend-owned templates before `MergeReadinessResponse` exposes it. The
+frontend validates the unchanged network shape and renders it separately from
+the authoritative policy result.
 
 The explanation is currently produced by `FakeLLMClient` and is not persisted.
 Validation or provider failure returns a sanitized `explanation_error` while

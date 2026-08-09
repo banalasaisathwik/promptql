@@ -824,3 +824,46 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** Before integrating a real provider, should accepted
   explanations be generated once and persisted, or regenerated through a
   separately versioned read model?
+
+### 2026-08-09 — Ground generated claims before rendering explanations
+
+- **Concept:** Structural validation and semantic grounding solve different
+  problems. Pydantic proves that generated fields are bounded and use known
+  enums; deterministic set comparison proves those reason/action codes are
+  supported and complete relative to the authoritative policy result.
+- **Important syntax:** `Field(min_length=1, max_length=50)` bounds generated
+  tuples. `generated_codes - required_codes` finds inventions, while
+  `required_codes - generated_codes` finds omissions. Duplicate detection must
+  happen before converting to sets. `tuple(dict.fromkeys(codes))` removes
+  repeated policy categories while retaining deterministic policy order.
+- **Implementation locations:** `app/explanations/models.py` separates
+  `GeneratedExplanation` from code-only `ValidatedExplanation`.
+  `validator.py` performs decision, duplicate, contradiction, support, and
+  completeness checks against `MergeReadinessResult`. `service.py` parses,
+  validates, and calls `render_validated_explanation()`; `fakes.py` uses that
+  same path. `errors.py` owns stable sanitized failure codes, and the
+  observability allowlist permits only bounded validation attributes. ADR-011
+  records the decision.
+- **Design decision:** Generated prose is parsed only to enforce safe bounds and
+  is then discarded. Only validated codes enter deterministic text templates,
+  preserving the existing API/frontend contract without claiming that
+  arbitrary natural language was factually proven.
+- **Invariant or failure behavior:** The policy result remains authoritative.
+  Generated claims cannot change the decision, invent or omit reasons/actions,
+  duplicate claims, add ready/remediation contradictions, or leave unknown
+  ungrounded in missing evidence. Provider or validation failure cannot mutate
+  the policy object or stored runtime run, causes no retry, and exposes only the
+  existing sanitized explanation error.
+- **Trade-off:** Code categories are deterministic and low-cardinality, but two
+  separate policy findings with the same reason code render as one category.
+  Explaining every occurrence later would require stable finding identifiers,
+  not prose matching.
+- **Validation evidence:** The focused explanation suite passed 21 tests.
+  Complete backend discovery ran 137 tests successfully, with four PostgreSQL
+  tests skipped because `TEST_DATABASE_URL` was absent. Frontend testing passed
+  10 tests; Oxlint, TypeScript/Vite production build, and Python `compileall`
+  passed. No external LLM, GitHub, Jira, Grafana, OTLP, or database service was
+  contacted.
+- **Unresolved question:** Does a future real-provider contract need stable
+  per-finding IDs in addition to reason codes so it can explain repeated checks
+  individually without receiving connector values?

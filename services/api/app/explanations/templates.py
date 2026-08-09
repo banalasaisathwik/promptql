@@ -1,6 +1,6 @@
 from app.explanations.models import (
     MergeReadinessExplanation,
-    MergeReadinessExplanationInput,
+    ValidatedExplanation,
 )
 from app.policy import MergeReadinessDecision, PendingActionCode, PolicyReasonCode
 
@@ -73,22 +73,17 @@ ACTION_TEXT_BY_CODE: dict[PendingActionCode, str] = {
 }
 
 
-def build_strict_explanation(
-    explanation_input: MergeReadinessExplanationInput,
+def render_validated_explanation(
+    validated: ValidatedExplanation,
 ) -> MergeReadinessExplanation:
-    reason_codes = (
-        *explanation_input.blocker_reason_codes,
-        *explanation_input.missing_information_reason_codes,
-    )
-    if not reason_codes:
-        reason_codes = (explanation_input.primary_reason_code,)
-
     return MergeReadinessExplanation(
-        decision=explanation_input.decision,
-        summary=SUMMARY_BY_DECISION[explanation_input.decision],
-        reasons=tuple(REASON_TEXT_BY_CODE[code] for code in reason_codes),
+        decision=validated.decision,
+        summary=SUMMARY_BY_DECISION[validated.decision],
+        reasons=tuple(
+            REASON_TEXT_BY_CODE[code] for code in validated.reason_codes
+        ),
         recommended_actions=tuple(
             ACTION_TEXT_BY_CODE[code]
-            for code in explanation_input.pending_action_codes
+            for code in validated.action_codes
         ),
     )

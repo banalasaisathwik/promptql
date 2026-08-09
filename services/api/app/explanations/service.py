@@ -5,17 +5,21 @@ from pydantic import ValidationError
 
 from app.explanations.errors import (
     ExplanationErrorCode,
+    ExplanationValidationError,
+    ExplanationValidationFailureCode,
     MergeReadinessExplanationError,
 )
 from app.explanations.models import (
+    GeneratedExplanation,
     LLMStructuredResponse,
     LLMTokenUsage,
     MergeReadinessExplanation,
     MergeReadinessExplanationInput,
+    ValidatedExplanation,
 )
 from app.explanations.protocols import LLMClient
+from app.explanations.templates import render_validated_explanation
 from app.explanations.validator import (
-    StrictExplanationValidationError,
     StrictMergeReadinessExplanationValidator,
 )
 from app.observability import (
@@ -83,6 +87,19 @@ class MergeReadinessExplanationService:
             ),
         )
 
+    def _validate_generated_output(
+        self,
+        policy_result: MergeReadinessResult,
+        generated_output: object,
+    ) -> ValidatedExplanation:
+        try:
+            generated = GeneratedExplanation.model_validate(generated_output)
+        except ValidationError:
+            raise ExplanationValidationError(
+                ExplanationValidationFailureCode.INVALID_STRUCTURE
+            ) from None
+        return self._validator.validate(policy_result, generated)
+
     async def explain(
         self,
         policy_result: MergeReadinessResult,
@@ -111,53 +128,63 @@ class MergeReadinessExplanationService:
                 generated = LLMStructuredResponse.model_validate(
                     generated_response
                 )
-                explanation = MergeReadinessExplanation.model_validate(
-                    generated.output
-                )
             except (TypeError, ValidationError):
                 result = LLMCallResult.INVALID_OUTPUT
                 observation.set_attributes(
                     **{"promptql.llm.result": result.value}
                 )
                 observation.mark_error(FailureCategory.LLM_INVALID_OUTPUT)
-                self._record_call(started_at_ns, result, generated.token_usage)
+                self._record_call(started_at_ns, result, None)
                 raise MergeReadinessExplanationError(
                     ExplanationErrorCode.INVALID_OUTPUT,
                     "The explanation provider returned invalid structured output.",
                 ) from None
 
             try:
-                validated_explanation = self._validator.validate(
-                    explanation_input,
-                    explanation,
+                validated = self._validate_generated_output(
+                    policy_result,
+                    generated.output,
                 )
-            except StrictExplanationValidationError:
-                result = LLMCallResult.VALIDATION_FAILURE
-                observation.set_attributes(
-                    **{"promptql.llm.result": result.value}
+            except ExplanationValidationError as error:
+                validation_failure = error.code
+            else:
+                result = LLMCallResult.SUCCESS
+                safe_attributes: dict[str, str | int] = {
+                    "promptql.llm.result": result.value,
+                    "promptql.llm.validation.result": "success",
+                }
+                if generated.token_usage is not None:
+                    safe_attributes.update(
+                        {
+                            "promptql.llm.input_tokens": (
+                                generated.token_usage.input_tokens
+                            ),
+                            "promptql.llm.output_tokens": (
+                                generated.token_usage.output_tokens
+                            ),
+                        }
+                    )
+                observation.set_attributes(**safe_attributes)
+                self._record_call(
+                    started_at_ns,
+                    result,
+                    generated.token_usage,
                 )
-                observation.mark_error(FailureCategory.LLM_VALIDATION_FAILURE)
-                self._record_call(started_at_ns, result, generated.token_usage)
-                raise MergeReadinessExplanationError(
-                    ExplanationErrorCode.VALIDATION_FAILED,
-                    "The generated explanation did not pass validation.",
-                ) from None
+                return render_validated_explanation(validated)
 
-            result = LLMCallResult.SUCCESS
-            safe_attributes: dict[str, str | int] = {
-                "promptql.llm.result": result.value,
-            }
-            if generated.token_usage is not None:
-                safe_attributes.update(
-                    {
-                        "promptql.llm.input_tokens": (
-                            generated.token_usage.input_tokens
-                        ),
-                        "promptql.llm.output_tokens": (
-                            generated.token_usage.output_tokens
-                        ),
-                    }
-                )
-            observation.set_attributes(**safe_attributes)
+            result = LLMCallResult.VALIDATION_FAILURE
+            observation.set_attributes(
+                **{
+                    "promptql.llm.result": result.value,
+                    "promptql.llm.validation.result": "failure",
+                    "promptql.llm.validation.failure_category": (
+                        validation_failure.value
+                    ),
+                }
+            )
+            observation.mark_error(FailureCategory.LLM_VALIDATION_FAILURE)
             self._record_call(started_at_ns, result, generated.token_usage)
-            return validated_explanation
+            raise MergeReadinessExplanationError(
+                ExplanationErrorCode.VALIDATION_FAILED,
+                "The generated explanation did not pass validation.",
+            ) from None

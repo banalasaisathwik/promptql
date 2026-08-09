@@ -36,6 +36,25 @@ class LLMStructuredResponse(ContractModel):
     token_usage: LLMTokenUsage | None = None
 
 
+class GeneratedExplanation(ContractModel):
+    decision: MergeReadinessDecision
+    summary: ExplanationText
+    reason_codes: tuple[PolicyReasonCode, ...] = Field(
+        min_length=1,
+        max_length=50,
+    )
+    action_codes: tuple[PendingActionCode, ...] = Field(max_length=50)
+
+
+class ValidatedExplanation(ContractModel):
+    decision: MergeReadinessDecision
+    reason_codes: tuple[PolicyReasonCode, ...] = Field(
+        min_length=1,
+        max_length=50,
+    )
+    action_codes: tuple[PendingActionCode, ...] = Field(max_length=50)
+
+
 class MergeReadinessExplanation(ContractModel):
     decision: MergeReadinessDecision
     summary: ExplanationText

@@ -38,10 +38,10 @@ defaults and independent GitHub/Jira source selection.
 
 `test_merge_readiness_explanations.py` injects deterministic, recording,
 malformed, and failing LLM clients. It verifies minimized inputs, structured
-outputs, decision preservation, sanitized failures, persistence non-mutation,
-and bounded telemetry without contacting a model provider. The harness is not
-an API or workflow integration test because explanations are intentionally
-internal until deterministic semantic validation exists.
+generated claims, grounded reason/action coverage, deterministic rendering,
+decision preservation, sanitized failures, persistence non-mutation, and
+bounded telemetry without contacting a model provider. API integration tests
+separately prove the existing validated response contract remains unchanged.
 
 PostgreSQL repository and migration tests are opt-in. Without credentials they
 report explicit skips and do not create an engine or connect to a database.
@@ -68,7 +68,7 @@ and clean up only run IDs created by the tests.
 | Backend unit | `services/api/tests/unit` | Fake contracts, mocked GitHub/Jira HTTP normalization and errors, policy behavior, runtime transitions, and workflow execution | Configured with `unittest` discovery; no live provider calls |
 | Backend API integration | `services/api/tests/integration` | V1 catalog, raw inspection, completed runs, typed failed runs, delegation, and validation | Configured with `unittest` discovery and FastAPI TestClient |
 | Observability | `services/api/tests/unit/test_runtime_observability.py` and `services/api/tests/integration/test_observability_api.py` | In-memory spans/metrics, hierarchy, durable terminal emission, redaction, exporter isolation, health exclusion | Runs without Grafana credentials |
-| LLM explanation harness | `services/api/tests/unit/test_merge_readiness_explanations.py` | Minimized structured input, fake determinism, output shape/decision checks, sanitized failures, persistence isolation, and safe model-call telemetry | Internal fake/recording clients only; no real provider calls |
+| LLM explanation harness | `services/api/tests/unit/test_merge_readiness_explanations.py` | Minimized input, generated/validated trust separation, grounded code completeness, deterministic rendering, sanitized failures, persistence isolation, and safe telemetry | Internal fake/recording clients only; no real provider calls |
 | PostgreSQL integration | `services/api/tests/integration/test_postgres_runtime_persistence.py` | Alembic schema, durable reconstruction, ordering, failures, and conflicts | Opt-in; skipped unless guarded test credentials are configured |
 | Cross-layer/end-to-end | Future repository-level area | Browser-to-API journeys | Planned; tooling not selected |
 | Agent evaluations | `evals` when introduced | Quality and regressions | Planned; area absent |
@@ -88,9 +88,9 @@ Replace a placeholder only after adding and verifying the exact command.
 ## Validated explanation tests
 
 `tests/unit/test_merge_readiness_explanations.py` proves exact deterministic
-templates are accepted and any changed, missing, extra, or reordered content
-is rejected. The merge-readiness API integration tests prove POST and GET add
-the validated explanation without modifying the stored run, and that a
-rejected explanation leaves the completed policy result authoritative. The web
-API and panel tests prove response validation, full reason/action rendering,
-and decision-separation behavior.
+templates cover every policy code and that generated reason/action claims
+cannot change the decision, invent or omit codes, duplicate claims, contradict
+ready/unknown semantics, or bypass structure limits. It also proves generated
+prose is discarded before deterministic rendering. The merge-readiness API
+integration tests prove POST and GET retain the same schema and do not modify
+the stored run; web tests continue proving response validation and rendering.

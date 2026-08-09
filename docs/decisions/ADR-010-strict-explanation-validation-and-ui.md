@@ -1,10 +1,10 @@
 # ADR-010: Strict explanation validation and read-time API enrichment
 
-- Status: Accepted
+- Status: Partially superseded by ADR-011
 - Date: 2026-08-09
 - Owners: Repository owner
 - Supersedes: ADR-009 only for semantic validation and API exposure
-- Superseded by: None
+- Superseded by: ADR-011 for generated-output validation strategy
 
 ## Context
 

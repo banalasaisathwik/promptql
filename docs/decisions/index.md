@@ -28,4 +28,5 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-007](ADR-007-read-only-jira-cloud-connector.md) | Partially superseded by ADR-008 | Async read-only Jira Cloud REST connector, category-based status semantics, independent source selection, and honest unknown blocker normalization |
 | [ADR-008](ADR-008-optional-jira-blocker-evidence.md) | Accepted | Treat unknown Jira blocker metadata as optional V1 evidence while explicit blockers remain blocking |
 | [ADR-009](ADR-009-internal-llm-explanation-harness.md) | Partially superseded by ADR-010 | Internal provider-neutral explanation harness with minimized policy input and deterministic fake generation |
-| [ADR-010](ADR-010-strict-explanation-validation-and-ui.md) | Accepted | Exact backend-owned explanation templates, additive read-time API enrichment, and frontend rendering |
+| [ADR-010](ADR-010-strict-explanation-validation-and-ui.md) | Partially superseded by ADR-011 | Exact backend-owned explanation templates, additive read-time API enrichment, and frontend rendering |
+| [ADR-011](ADR-011-grounded-explanation-code-validation.md) | Accepted | Ground untrusted generated reason/action codes in policy facts before deterministic rendering |

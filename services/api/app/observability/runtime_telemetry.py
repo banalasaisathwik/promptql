@@ -53,6 +53,8 @@ SPAN_ATTRIBUTE_ALLOWLIST = frozenset(
         "promptql.pagination.page_count",
         "promptql.llm.operation",
         "promptql.llm.result",
+        "promptql.llm.validation.result",
+        "promptql.llm.validation.failure_category",
         "promptql.llm.input_tokens",
         "promptql.llm.output_tokens",
         "error.type",
