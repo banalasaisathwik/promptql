@@ -17,6 +17,7 @@ from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.fixture_catalog import FAILED_CI_REQUEST, MERGE_READY_REQUEST
 from app.connectors.models import ConnectorRequest, GitHubPullRequest, JiraIssue
 from app.explanations import (
+    LLMProviderName,
     LLMStructuredResponse,
     MergeReadinessExplanationService,
 )
@@ -43,6 +44,8 @@ class FailingGitHubConnector:
 
 
 class AlteredExplanationClient:
+    provider = LLMProviderName.FAKE
+
     async def generate_structured(self, explanation_input):
         return LLMStructuredResponse(
             output={

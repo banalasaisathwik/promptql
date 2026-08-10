@@ -1,5 +1,3 @@
-pass
-
 import os
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -21,17 +19,23 @@ class TelemetryConfigurationError(RuntimeError):
 
 
 class GitHubConnectorMode(StrEnum):
-    pass
-
     FAKE = "fake"
     GITHUB = "github"
 
 
 class JiraConnectorMode(StrEnum):
-    pass
-
     FAKE = "fake"
     JIRA = "jira"
+
+
+class LLMProvider(StrEnum):
+    FAKE = "fake"
+    GEMINI = "gemini"
+    OPENAI = "openai"
+
+
+class LLMConfigurationError(RuntimeError):
+    pass
 
 
 def _parse_github_api_base_url(raw_url: str) -> str:
@@ -110,6 +114,34 @@ def _parse_jira_timeout(raw_timeout: str) -> float:
     return timeout
 
 
+def _parse_llm_timeout(raw_timeout: str, variable_name: str) -> float:
+    try:
+        timeout = float(raw_timeout)
+    except ValueError:
+        raise LLMConfigurationError(
+            f"{variable_name} must be a number."
+        ) from None
+    if not isfinite(timeout) or timeout <= 0 or timeout > 120:
+        raise LLMConfigurationError(
+            f"{variable_name} must be greater than 0 and at most 120."
+        )
+    return timeout
+
+
+def _parse_llm_max_output_tokens(raw_value: str, variable_name: str) -> int:
+    try:
+        max_output_tokens = int(raw_value)
+    except ValueError:
+        raise LLMConfigurationError(
+            f"{variable_name} must be an integer."
+        ) from None
+    if max_output_tokens < 1 or max_output_tokens > 4_096:
+        raise LLMConfigurationError(
+            f"{variable_name} must be between 1 and 4096."
+        )
+    return max_output_tokens
+
+
 def _parse_boolean(raw_value: str, variable_name: str) -> bool:
     normalized_value = raw_value.strip().lower()
     if normalized_value in {"true", "1", "yes"}:
@@ -122,8 +154,6 @@ def _parse_boolean(raw_value: str, variable_name: str) -> bool:
 
 
 def _parse_otlp_headers(raw_headers: str) -> dict[str, str]:
-    pass
-
     if not raw_headers.strip():
         return {}
 
@@ -168,8 +198,6 @@ def _validate_otlp_endpoint(raw_endpoint: str) -> str | None:
 
 
 def parse_postgresql_url(raw_url: str, variable_name: str) -> URL:
-    pass
-
     if not raw_url.strip():
         raise DatabaseConfigurationError(f"{variable_name} is required.")
 
@@ -196,15 +224,11 @@ def parse_postgresql_url(raw_url: str, variable_name: str) -> URL:
         )
 
 
-
-
     return url.set(drivername="postgresql+psycopg")
 
 
 @dataclass(frozen=True)
 class DatabaseSettings:
-    pass
-
     database_url: URL
 
     @classmethod
@@ -219,8 +243,6 @@ class DatabaseSettings:
 
 @dataclass(frozen=True)
 class GitHubSettings:
-    pass
-
     mode: GitHubConnectorMode
     token: str | None = field(repr=False)
     api_base_url: str
@@ -256,8 +278,6 @@ class GitHubSettings:
 
 @dataclass(frozen=True)
 class JiraSettings:
-    pass
-
     mode: JiraConnectorMode
     base_url: str | None
     email: str | None = field(repr=False)
@@ -307,9 +327,62 @@ class JiraSettings:
 
 
 @dataclass(frozen=True)
-class TelemetrySettings:
-    pass
+class LLMSettings:
+    provider: LLMProvider
+    api_key: str | None = field(repr=False)
+    model: str | None
+    request_timeout_seconds: float
+    max_output_tokens: int
 
+    @classmethod
+    def from_environment(cls) -> "LLMSettings":
+        raw_provider = os.environ.get("PROMPTQL_LLM_PROVIDER", "fake").strip()
+        try:
+            provider = LLMProvider(raw_provider)
+        except ValueError:
+            raise LLMConfigurationError(
+                "PROMPTQL_LLM_PROVIDER must be fake, gemini, or openai."
+            ) from None
+
+        if provider is LLMProvider.GEMINI:
+            variable_prefix = "GEMINI"
+        else:
+            variable_prefix = "OPENAI"
+
+        api_key = os.environ.get(f"{variable_prefix}_API_KEY", "").strip() or None
+        model = os.environ.get(f"{variable_prefix}_MODEL", "").strip() or None
+        if provider is not LLMProvider.FAKE:
+            if api_key is None:
+                raise LLMConfigurationError(
+                    f"{variable_prefix}_API_KEY is required when the LLM "
+                    f"provider is {provider.value}."
+                )
+            if model is None:
+                raise LLMConfigurationError(
+                    f"{variable_prefix}_MODEL is required when the LLM "
+                    f"provider is {provider.value}."
+                )
+
+        timeout_name = f"{variable_prefix}_REQUEST_TIMEOUT_SECONDS"
+        token_limit_name = f"{variable_prefix}_MAX_OUTPUT_TOKENS"
+
+        return cls(
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            request_timeout_seconds=_parse_llm_timeout(
+                os.environ.get(timeout_name, "30"),
+                timeout_name,
+            ),
+            max_output_tokens=_parse_llm_max_output_tokens(
+                os.environ.get(token_limit_name, "512"),
+                token_limit_name,
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class TelemetrySettings:
     enabled: bool
     console_enabled: bool
     service_name: str

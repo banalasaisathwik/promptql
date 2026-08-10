@@ -4,7 +4,7 @@
 
 Backend connector contracts, deterministic and mocked-HTTP connectors, policy,
 runtime transitions, workflow execution, PostgreSQL safety gates,
-observability, internal deterministic LLM explanations, and V1 HTTP behavior
+observability, deterministic and real-adapter LLM explanations, and V1 HTTP behavior
 have standard-library unit and integration tests:
 
 ```bash
@@ -43,6 +43,20 @@ decision preservation, sanitized failures, persistence non-mutation, and
 bounded telemetry without contacting a model provider. API integration tests
 separately prove the existing validated response contract remains unchanged.
 
+`test_llm_provider_factory.py` verifies the credential-free fake default,
+OpenAI/Gemini configuration requirements, secret-free errors/representations,
+the fixed Google compatibility URL, and `max_retries=0` SDK construction.
+`test_openai_llm_client.py` injects a small
+in-process SDK double. It proves Responses Structured Output request options,
+token handling, deterministic-validator integration, refusal/invalid-response
+handling, and the complete sanitized provider taxonomy. These tests do not
+create OpenAI network traffic. `test_gemini_llm_client.py` injects the same SDK
+boundary and proves Gemini's Chat Completions structured request, token mapping,
+the low-complexity provider schema, strict PromptQL validator preservation,
+refusal handling, Google's HTTP 400 invalid-key
+normalization, and a sanitized structured failure log without opening a Google
+connection.
+
 PostgreSQL repository and migration tests are opt-in. Without credentials they
 report explicit skips and do not create an engine or connect to a database.
 
@@ -60,6 +74,15 @@ is the application URL or the pooled/direct form of the same Neon branch. They
 use `TEST_DATABASE_URL` as Alembic's target only inside the guarded test process
 and clean up only run IDs created by the tests.
 
+## Manual real-provider smoke test
+
+Automated tests must never contact OpenAI or Gemini. The opt-in live procedure
+is in the root `README.md`. Run it only with a local API key, an explicitly selected
+Structured Output-capable model, an authorized test request, and repository
+owner approval. Inspect the final API explanation and bounded telemetry, but do
+not print the prompt, model output, API key, headers, request IDs, or raw
+exceptions.
+
 ## Intended layers
 
 | Layer | Intended location | Purpose | Status |
@@ -69,6 +92,8 @@ and clean up only run IDs created by the tests.
 | Backend API integration | `services/api/tests/integration` | V1 catalog, raw inspection, completed runs, typed failed runs, delegation, and validation | Configured with `unittest` discovery and FastAPI TestClient |
 | Observability | `services/api/tests/unit/test_runtime_observability.py` and `services/api/tests/integration/test_observability_api.py` | In-memory spans/metrics, hierarchy, durable terminal emission, redaction, exporter isolation, health exclusion | Runs without Grafana credentials |
 | LLM explanation harness | `services/api/tests/unit/test_merge_readiness_explanations.py` | Minimized input, generated/validated trust separation, grounded code completeness, deterministic rendering, sanitized failures, persistence isolation, and safe telemetry | Internal fake/recording clients only; no real provider calls |
+| OpenAI adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_openai_llm_client.py` | Configuration, one-attempt SDK construction, Structured Output request shape, provider error normalization, token telemetry, validator preservation, and secret exclusion | Injected SDK boundary only; no external requests |
+| Gemini compatibility adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_gemini_llm_client.py` | Gemini-specific configuration, fixed Google endpoint, Chat Completions structured parsing, token mapping, validator preservation, and sanitized failures | Injected OpenAI SDK boundary only; no external requests |
 | PostgreSQL integration | `services/api/tests/integration/test_postgres_runtime_persistence.py` | Alembic schema, durable reconstruction, ordering, failures, and conflicts | Opt-in; skipped unless guarded test credentials are configured |
 | Cross-layer/end-to-end | Future repository-level area | Browser-to-API journeys | Planned; tooling not selected |
 | Agent evaluations | `evals` when introduced | Quality and regressions | Planned; area absent |

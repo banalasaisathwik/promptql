@@ -86,7 +86,7 @@ function AnalysisResult({ analysis }: { analysis: PullRequestMergeReadiness }) {
 
       {analysis.explanation ? (
         <section className="result-section explanation-card">
-          <p className="step-label">Validated fake LLM explanation</p>
+          <p className="step-label">Validated LLM explanation</p>
           <h3>Why this decision was returned</h3>
           <p>{analysis.explanation.summary}</p>
           <h4>Reasons</h4>

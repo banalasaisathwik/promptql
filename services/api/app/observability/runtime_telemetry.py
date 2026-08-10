@@ -52,15 +52,33 @@ SPAN_ATTRIBUTE_ALLOWLIST = frozenset(
         "promptql.http.status_class",
         "promptql.pagination.page_count",
         "promptql.llm.operation",
+        "promptql.llm.provider",
         "promptql.llm.result",
+        "promptql.llm.failure.category",
         "promptql.llm.validation.result",
         "promptql.llm.validation.failure_category",
         "promptql.llm.input_tokens",
         "promptql.llm.output_tokens",
+        "promptql.llm.total_tokens",
         "error.type",
     }
 )
 SUPPORTED_WORKFLOWS = frozenset({("merge_readiness", "1")})
+SUPPORTED_LLM_PROVIDERS = frozenset({"fake", "gemini", "openai"})
+SUPPORTED_LLM_FAILURE_CATEGORIES = frozenset(
+    {
+        "authentication",
+        "permission",
+        "rate_limit",
+        "timeout",
+        "connection",
+        "invalid_request",
+        "refusal",
+        "invalid_structured_response",
+        "upstream_unavailable",
+        "unexpected",
+    }
+)
 
 
 class SpanObservation:
@@ -235,10 +253,19 @@ class RuntimeTelemetry:
             },
         )
 
-    def observe_llm_explanation(self) -> Iterator[SpanObservation]:
+    def observe_llm_explanation(
+        self,
+        provider: str,
+    ) -> Iterator[SpanObservation]:
+        if provider not in SUPPORTED_LLM_PROVIDERS:
+            return self._observe_span("llm.invalid", {})
+
         return self._observe_span(
             "merge_readiness.explanation.generate",
-            {"promptql.llm.operation": "merge_readiness_explanation"},
+            {
+                "promptql.llm.operation": "merge_readiness_explanation",
+                "promptql.llm.provider": provider,
+            },
         )
 
     def record_llm_explanation(
@@ -247,10 +274,15 @@ class RuntimeTelemetry:
         result: LLMCallResult,
         input_tokens: int | None,
         output_tokens: int | None,
+        total_tokens: int | None,
+        provider: str,
     ) -> None:
         try:
+            if provider not in SUPPORTED_LLM_PROVIDERS:
+                raise ValueError("LLM provider is not approved for metrics")
             duration_labels = {
                 "llm.operation": "merge_readiness_explanation",
+                "llm.provider": provider,
                 "llm.result": result.value,
             }
             validate_metric_labels(
@@ -265,18 +297,35 @@ class RuntimeTelemetry:
             token_counts = (
                 (LLMTokenType.INPUT, input_tokens),
                 (LLMTokenType.OUTPUT, output_tokens),
+                (LLMTokenType.TOTAL, total_tokens),
             )
             for token_type, token_count in token_counts:
                 if token_count is None:
                     continue
                 token_labels = {
                     "llm.operation": "merge_readiness_explanation",
+                    "llm.provider": provider,
                     "llm.token.type": token_type.value,
                 }
                 validate_metric_labels(LLM_TOKEN_USAGE_METRIC, token_labels)
                 self._llm_token_usage.add(max(0, token_count), token_labels)
         except Exception:
             self._warn_telemetry_failure("metrics")
+
+    def record_llm_failure(self, provider: str, failure_category: str) -> None:
+        try:
+            if provider not in SUPPORTED_LLM_PROVIDERS:
+                raise ValueError("LLM provider is not approved for logs")
+            if failure_category not in SUPPORTED_LLM_FAILURE_CATEGORIES:
+                raise ValueError("LLM failure category is not approved for logs")
+            self._event_logger.emit(
+                "llm.explanation.failed",
+                logging.ERROR,
+                llm_provider=provider,
+                failure_category=failure_category,
+            )
+        except Exception:
+            self._warn_telemetry_failure("logs")
 
     def checkpoint(self, checkpoint: PersistenceCheckpoint) -> Iterator[None]:
         return use_persistence_checkpoint(checkpoint)

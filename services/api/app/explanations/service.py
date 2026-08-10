@@ -8,6 +8,7 @@ from app.explanations.errors import (
     ExplanationValidationError,
     ExplanationValidationFailureCode,
     MergeReadinessExplanationError,
+    LLMProviderError,
 )
 from app.explanations.models import (
     GeneratedExplanation,
@@ -85,6 +86,10 @@ class MergeReadinessExplanationService:
             output_tokens=(
                 token_usage.output_tokens if token_usage is not None else None
             ),
+            total_tokens=(
+                token_usage.total_tokens if token_usage is not None else None
+            ),
+            provider=self._client.provider.value,
         )
 
     def _validate_generated_output(
@@ -107,17 +112,41 @@ class MergeReadinessExplanationService:
         explanation_input = build_explanation_input(policy_result)
         started_at_ns = self._duration_clock()
 
-        with self._telemetry.observe_llm_explanation() as observation:
+        with self._telemetry.observe_llm_explanation(
+            self._client.provider.value
+        ) as observation:
             try:
                 generated_response = await self._client.generate_structured(
                     explanation_input
                 )
+            except LLMProviderError as error:
+                result = LLMCallResult.PROVIDER_FAILURE
+                observation.set_attributes(
+                    **{
+                        "promptql.llm.result": result.value,
+                        "promptql.llm.failure.category": error.category.value,
+                    }
+                )
+                observation.mark_error(FailureCategory.LLM_PROVIDER_FAILURE)
+                self._telemetry.record_llm_failure(
+                    self._client.provider.value,
+                    error.category.value,
+                )
+                self._record_call(started_at_ns, result, None)
+                raise MergeReadinessExplanationError(
+                    ExplanationErrorCode.PROVIDER_FAILURE,
+                    "The explanation provider failed.",
+                ) from None
             except Exception:
                 result = LLMCallResult.PROVIDER_FAILURE
                 observation.set_attributes(
                     **{"promptql.llm.result": result.value}
                 )
                 observation.mark_error(FailureCategory.LLM_PROVIDER_FAILURE)
+                self._telemetry.record_llm_failure(
+                    self._client.provider.value,
+                    "unexpected",
+                )
                 self._record_call(started_at_ns, result, None)
                 raise MergeReadinessExplanationError(
                     ExplanationErrorCode.PROVIDER_FAILURE,
@@ -164,6 +193,10 @@ class MergeReadinessExplanationService:
                             ),
                         }
                     )
+                    if generated.token_usage.total_tokens is not None:
+                        safe_attributes["promptql.llm.total_tokens"] = (
+                            generated.token_usage.total_tokens
+                        )
                 observation.set_attributes(**safe_attributes)
                 self._record_call(
                     started_at_ns,

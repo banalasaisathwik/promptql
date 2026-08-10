@@ -18,6 +18,7 @@ from app.explanations import (
     FakeLLMClient,
     GeneratedExplanation,
     LLMStructuredResponse,
+    LLMProviderName,
     MergeReadinessExplanationError,
     MergeReadinessExplanationService,
     StrictMergeReadinessExplanationValidator,
@@ -93,6 +94,8 @@ def _generated_for(policy_result, summary="Untrusted generated prose."):
 
 
 class RecordingLLMClient:
+    provider = LLMProviderName.FAKE
+
     def __init__(self, response=None) -> None:
         self.response = response
         self.inputs = []
@@ -125,6 +128,8 @@ class RecordingLLMClient:
 
 
 class FailingLLMClient:
+    provider = LLMProviderName.FAKE
+
     async def generate_structured(self, _explanation_input):
         raise RuntimeError("private-provider-token=must-not-escape")
 
@@ -536,7 +541,15 @@ class MergeReadinessExplanationTests(unittest.IsolatedAsyncioTestCase):
             )
             token_points = harness.metric_points(LLM_TOKEN_USAGE_METRIC)
             self.assertEqual(len(duration_points), 1)
-            self.assertEqual(len(token_points), 2)
+            self.assertEqual(len(token_points), 3)
+            self.assertEqual(
+                {point.attributes["llm.token.type"] for point in token_points},
+                {"input", "output", "total"},
+            )
+            self.assertEqual(
+                span.attributes["promptql.llm.provider"],
+                "fake",
+            )
             telemetry_text = (
                 repr(span.attributes)
                 + repr(

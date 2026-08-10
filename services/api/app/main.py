@@ -16,6 +16,7 @@ from app.config import (
     GitHubSettings,
     JiraConnectorMode,
     JiraSettings,
+    LLMSettings,
 )
 from app.connectors.errors import FixtureNotFoundError
 from app.connectors.factory import (
@@ -32,9 +33,11 @@ from app.database import (
     verify_database_ready,
 )
 from app.explanations import (
-    FakeLLMClient,
+    GeminiLLMClient,
     LLMClient,
     MergeReadinessExplanationService,
+    OpenAILLMClient,
+    create_llm_client,
 )
 from app.observability import Observability, create_observability
 from app.runtime import (
@@ -98,6 +101,7 @@ def create_app(
     observability: Observability | None = None,
     github_settings: GitHubSettings | None = None,
     jira_settings: JiraSettings | None = None,
+    llm_settings: LLMSettings | None = None,
     llm_client: LLMClient | None = None,
 ) -> FastAPI:
     if observability is not None:
@@ -138,7 +142,8 @@ def create_app(
     if llm_client is not None:
         selected_llm_client = llm_client
     else:
-        selected_llm_client = FakeLLMClient()
+        resolved_llm_settings = llm_settings or LLMSettings.from_environment()
+        selected_llm_client = create_llm_client(resolved_llm_settings)
     explanation_service = MergeReadinessExplanationService(
         selected_llm_client,
         telemetry=app_observability.runtime_telemetry,
@@ -167,6 +172,8 @@ def create_app(
                 await github_connector.aclose()
             if isinstance(jira_connector, HttpJiraConnector):
                 await jira_connector.aclose()
+            if isinstance(selected_llm_client, (GeminiLLMClient, OpenAILLMClient)):
+                await selected_llm_client.aclose()
             app_observability.shutdown()
 
     application = FastAPI(title="PromptQL API", lifespan=lifespan)
