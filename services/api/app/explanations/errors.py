@@ -20,6 +20,24 @@ class ExplanationValidationFailureCode(StrEnum):
     MISSING_REQUIRED_ACTION = "missing_required_action"
 
 
+class LLMProviderFailureCategory(StrEnum):
+    AUTHENTICATION = "authentication"
+    PERMISSION = "permission"
+    RATE_LIMIT = "rate_limit"
+    TIMEOUT = "timeout"
+    CONNECTION = "connection"
+    INVALID_REQUEST = "invalid_request"
+    REFUSAL = "refusal"
+    INVALID_STRUCTURED_RESPONSE = "invalid_structured_response"
+    UPSTREAM_UNAVAILABLE = "upstream_unavailable"
+
+
+class LLMProviderError(RuntimeError):
+    def __init__(self, category: LLMProviderFailureCategory) -> None:
+        self.category = category
+        super().__init__("The explanation provider request failed.")
+
+
 class ExplanationValidationError(ValueError):
     def __init__(self, code: ExplanationValidationFailureCode) -> None:
         self.code = code

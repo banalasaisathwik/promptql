@@ -58,7 +58,8 @@ describe('MergeReadinessPanel', () => {
     expect(markup).toContain('decision-card--ready')
     expect(markup).toContain('id="decision-heading">ready</h3>')
     expect(markup).toContain('Backend returned ready.')
-    expect(markup).toContain('Validated fake LLM explanation')
+    expect(markup).toContain('Validated LLM explanation')
+    expect(markup).not.toContain('Validated fake LLM explanation')
     expect(markup).toContain('Validated explanation for ready.')
   })
 

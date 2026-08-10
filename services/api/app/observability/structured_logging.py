@@ -25,6 +25,7 @@ ALLOWED_EVENT_FIELDS = frozenset(
         "failure_category",
         "github_source",
         "jira_source",
+        "llm_provider",
         "telemetry_signal",
     }
 )

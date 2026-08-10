@@ -1,3 +1,4 @@
+from enum import StrEnum
 from typing import Annotated
 
 from pydantic import Field, StringConstraints
@@ -16,6 +17,12 @@ ExplanationText = Annotated[
 ]
 
 
+class LLMProviderName(StrEnum):
+    FAKE = "fake"
+    GEMINI = "gemini"
+    OPENAI = "openai"
+
+
 class MergeReadinessExplanationInput(ContractModel):
     decision: MergeReadinessDecision
     primary_reason_code: PolicyReasonCode
@@ -29,6 +36,7 @@ class MergeReadinessExplanationInput(ContractModel):
 class LLMTokenUsage(ContractModel):
     input_tokens: int = Field(ge=0)
     output_tokens: int = Field(ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
 
 
 class LLMStructuredResponse(ContractModel):

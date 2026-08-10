@@ -28,6 +28,7 @@ class LLMCallResult(StrEnum):
 class LLMTokenType(StrEnum):
     INPUT = "input"
     OUTPUT = "output"
+    TOTAL = "total"
 
 
 class StepOutcome(StrEnum):
@@ -92,10 +93,10 @@ METRIC_LABEL_ALLOWLISTS: dict[str, frozenset[str]] = {
         {"persistence.operation", "failure.category"}
     ),
     LLM_EXPLANATION_DURATION_METRIC: frozenset(
-        {"llm.operation", "llm.result"}
+        {"llm.operation", "llm.provider", "llm.result"}
     ),
     LLM_TOKEN_USAGE_METRIC: frozenset(
-        {"llm.operation", "llm.token.type"}
+        {"llm.operation", "llm.provider", "llm.token.type"}
     ),
 }
 

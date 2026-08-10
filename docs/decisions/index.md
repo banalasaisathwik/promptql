@@ -30,3 +30,6 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-009](ADR-009-internal-llm-explanation-harness.md) | Partially superseded by ADR-010 | Internal provider-neutral explanation harness with minimized policy input and deterministic fake generation |
 | [ADR-010](ADR-010-strict-explanation-validation-and-ui.md) | Partially superseded by ADR-011 | Exact backend-owned explanation templates, additive read-time API enrichment, and frontend rendering |
 | [ADR-011](ADR-011-grounded-explanation-code-validation.md) | Accepted | Ground untrusted generated reason/action codes in policy facts before deterministic rendering |
+| [ADR-012](ADR-012-openai-structured-explanation-adapter.md) | Accepted | Optional async OpenAI Responses Structured Output adapter behind the existing deterministic validation boundary |
+| [ADR-013](ADR-013-gemini-openai-compatible-explanation-adapter.md) | Partially superseded by ADR-014 | Explicit Gemini provider using the OpenAI SDK with a fixed Google compatibility endpoint and unchanged deterministic validation |
+| [ADR-014](ADR-014-gemini-compact-claim-indexes.md) | Accepted | Use compact request-local indexes for Gemini claims before strict typed and semantic validation |

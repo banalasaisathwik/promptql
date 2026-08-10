@@ -74,6 +74,56 @@ JIRA_API_TOKEN=<local secret>
 JIRA_REQUEST_TIMEOUT_SECONDS=10
 ```
 
+Explanation generation is also selected independently. The deterministic fake
+is the credential-free default for local development and every automated test:
+
+```text
+PROMPTQL_LLM_PROVIDER=fake
+```
+
+OpenAI mode uses the Responses API and requires a local API key plus an
+explicit Structured Output-capable model. Never commit the key:
+
+```text
+PROMPTQL_LLM_PROVIDER=openai
+OPENAI_API_KEY=<local secret>
+OPENAI_MODEL=<approved model ID>
+OPENAI_REQUEST_TIMEOUT_SECONDS=30
+OPENAI_MAX_OUTPUT_TOKENS=512
+```
+
+Gemini mode still uses the installed OpenAI SDK, but the application fixes the
+SDK base URL to Google's OpenAI-compatible endpoint and uses Chat Completions
+structured parsing. Use Gemini-specific names so a Google key cannot be
+mistaken for an OpenAI key:
+
+```text
+PROMPTQL_LLM_PROVIDER=gemini
+GEMINI_API_KEY=<local Gemini API key>
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_REQUEST_TIMEOUT_SECONDS=30
+GEMINI_MAX_OUTPUT_TOKENS=512
+```
+
+`GEMINI_API_KEY` must contain a Gemini API key created in Google AI Studio. It
+is not an OpenAI key, Google OAuth access token, project ID, or service-account
+JSON value. If Google rejects the key, the terminal emits a safe event like:
+
+```json
+{"event":"llm.explanation.failed","failure_category":"authentication","llm_provider":"gemini"}
+```
+
+The real log also contains a timestamp and, when available, trace/span IDs. It
+never contains the key, raw provider message, prompt, output, headers, or URL.
+This structured application event is emitted even when trace/metric exporters
+are disabled; the telemetry flags control exporters, not error sanitization.
+
+Both real adapters send only the minimized policy decision/reason/action
+contract, disable SDK retries, discard generated prose, and validate codes
+before rendering backend-owned text. OpenAI additionally sets `store=False` on
+its Responses request. Provider failure does not fall back to the fake and does
+not change the stored policy run.
+
 Telemetry is safe and disabled by default. To inspect spans and metrics locally
 without an external service, opt into console exporters:
 
@@ -117,6 +167,73 @@ uv run python -m unittest discover -s tests -v
 
 PostgreSQL integration tests require a dedicated test branch and the explicit
 environment variables documented in [TESTING.md](docs/TESTING.md).
+
+## Manual live explanation-provider smoke test
+
+Ordinary tests never contact OpenAI or Gemini. Perform this only after placing
+one provider's API key in `services/api/.env` and explicitly choosing its
+model. Do not print the key, prompt, raw output, request ID, headers, or raw
+exception details.
+
+1. Keep both connectors deterministic so this smoke test exercises only the
+   selected provider boundary. The following example selects Gemini:
+
+   ```text
+   PROMPTQL_GITHUB_CONNECTOR=fake
+   PROMPTQL_JIRA_CONNECTOR=fake
+   PROMPTQL_LLM_PROVIDER=gemini
+   GEMINI_API_KEY=<local Gemini API key>
+   GEMINI_MODEL=gemini-2.5-flash
+   GEMINI_REQUEST_TIMEOUT_SECONDS=30
+   GEMINI_MAX_OUTPUT_TOKENS=512
+   ```
+
+2. From `services/api`, apply the existing migration and start FastAPI:
+
+   ```powershell
+   uv run --env-file .env alembic upgrade head
+   uv run --env-file .env python -m uvicorn app.main:app --reload
+   ```
+
+3. In another PowerShell window, submit the merge-ready fixture:
+
+   ```powershell
+   $requestBody = @{
+       repository_owner = "acme"
+       repository_name = "analytics"
+       pr_number = 1
+   } | ConvertTo-Json
+
+   $response = Invoke-RestMethod `
+       -Method Post `
+       -Uri "http://127.0.0.1:8000/v1/pull-request-merge-readiness" `
+       -ContentType "application/json" `
+       -Body $requestBody
+
+   $response.result.decision
+   $response.explanation
+   $response.explanation_error
+   ```
+
+   Verify the authoritative decision remains `ready`, the explanation uses the
+   existing deterministic wording, and `explanation_error` is empty. If the
+   provider fails, the policy result must remain present and the response must
+   contain only the existing sanitized explanation error.
+
+4. If telemetry is enabled, verify the explanation span contains only bounded
+   provider/result/failure attributes and input/output/total token counts. A
+   later `GET /v1/runs/{run_id}` currently generates another read-time
+   explanation and can incur another provider call.
+
+5. Stop FastAPI and restore deterministic local development:
+
+   ```text
+   PROMPTQL_LLM_PROVIDER=fake
+   GEMINI_API_KEY=
+   GEMINI_MODEL=
+   OPENAI_API_KEY=
+   OPENAI_MODEL=
+   ```
 
 ## Manual live GitHub smoke test
 

@@ -9,6 +9,7 @@ flowchart LR
     API --> PostgreSQL["Managed PostgreSQL<br/>Neon"]
     API -. "read-only REST" .-> GitHub["GitHub"]
     API -. "read-only REST" .-> Jira["Jira Cloud"]
+    API -. "optional structured explanation" .-> OpenAI["OpenAI Responses API"]
     API -. "OTLP traces and metrics" .-> Observability["Hosted observability<br/>Grafana Cloud"]
 ```
 
@@ -16,6 +17,7 @@ Plain-text alternative:
 
 ```text
 browser -> Vite React application -> FastAPI API -> Neon PostgreSQL
+                                      `-> optional OpenAI Responses API
                                       `-> OTLP traces/metrics -> Grafana Cloud
 ```
 
@@ -107,6 +109,8 @@ services/api/app/explanations/
 |-- models.py                    # Minimized input and structured output
 |-- protocols.py                 # LLMClient operation contract
 |-- fakes.py                     # Deterministic local/test implementation
+|-- factory.py                   # Application-boundary provider selection
+|-- openai_client.py             # Async Responses Structured Output adapter
 |-- errors.py                    # Typed sanitized failure categories
 |-- validator.py                # Ground generated codes in policy facts
 |-- templates.py                # Render approved user-facing wording
@@ -153,13 +157,16 @@ apps/web/src/features/inspection/
   recorded connector steps; the older inspection endpoint remains facts-only.
 - `MergeReadinessExplanationService` accepts only a completed
   `MergeReadinessResult`. It minimizes that result to stable decision,
-  reason, and action enums before calling an injected `LLMClient`; the
-  deterministic fake is the only current implementation. Pydantic validates
-  generated structure, then `StrictMergeReadinessExplanationValidator`
-  requires the generated decision/reason/action codes to be supported and
-  complete relative to the full policy result. Generated prose is discarded.
-  Approved templates render the existing API/frontend explanation after a
-  terminal run commits or is retrieved; explanations are not persisted.
+  reason, and action enums before calling an injected `LLMClient`. Application
+  assembly selects the deterministic fake by default or an explicitly
+  configured async `OpenAILLMClient`. The OpenAI adapter uses Responses
+  Structured Outputs with `store=False`, a configured timeout/token limit, and
+  SDK retries disabled. Pydantic validates generated structure, then
+  `StrictMergeReadinessExplanationValidator` requires the generated
+  decision/reason/action codes to be supported and complete relative to the
+  full policy result. Generated prose is discarded. Approved templates render
+  the existing API/frontend explanation after a terminal run commits or is
+  retrieved; explanations are not persisted.
 - `GitHubConnector` is an asynchronous protocol shared by fake and HTTP
   implementations. The application factory reads validated settings and
   injects one implementation; the workflow neither knows nor branches on the
@@ -208,9 +215,9 @@ apps/web/src/features/inspection/
   measurements and logs occur only after the terminal database commit.
 - An independently invoked explanation call creates one
   `merge_readiness.explanation.generate` span and bounded duration/token
-  metrics. Attributes contain only fixed operation, result, failure, and token
-  categories/counts; prompts, outputs, model/provider names, identities, and
-  exception text are excluded.
+  metrics. Attributes contain only fixed provider, operation, result, sanitized
+  failure, and token categories/counts; prompts, outputs, configured model
+  names, identities, request IDs, and exception text are excluded.
 - OpenTelemetry exports traces and metrics through OTLP HTTP/protobuf when
   explicitly enabled. Grafana Cloud is configuration, not a domain dependency;
   setup and exporter failures degrade safely without changing HTTP, runtime,
@@ -222,9 +229,9 @@ apps/web/src/features/inspection/
 
 Crash recovery, cancellation APIs, retries, distributed workers, queues, GitHub
 or Jira OAuth/app authentication, multi-tenant connector credentials,
-site-specific Jira blocker mapping, tenant isolation, retention, a real LLM
-provider, prompt management, dashboards, alerting, OpenTelemetry log export,
-and evaluations are not
+site-specific Jira blocker mapping, tenant isolation, retention, explanation
+persistence, prompt/model versioning, LLM retries/fallback, dashboards,
+alerting, OpenTelemetry log export, and evaluations are not
 implemented. Neon/Grafana resources and application deployment are not
 provisioned by this repository.
 
@@ -241,7 +248,60 @@ backend-owned templates before `MergeReadinessResponse` exposes it. The
 frontend validates the unchanged network shape and renders it separately from
 the authoritative policy result.
 
-The explanation is currently produced by `FakeLLMClient` and is not persisted.
-Validation or provider failure returns a sanitized `explanation_error` while
-the completed policy run remains usable. A real or probabilistic provider is
-not part of this architecture and would require a new persistence decision.
+The explanation is produced by `FakeLLMClient` by default or by the optional
+`OpenAILLMClient` or `GeminiLLMClient` when explicitly configured. Validation or provider failure
+returns a sanitized `explanation_error` while the completed policy run remains
+usable. Explanations are not persisted, so POST enrichment and later GET
+retrieval can each make a provider call in a real-provider mode. Persisting/versioning
+accepted explanations remains a separate architectural decision.
+
+## Explanation provider boundary
+
+`LLMSettings.from_environment()` validates the provider before application
+startup. `create_llm_client()` is the only production selection point:
+
+```text
+PROMPTQL_LLM_PROVIDER=fake
+  -> FakeLLMClient
+
+PROMPTQL_LLM_PROVIDER=openai + key + model
+  -> AsyncOpenAI(max_retries=0)
+  -> OpenAILLMClient.generate_structured()
+  -> responses.parse(text_format=GeneratedExplanation, store=False)
+  -> LLMStructuredResponse
+
+PROMPTQL_LLM_PROVIDER=gemini + Gemini key + model
+  -> AsyncOpenAI(base_url=fixed Google compatibility URL, max_retries=0)
+  -> GeminiLLMClient.generate_structured()
+  -> beta.chat.completions.parse(response_format=GeneratedExplanation)
+  -> LLMStructuredResponse
+```
+
+The SDK client owns HTTP/authentication and provider response parsing. The
+adapter owns minimized serialization and provider-error normalization. The
+provider-neutral service owns orchestration and telemetry. The deterministic
+validator owns semantic grounding, and backend templates own every visible
+word. This division keeps a schema-valid model response from becoming an
+authoritative business result.
+
+Gemini has an explicit provider identity and `GEMINI_*` configuration rather
+than reusing OpenAI names. The Google compatibility URL is fixed in the factory,
+so environment configuration cannot redirect either provider's secret to an
+arbitrary host. Both adapters feed the same provider-neutral structured result
+into the unchanged deterministic validator; generated prose is never exposed.
+
+Google's compatibility layer rejects the complete `GeneratedExplanation` JSON
+Schema because its enum and length constraints create too many serving states.
+`GeminiStructuredClaims` therefore asks the provider for a decision, an internal
+summary, and integer indexes into request-specific allowed reason/action lists.
+The adapter rejects duplicate or out-of-range indexes, maps accepted positions
+back to the original typed codes, and then builds the unchanged strict
+`GeneratedExplanation`. Every enum, length bound, completeness rule, and later
+semantic grounding check still applies before anything can be rendered.
+
+Google may also report an invalid Gemini API key as HTTP 400 `INVALID_ARGUMENT`
+instead of HTTP 401. `GeminiLLMClient` recognizes only Google's exact nested
+invalid-key response and normalizes it to the existing `authentication`
+category. `MergeReadinessExplanationService` emits one safe
+`llm.explanation.failed` event containing only the bounded provider and failure
+category; the public response remains the generic `provider_failure` contract.

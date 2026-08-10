@@ -867,3 +867,166 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** Does a future real-provider contract need stable
   per-finding IDs in addition to reason codes so it can explain repeated checks
   individually without receiving connector values?
+
+### 2026-08-09 — Isolate a real model provider behind a deterministic adapter
+
+- **Concept:** An SDK client and an application adapter solve different
+  problems. `AsyncOpenAI` owns HTTP, authentication, timeouts, and provider
+  response types. `OpenAILLMClient` translates the small PromptQL input/output
+  contract and normalizes provider failures. The explanation service and
+  deterministic validator remain provider-neutral.
+- **Important syntax:** `await client.responses.parse(...,
+  text_format=GeneratedExplanation)` asks the SDK to derive a Structured Output
+  schema from Pydantic and returns typed `output_parsed`. `store=False` prevents
+  ordinary response storage, `max_retries=0` disables hidden SDK retries, and a
+  frozen dataclass field declared with `field(repr=False)` keeps the API key out
+  of settings representation. Ordered `except` clauses matter because timeout
+  is a subclass of connection failure and specific HTTP errors are subclasses
+  of the generic status error.
+- **Implementation locations:** `app/config.py` validates fake/OpenAI settings;
+  `app/explanations/factory.py` is the only production selection point;
+  `openai_client.py` owns the async Responses request and sanitized taxonomy;
+  `service.py` still calls only `LLMClient` and the unchanged deterministic
+  validator; observability records bounded provider/result/failure and token
+  data. `test_openai_llm_client.py` injects the SDK boundary and never opens a
+  network connection.
+- **Design decision:** Use the official SDK with Responses Structured Outputs,
+  but keep semantic grounding in PromptQL. Only the minimized decision and
+  stable reason/action codes cross the provider boundary; generated prose is
+  discarded and approved templates create all visible text.
+- **Invariant or failure behavior:** The deterministic policy result remains
+  authoritative. Authentication, permission, rate-limit, timeout, connection,
+  invalid-request, refusal, invalid-structured-response, and upstream failures
+  become sanitized categories. They never fall back to fake, mutate the stored
+  run, expose provider details, or change a completed policy decision.
+- **Trade-off:** The official SDK reduces protocol/parsing drift but adds a
+  production dependency and vendor-specific adapter. Explanations are still
+  read-time enrichment, so OpenAI mode can add latency and token cost to both
+  POST and later GET requests. Monetary cost is not hardcoded because pricing
+  varies by model and time; provider token counts are the stable measurement.
+- **Validation evidence:** The focused provider/config/explanation/telemetry
+  suite passed 46 tests. Complete backend discovery ran 151 tests: 147 passed
+  and four PostgreSQL tests skipped because `TEST_DATABASE_URL` was absent.
+  Frontend verification passed 10 tests, Oxlint, TypeScript, and the Vite build.
+  No automated test contacted OpenAI or another external service.
+- **Unresolved question:** Offline explanation evals and explicit prompt/model
+  versioning are needed before tuning the fixed instructions or comparing
+  provider/model changes on representative policy results.
+### 2026-08-10 — Use one SDK without hiding two provider boundaries
+
+- **Concept:** SDK compatibility does not mean API-operation identity. The
+  OpenAI SDK can authenticate and send HTTP to Google's compatibility endpoint,
+  but PromptQL must still select the correct provider, base URL, request shape,
+  response fields, and token names explicitly.
+- **Important syntax:** `AsyncOpenAI(base_url=..., max_retries=0)` redirects the
+  SDK transport without replacing the application protocol. For Gemini,
+  `await client.beta.chat.completions.parse(messages=...,
+  response_format=GeneratedExplanation)` returns the typed value at
+  `choices[0].message.parsed`; Chat usage uses `prompt_tokens` and
+  `completion_tokens`, which the adapter maps to PromptQL's `input_tokens` and
+  `output_tokens`. A `StrEnum` member keeps provider selection and telemetry
+  values closed and readable.
+- **Implementation locations:** `app/config.py` owns explicit `gemini` and
+  `GEMINI_*` validation; `app/explanations/factory.py` fixes Google's
+  compatibility URL; `gemini_client.py` owns the Chat Completions translation;
+  `instructions.py`, the service, validator, and templates remain
+  provider-neutral. `test_gemini_llm_client.py` and
+  `test_llm_provider_factory.py` use SDK doubles and never contact Google.
+- **Design decision:** Model Gemini as a separate provider while reusing the
+  installed OpenAI SDK. This preserves accurate credentials and telemetry and
+  avoids an arbitrary `OPENAI_BASE_URL` that could redirect a secret to an
+  unsafe host. OpenAI keeps its native Responses operation; Gemini uses the
+  compatibility operation Google documents.
+- **Invariant or failure behavior:** The deterministic policy result remains
+  authoritative. Generated prose is discarded, the Google key can go only to
+  the fixed Google endpoint, and provider authentication, quota, network,
+  refusal, malformed-output, or upstream failures stay sanitized. There is no
+  automatic fallback and no mutation of the completed runtime run.
+- **Trade-off:** Two small adapters duplicate some provider-error mapping, but
+  make the incompatible request/response shapes visible to a learner and keep
+  each provider easy to remove. A generic adapter would contain more branching
+  and obscure which API contract is actually being used.
+- **Validation evidence:** Focused provider/configuration/explanation tests ran
+  43 tests successfully. Complete backend discovery ran 159 tests successfully,
+  with four PostgreSQL tests skipped because `TEST_DATABASE_URL` was absent.
+  Frontend verification passed 10 tests, Oxlint, TypeScript/Vite build, and
+  Python `compileall`. Automated tests made no OpenAI or Google request.
+- **Unresolved question:** A manual Gemini smoke test with an authorized local
+  key is still required to prove the selected Google account has access to
+  `gemini-2.5-flash` and sufficient quota.
+
+### 2026-08-10 — Adapt strict claims to a provider's schema limits
+
+- **Concept:** Provider-side structural validation and application-side trust
+  validation do not need identical schemas. Google could not serve the complete
+  enum-heavy PromptQL schema, so the transport uses compact request-local
+  indexes while strict Pydantic and semantic validation still run afterward.
+- **Important syntax:** `list[int]` produces a small JSON Schema. A tuple built
+  with `dict.fromkeys(...)` deduplicates allowed codes while preserving order.
+  Bounds checks reject negative/out-of-range positions before
+  `GeneratedExplanation(...)` converts mapped strings into closed enums.
+  `StructuredEventLogger.emit(..., llm_provider=...,
+  failure_category=...)` logs only allowlisted operational categories.
+- **Implementation locations:** `gemini_client.py` builds
+  `GeminiExplanationInput`, parses `GeminiStructuredClaims`, maps indexes, and
+  then constructs the existing strict model. `service.py`,
+  `runtime_telemetry.py`, and `structured_logging.py` emit one safe failure
+  event. `test_gemini_llm_client.py` proves the compact schema, mapping,
+  out-of-range rejection, invalid-key classification, logging, and redaction.
+- **Design decision:** Keep the clear `GEMINI_*` names and use request-local
+  indexes rather than unconstrained generated code strings. This prevents the
+  provider from inventing a code without reintroducing the schema complexity
+  Google rejected. ADR-014 records the decision.
+- **Invariant or failure behavior:** The policy result and deterministic
+  validator remain authoritative. Indexes are never durable identifiers;
+  duplicate or invalid positions fail closed. Logs contain provider/category
+  only, and credentials, raw exceptions, prompts, outputs, payloads, request
+  IDs, URLs, and headers remain absent. Logging cannot change workflow results.
+- **Trade-off:** Positional claims add adapter mapping and are meaningful only
+  within one request, but they retain real claim selection and completeness
+  validation. Copying policy codes automatically would be simpler but would make
+  the LLM validation harness meaningless.
+- **Validation evidence:** Sanitized live diagnostics first reproduced Google's
+  schema-state rejection and the unconstrained-code validation failure. The
+  final live PromptQL path succeeded with `decision=ready`, one rendered reason,
+  and no actions using the configured `gemini-2.5-flash`. The focused suite
+  passed 48 tests; complete backend discovery ran 162 tests successfully, with
+  four PostgreSQL tests skipped because `TEST_DATABASE_URL` was absent. Python
+  `compileall` passed.
+- **Unresolved question:** Live blocked and unknown cases should join a future
+  provider smoke-test/evaluation set before prompt or model tuning.
+
+### 2026-08-10 — Keep provider identity out of user-facing explanation labels
+
+- **Concept:** A UI label should describe the guarantee the user receives, not
+  the replaceable implementation behind it. PromptQL guarantees that the
+  explanation passed deterministic validation, whether the configured client is
+  fake, Gemini, OpenAI, or a later provider.
+- **Important syntax:** JSX text between `<p>...</p>` is a literal rendered by
+  React; it is not derived from response data. The focused test uses both
+  `toContain(...)` and `not.toContain(...)` so the neutral label is required and
+  the stale provider-specific wording cannot silently return.
+- **Implementation locations:** `MergeReadinessPanel.tsx` owns the presentation
+  label, while `app/config.py`, `app/explanations/factory.py`, and `app/main.py`
+  continue to own restart-time provider selection. Neither
+  `MergeReadinessResponse` nor the frontend `PullRequestMergeReadiness` type
+  contains provider or model metadata.
+- **Design decision:** Change only the hardcoded frontend wording. Adding
+  provider/model fields to the public response would increase coupling and
+  disclose operational configuration without changing explanation behavior.
+- **Invariant or failure behavior:** The policy result remains authoritative,
+  the validated explanation payload is unchanged, and provider/model identity
+  remains internal. Safe telemetry may record an allowlisted provider and
+  numeric token counts, but never prompts, generated output, credentials, or
+  raw provider errors.
+- **Trade-off:** The neutral label cannot tell a user which provider served a
+  request. That is intentional for this product panel; operators use bounded
+  telemetry instead. A separate authenticated diagnostics surface would be the
+  appropriate future boundary if provider visibility becomes necessary.
+- **Validation evidence:** Focused backend provider, OpenAI adapter, and
+  explanation tests passed 38 tests. The focused panel suite passed six tests.
+  A fresh application process with `PROMPTQL_LLM_PROVIDER=openai` selected
+  `OpenAILLMClient`. No real OpenAI call ran because the current local
+  configuration selects Gemini and contains no OpenAI key or model.
+- **Unresolved question:** Should a future operator-only diagnostics endpoint
+  expose provider health without expanding the public merge-readiness schema?

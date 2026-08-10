@@ -1,5 +1,6 @@
 from app.explanations.models import (
     GeneratedExplanation,
+    LLMProviderName,
     LLMStructuredResponse,
     LLMTokenUsage,
     MergeReadinessExplanationInput,
@@ -7,6 +8,8 @@ from app.explanations.models import (
 
 
 class FakeLLMClient:
+    provider = LLMProviderName.FAKE
+
     async def generate_structured(
         self,
         explanation_input: MergeReadinessExplanationInput,
@@ -44,5 +47,6 @@ class FakeLLMClient:
             token_usage=LLMTokenUsage(
                 input_tokens=input_token_count,
                 output_tokens=output_token_count,
+                total_tokens=input_token_count + output_token_count,
             ),
         )
