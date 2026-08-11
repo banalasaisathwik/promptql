@@ -117,6 +117,39 @@ services/api/app/explanations/
 `-- service.py                   # Generation, parsing, validation, rendering
 ```
 
+A manually invoked, versioned eval boundary reuses that production path without
+entering FastAPI or application persistence:
+
+```text
+services/api/app/evals/
+|-- cases.py                     # Development and untouched holdout inputs
+|-- models.py                    # Typed observations, metrics, reports, baselines
+|-- observation.py               # One production adapter/parser/validator attempt
+|-- graders.py                   # Pure sets, rates, reliability, thresholds
+|-- reporting.py                 # Safe JSONL/JSON, summaries, comparisons
+`-- runner.py                    # Repeated samples, pacing, gates, and CLI
+```
+
+The logical prompt is `merge-readiness-explanation` version `v1`. The eleven
+inspected Stage 1 cases are `merge-readiness-development-v1`; six unexecuted
+variations form `merge-readiness-holdout-v1`. Expected claims always come from
+the pure policy and shared `required_explanation_claims()` function.
+
+`runner.py` defaults to three serial samples per case and a one-second delay
+between calls. Pacing is outside measured provider latency and never retries a
+failure. Every call becomes one observation. `graders.py` keeps all attempts in
+provider/attempt denominators but includes only returned candidates in model-
+quality denominators. The completed report separately states execution,
+quality-threshold, operational-threshold, and combined release outcomes.
+
+JSONL observations flush incrementally under ignored `local-artifacts/`; a
+typed JSON report and optional compatible baseline are written after grading.
+Normal holdout artifacts and console output contain aggregates only. Explicit
+`--debug-holdout-details` reveals per-case holdout claims and therefore spends
+that holdout. No artifact contains prompts, generated prose, connector
+payloads, repository/Jira identity, credentials, raw responses, exception text,
+or cost without explicit versioned pricing configuration.
+
 ```text
 apps/web/src/features/inspection/
 ├── types.ts                  # What data shapes exist in TypeScript?
@@ -230,10 +263,12 @@ apps/web/src/features/inspection/
 Crash recovery, cancellation APIs, retries, distributed workers, queues, GitHub
 or Jira OAuth/app authentication, multi-tenant connector credentials,
 site-specific Jira blocker mapping, tenant isolation, retention, explanation
-persistence, prompt/model versioning, LLM retries/fallback, dashboards,
-alerting, OpenTelemetry log export, and evaluations are not
-implemented. Neon/Grafana resources and application deployment are not
-provisioned by this repository.
+persistence, LLM retries/fallback, prompt optimization, hosted eval services,
+LLM-as-a-judge, production-traffic eval collection, dashboards, alerting, and
+OpenTelemetry log export are not implemented. Neon/Grafana resources and
+application deployment are not provisioned by this repository. The local eval
+harness exists, but no Stage 2 development or holdout provider run has been
+authorized or executed.
 
 ## Validated explanation response boundary
 

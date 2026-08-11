@@ -1,3 +1,7 @@
+PROMPT_ID = "merge-readiness-explanation"
+PROMPT_VERSION = "v1"
+
+
 SYSTEM_INSTRUCTIONS = (
     "You produce only structured merge-readiness claims. "
     "Copy the supplied decision exactly. Include every supplied blocker or "

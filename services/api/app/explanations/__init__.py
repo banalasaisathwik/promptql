@@ -27,6 +27,7 @@ from app.explanations.service import (
 from app.explanations.templates import render_validated_explanation
 from app.explanations.validator import (
     StrictMergeReadinessExplanationValidator,
+    required_explanation_claims,
 )
 
 __all__ = [
@@ -52,4 +53,5 @@ __all__ = [
     "build_explanation_input",
     "create_llm_client",
     "render_validated_explanation",
+    "required_explanation_claims",
 ]

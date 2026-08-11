@@ -46,3 +46,7 @@ docs/mermaid/*
 
 # Local-only Git clean-filter tooling requested for this checkout
 .local-tools/
+
+# Paid/local evaluation observations may contain provider and model metadata.
+# Keep generated reports local even though their schema excludes sensitive data.
+local-artifacts/

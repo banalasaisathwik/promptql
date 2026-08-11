@@ -1030,3 +1030,107 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   configuration selects Gemini and contains no OpenAI key or model.
 - **Unresolved question:** Should a future operator-only diagnostics endpoint
   expose provider health without expanding the public merge-readiness schema?
+
+### 2026-08-11 — Separate controlled observations from production logging
+
+- **Concept:** Application telemetry and eval artifacts have different jobs.
+  Telemetry answers whether an operation succeeded using bounded shared labels;
+  a local eval row compares deterministic expected claims with one probabilistic
+  structured sample. The observation runner reuses production policy, input,
+  adapter/parser, and validator boundaries without calling FastAPI or storing an
+  application run.
+- **Important syntax:** `argparse` flags declared with `action="store_true"`
+  default to false, which makes paid-call acknowledgement explicit. Writing one
+  `model_dump_json()` value followed by `"\n"` produces JSONL that can retain
+  completed rows if a later case is interrupted. `finally` closes a real async
+  client, while an injected fake has no close method. A frozen Pydantic record
+  makes prompts, prose, identities, and raw errors structurally impossible to
+  serialize because those fields do not exist.
+- **Implementation locations:** `app/evals/cases.py` builds eleven stable cases
+  from fake connector facts; `models.py` defines the minimized local record;
+  `observation.py` owns preflight, acknowledgement, provider execution,
+  validation, and JSONL writing. `required_explanation_claims()` in
+  `app/explanations/validator.py` is shared by the validator and eval ground
+  truth. `test_explanation_eval_observation.py` proves stable IDs, deterministic
+  labels, fake dry-run, gating, serialization, failure separation, and content
+  exclusion without opening a network connection.
+- **Design decision:** Stage 1 records provisional `stage1-current` and
+  `stage1-observation-v1` labels rather than prematurely declaring a stable
+  production prompt contract. Inspected cases become development evidence;
+  Stage 2 must introduce separate unseen holdout cases, formal graders,
+  repeated sampling, thresholds, baselines, and durable prompt versioning.
+- **Invariant or failure behavior:** Expected claims always come from the pure
+  policy plus the validator's shared requirement derivation. Missing paid-call
+  acknowledgement prevents client construction. Reports never contain API
+  keys, headers, prompts, generated prose, connector payloads, repository/Jira
+  identity, raw provider responses, exception text, or cost estimates.
+- **Trade-off:** Serial execution and immediate JSONL flushing make the first
+  experiment easy to inspect and preserve partial evidence, but one sample per
+  case cannot measure reliability. The local report may contain provider/model
+  identity for comparison, so it is gitignored rather than treated as
+  application telemetry or a committed dataset.
+- **Validation evidence:** Focused observation tests passed 8 tests. Complete
+  backend discovery ran 170 tests successfully, with four
+  PostgreSQL tests skipped because `TEST_DATABASE_URL` was absent. Frontend
+  verification passed 10 tests, Oxlint, TypeScript/Vite build, and Python
+  `compileall`. The fake dry-run wrote 11 ignored JSONL rows. Real-provider
+  preflight validated the configured Gemini settings and reported zero calls and
+  a 5,632-token maximum output cap; no paid provider call was made.
+- **Live observation evidence:** After explicit approval and key rotation, one
+  eleven-case Gemini pass produced seven exact validator passes and four
+  sanitized `rate_limit` failures. The failures had no generated candidate, so
+  `schema_valid=false` and `validator_result=not_run` correctly distinguish a
+  provider availability/quota problem from invalid or ungrounded explanation
+  content. No retries were attempted because they would have been additional
+  unapproved samples.
+- **Unresolved question:** After inspecting the first live samples, which
+  unseen fixture variations best test generalization without reproducing the
+  development combinations?
+
+### 2026-08-11 — Separate eval operation from candidate quality
+
+- **Concept:** A planned provider call is an attempt even when it returns no
+  candidate. Provider-success and attempt-success rates therefore use all
+  planned calls, while schema, decision, code-set, validator, and model-quality
+  rates use only returned candidates. This preserves the Stage 1 truth that
+  Gemini had `7/11` provider success and `7/7` exact candidate quality.
+- **Important syntax:** Nested `for` loops make the case/sample order explicit;
+  `range(1, samples_per_case + 1)` gives stable one-based sample numbers.
+  `await sleep(delay)` occurs only when the current attempt is not the final
+  planned attempt, so pacing adds no retry and is excluded from latency measured
+  inside `observe_case()`. Set intersection/difference produce micro true
+  positives, false positives, and false negatives, while the strict validator
+  separately rejects duplicate tuple entries.
+- **Implementation locations:** `app/evals/cases.py` owns the disjoint
+  development and holdout inputs; `observation.py` classifies one attempt;
+  `graders.py` owns pure aggregation and V1 thresholds; `reporting.py` owns
+  incremental/redacted artifacts and compatible baselines; `runner.py` owns
+  preflight, repeated execution, pacing, gating, and exit semantics. Prompt
+  identity lives beside the production instructions rather than in the CLI.
+- **Design decision:** Use local deterministic graders instead of an LLM judge
+  or hosted eval service. Normal holdout artifacts expose aggregate outcomes
+  only; `--debug-holdout-details` is an explicit acknowledgement that inspecting
+  case claims spends the holdout. Baselines reject incompatible prompt,
+  dataset, provider, model, sample-count, or model-setting identities.
+- **Invariant or failure behavior:** One planned sample creates exactly one
+  outcome and no failure is retried. The completed JSON report is written before
+  threshold exit code 1. Execution completion, quality thresholds, provider
+  operation, and combined release status remain distinct. Artifacts exclude
+  prompts, prose, credentials, connector identities/payloads, raw responses,
+  exception text, and unversioned cost estimates.
+- **Trade-off:** Three samples and a one-second default delay are inexpensive
+  and reduce burst pressure, but provide limited statistical confidence and add
+  wall-clock time. Requiring zero provider failures is a deliberately strict V1
+  operational threshold that may need measured revision after the first formal
+  baseline.
+- **Validation evidence:** Twenty-six focused eval tests passed. Complete
+  backend discovery ran 188 tests with four PostgreSQL tests skipped because
+  `TEST_DATABASE_URL` was absent. A 33-sample fake development run passed every
+  threshold. Configured Gemini preflight reported 33 development requests with
+  16,896 maximum output tokens and 18 holdout requests with 9,216 maximum output
+  tokens; both preflights made zero external calls. Frontend verification and
+  final hygiene checks passed: 10 frontend tests, Oxlint, the TypeScript/Vite
+  build, Python `compileall`, and `git diff --check`.
+- **Unresolved question:** After the first approved complete provider run,
+  should the zero-provider-failure operational threshold remain strict or be
+  replaced by a separately versioned measured availability threshold?

@@ -83,6 +83,58 @@ owner approval. Inspect the final API explanation and bounded telemetry, but do
 not print the prompt, model output, API key, headers, request IDs, or raw
 exceptions.
 
+## Versioned explanation evaluations
+
+The local eval harness uses deterministic fake connector facts plus the
+production policy, explanation input builder, provider adapter/parser, and
+strict validator. It writes incremental JSONL observations and a completed JSON
+report under ignored `services/api/local-artifacts/explanation-evals/`.
+
+Run the complete three-sample development path without network access:
+
+```powershell
+uv run python -m app.evals.runner --fake-dry-run --dataset development --inter-request-delay-seconds 0
+```
+
+Preflight the configured provider without constructing a client or making an
+external request:
+
+```powershell
+uv run --env-file .env python -m app.evals.runner --preflight --dataset development
+uv run --env-file .env python -m app.evals.runner --preflight --dataset holdout
+```
+
+The default development run contains eleven cases times three samples: 33
+planned calls. The default holdout contains six cases times three samples: 18
+planned calls. Both default to one second between calls. A smaller learning
+smoke run can pass `--samples-per-case 1`; this changes the experimental sample
+count and cannot be compared with a three-sample baseline.
+
+Real commands remain gated and require separate repository-owner approval:
+
+```powershell
+uv run --env-file .env python -m app.evals.runner --dataset development --acknowledge-paid-calls
+uv run --env-file .env python -m app.evals.runner --dataset holdout --acknowledge-paid-calls
+```
+
+Do not add `--debug-holdout-details` to a release run. Normal holdout output and
+JSONL omit per-case IDs and expected/observed claims. The debug flag reveals
+those details locally and permanently spends the holdout for future unbiased
+evaluation.
+
+Use `--save-baseline <path>` only for a completed formal run. A later run can
+pass `--baseline <path>`; prompt, dataset, provider, configured model, model
+settings, and sample count must be compatible. The report is written before a
+quality/operational threshold returns exit code 1. Exit code 0 means execution
+completed and release thresholds passed; 2 means configuration/safety failure;
+3 means the requested baseline comparison is incompatible.
+
+Artifacts cannot contain prompts, generated prose, connector payloads,
+repository/Jira identity, credentials, raw responses, exception text, or cost
+without explicit versioned pricing. Provider-total tokens are aggregated as an
+independent provider measurement rather than assumed to equal input plus
+output.
+
 ## Intended layers
 
 | Layer | Intended location | Purpose | Status |
@@ -94,9 +146,9 @@ exceptions.
 | LLM explanation harness | `services/api/tests/unit/test_merge_readiness_explanations.py` | Minimized input, generated/validated trust separation, grounded code completeness, deterministic rendering, sanitized failures, persistence isolation, and safe telemetry | Internal fake/recording clients only; no real provider calls |
 | OpenAI adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_openai_llm_client.py` | Configuration, one-attempt SDK construction, Structured Output request shape, provider error normalization, token telemetry, validator preservation, and secret exclusion | Injected SDK boundary only; no external requests |
 | Gemini compatibility adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_gemini_llm_client.py` | Gemini-specific configuration, fixed Google endpoint, Chat Completions structured parsing, token mapping, validator preservation, and sanitized failures | Injected OpenAI SDK boundary only; no external requests |
+| Versioned explanation evals | `services/api/tests/unit/test_explanation_eval_*.py` | Development/holdout versioning, repeated samples, separate denominators, deterministic graders, pacing without retry, thresholds, safe artifacts, baselines, and paid-call gates | Automated tests use only fake/injected clients; real runs require approval |
 | PostgreSQL integration | `services/api/tests/integration/test_postgres_runtime_persistence.py` | Alembic schema, durable reconstruction, ordering, failures, and conflicts | Opt-in; skipped unless guarded test credentials are configured |
 | Cross-layer/end-to-end | Future repository-level area | Browser-to-API journeys | Planned; tooling not selected |
-| Agent evaluations | `evals` when introduced | Quality and regressions | Planned; area absent |
 
 Tests should assert observable behavior and invariants. Security boundaries,
 external-data validation, failure behavior, and tenant separation require
@@ -106,7 +158,6 @@ explicit coverage when introduced.
 
 ```text
 End-to-end:     NOT CONFIGURED
-Agent evals:    NOT CONFIGURED
 ```
 
 Replace a placeholder only after adding and verifying the exact command.

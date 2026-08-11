@@ -38,6 +38,16 @@ def _required_action_codes(
     return tuple(dict.fromkeys(action_codes))
 
 
+def required_explanation_claims(
+    policy_result: MergeReadinessResult,
+) -> ValidatedExplanation:
+    return ValidatedExplanation(
+        decision=policy_result.decision,
+        reason_codes=_required_reason_codes(policy_result),
+        action_codes=_required_action_codes(policy_result),
+    )
+
+
 def _raise(code: ExplanationValidationFailureCode) -> None:
     raise ExplanationValidationError(code)
 
@@ -48,6 +58,8 @@ class StrictMergeReadinessExplanationValidator:
         policy_result: MergeReadinessResult,
         generated: GeneratedExplanation,
     ) -> ValidatedExplanation:
+        required_claims = required_explanation_claims(policy_result)
+
         if generated.decision is not policy_result.decision:
             _raise(ExplanationValidationFailureCode.DECISION_MISMATCH)
 
@@ -58,8 +70,8 @@ class StrictMergeReadinessExplanationValidator:
 
         generated_reasons = set(generated.reason_codes)
         generated_actions = set(generated.action_codes)
-        required_reasons = _required_reason_codes(policy_result)
-        required_actions = _required_action_codes(policy_result)
+        required_reasons = required_claims.reason_codes
+        required_actions = required_claims.action_codes
         required_reason_set = set(required_reasons)
         required_action_set = set(required_actions)
 
@@ -90,8 +102,4 @@ class StrictMergeReadinessExplanationValidator:
         if required_action_set - generated_actions:
             _raise(ExplanationValidationFailureCode.MISSING_REQUIRED_ACTION)
 
-        return ValidatedExplanation(
-            decision=policy_result.decision,
-            reason_codes=required_reasons,
-            action_codes=required_actions,
-        )
+        return required_claims

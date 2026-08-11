@@ -33,3 +33,4 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-012](ADR-012-openai-structured-explanation-adapter.md) | Accepted | Optional async OpenAI Responses Structured Output adapter behind the existing deterministic validation boundary |
 | [ADR-013](ADR-013-gemini-openai-compatible-explanation-adapter.md) | Partially superseded by ADR-014 | Explicit Gemini provider using the OpenAI SDK with a fixed Google compatibility endpoint and unchanged deterministic validation |
 | [ADR-014](ADR-014-gemini-compact-claim-indexes.md) | Accepted | Use compact request-local indexes for Gemini claims before strict typed and semantic validation |
+| [ADR-015](ADR-015-versioned-explanation-eval-harness.md) | Accepted | Version local explanation datasets, repeated samples, graders, thresholds, and compatible baselines |
