@@ -76,6 +76,39 @@ async function requestJson(
 }
 
 
+async function requestMergeReadiness(
+  url: string,
+  init: RequestInit,
+): Promise<unknown> {
+  let response: Response
+  try {
+    response = await fetch(url, init)
+  } catch {
+    throw new ConnectorApiError(
+      'Could not reach the API. Confirm that the backend server is running.',
+    )
+  }
+
+  const body = await readJson(response)
+  // HTTP 500 is an expected transport status for the backend's typed failed-run
+  // contract. Parsing it lets the UI show the run ID and completed steps.
+  if (response.ok || response.status === 500) {
+    return body
+  }
+
+  let message = `The API request failed with status ${response.status}.`
+  if (
+    typeof body === 'object' &&
+    body !== null &&
+    'message' in body &&
+    typeof body.message === 'string'
+  ) {
+    message = body.message
+  }
+  throw new ConnectorApiError(message, response.status)
+}
+
+
 export async function fetchFixtureScenarios(
   signal?: AbortSignal,
 ): Promise<FixtureScenario[]> {
@@ -89,7 +122,7 @@ export async function fetchFixtureScenarios(
 export async function analyzePullRequestMergeReadiness(
   request: ConnectorRequest,
 ): Promise<PullRequestMergeReadiness> {
-  const body = await requestJson('/v1/pull-request-merge-readiness', {
+  const body = await requestMergeReadiness('/v1/pull-request-merge-readiness', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),

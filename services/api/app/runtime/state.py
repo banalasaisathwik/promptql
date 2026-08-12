@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from app.connectors.models import ConnectorRequest
+from app.runtime.models import RunSources
 from app.policy.models import MergeReadinessResult
 from app.runtime.models import (
     MergeReadinessRun,
@@ -57,11 +58,13 @@ def _replace_step(step: RuntimeStep, **updates) -> RuntimeStep:
 def create_pending_run(
     request: ConnectorRequest,
     run_id: UUID | None = None,
+    sources: RunSources | None = None,
 ) -> MergeReadinessRun:
     return MergeReadinessRun(
         run_id=run_id or uuid4(),
         workflow_name="merge_readiness",
         workflow_version="1",
+        sources=sources,
         status=RunStatus.PENDING,
         started_at=None,
         completed_at=None,

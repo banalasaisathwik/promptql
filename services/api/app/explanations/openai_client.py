@@ -60,6 +60,10 @@ class OpenAILLMClient:
     async def aclose(self) -> None:
         await self._client.close()
 
+    @property
+    def model(self) -> str:
+        return self._model
+
     @staticmethod
     def _contains_refusal(response: object) -> bool:
         output: Sequence[object] = getattr(response, "output", ())

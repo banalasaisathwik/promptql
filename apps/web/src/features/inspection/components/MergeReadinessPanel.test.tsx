@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
+  CompletedMergeReadinessRun,
   MergeReadinessDecision,
   PullRequestMergeReadiness,
 } from '../types'
@@ -9,11 +10,12 @@ import { MergeReadinessPanel } from './MergeReadinessPanel'
 
 function analysisWithDecision(
   decision: MergeReadinessDecision,
-): PullRequestMergeReadiness {
+): CompletedMergeReadinessRun {
   return {
     run_id: '49a8a46d-5c69-4e5d-a928-6a149b84d6e7',
     workflow_name: 'merge_readiness',
     workflow_version: '1',
+    sources: { github: 'live', jira: 'fake', explanation: 'gemini' },
     status: 'completed',
     started_at: '2026-08-02T10:00:00Z',
     completed_at: '2026-08-02T10:00:01Z',
@@ -47,6 +49,56 @@ function analysisWithDecision(
 
 
 describe('MergeReadinessPanel', () => {
+  test('renders run metadata, ordered steps, and source provenance', () => {
+    const analysis = analysisWithDecision('ready')
+    analysis.steps = [
+      {
+        step_id: 'c3bdb98c-1389-4eb8-a8bb-b004b323dd64',
+        name: 'fetch_github_facts',
+        status: 'completed',
+        started_at: '2026-08-02T10:00:00Z',
+        completed_at: '2026-08-02T10:00:00.010Z',
+        duration_ms: 10,
+        attempt: 1,
+        error: null,
+      },
+    ]
+
+    const markup = renderToStaticMarkup(
+      <MergeReadinessPanel analysis={analysis} loading={false} />,
+    )
+
+    expect(markup).toContain(analysis.run_id)
+    expect(markup).toContain('Run status')
+    expect(markup).toContain('GitHub: live; Jira: fake; explanation: gemini')
+    expect(markup).toContain('fetch_github_facts')
+    expect(markup).toContain('10 ms')
+  })
+
+  test('renders a typed failed run without inventing an unknown decision', () => {
+    const completed = analysisWithDecision('ready')
+    const failed: PullRequestMergeReadiness = {
+      ...completed,
+      status: 'failed',
+      result: null,
+      error: {
+        code: 'connector_execution_failed',
+        message: 'The GitHub connector step failed unexpectedly.',
+      },
+      explanation: null,
+      explanation_error: null,
+    }
+
+    const markup = renderToStaticMarkup(
+      <MergeReadinessPanel analysis={failed} loading={false} />,
+    )
+
+    expect(markup).toContain('Runtime failed')
+    expect(markup).toContain(failed.run_id)
+    expect(markup).toContain('connector_execution_failed')
+    expect(markup).not.toContain('decision-card--unknown')
+  })
+
   test('renders the backend ready decision prominently', () => {
     const markup = renderToStaticMarkup(
       <MergeReadinessPanel

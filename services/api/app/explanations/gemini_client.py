@@ -89,6 +89,10 @@ class GeminiLLMClient:
     async def aclose(self) -> None:
         await self._client.close()
 
+    @property
+    def model(self) -> str:
+        return self._model
+
     @staticmethod
     def _token_usage(response: object) -> LLMTokenUsage | None:
         usage = getattr(response, "usage", None)

@@ -15,7 +15,12 @@ from app.api.v1.models import MergeReadinessResponse
 from app.connectors.errors import ConnectorUnavailableError
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.fixture_catalog import FAILED_CI_REQUEST, MERGE_READY_REQUEST
-from app.connectors.models import ConnectorRequest, GitHubPullRequest, JiraIssue
+from app.connectors.models import (
+    ConnectorRequest,
+    ConnectorSource,
+    GitHubPullRequest,
+    JiraIssue,
+)
 from app.explanations import (
     LLMProviderName,
     LLMStructuredResponse,
@@ -31,11 +36,15 @@ from app.workflows import MergeReadinessWorkflowService
 
 
 class UnavailableJiraConnector:
+    source = ConnectorSource.LIVE
+
     async def get_issue(self, _issue_key: str) -> JiraIssue:
         raise ConnectorUnavailableError("jira")
 
 
 class FailingGitHubConnector:
+    source = ConnectorSource.LIVE
+
     async def get_pull_request(
         self,
         _request: ConnectorRequest,
@@ -128,6 +137,10 @@ class MergeReadinessApiTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["status"], "completed")
         self.assertEqual(body["result"]["decision"], "ready")
+        self.assertEqual(
+            body["sources"],
+            {"github": "fake", "jira": "fake", "explanation": "fake"},
+        )
 
     def test_missing_jira_evidence_completes_with_unknown(self) -> None:
         app.dependency_overrides[get_jira_connector] = (
@@ -224,6 +237,10 @@ class MergeReadinessApiTests(unittest.TestCase):
 
         self.assertEqual(retrieval_response.status_code, 200)
         self.assertEqual(retrieval_response.json(), created_response.json())
+        self.assertEqual(
+            retrieval_response.json()["sources"],
+            {"github": "fake", "jira": "fake", "explanation": "fake"},
+        )
 
     def test_failed_run_can_be_retrieved_as_a_resource(self) -> None:
         app.dependency_overrides[get_github_connector] = (

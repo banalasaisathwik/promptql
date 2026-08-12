@@ -17,6 +17,7 @@ from app.runtime.errors import (
 from app.runtime.models import (
     MergeReadinessRun,
     RunStatus,
+    RunSources,
     RuntimeErrorInfo,
     RuntimeStep,
     StepStatus,
@@ -31,9 +32,15 @@ def _json_value(model) -> dict[str, Any] | None:
 
 
 def _run_values(run: MergeReadinessRun) -> dict[str, Any]:
+    sources = run.sources
     return {
         "workflow_name": run.workflow_name,
         "workflow_version": run.workflow_version,
+        "github_source": sources.github.value if sources and sources.github else None,
+        "jira_source": sources.jira.value if sources and sources.jira else None,
+        "explanation_source": (
+            sources.explanation.value if sources and sources.explanation else None
+        ),
         "status": run.status.value,
         "started_at": run.started_at,
         "completed_at": run.completed_at,
@@ -165,11 +172,26 @@ class PostgresRunRepository:
         connector_request = ConnectorRequest.model_validate(
             stored_run.request_payload
         )
+        sources = None
+        if any(
+            source is not None
+            for source in (
+                stored_run.github_source,
+                stored_run.jira_source,
+                stored_run.explanation_source,
+            )
+        ):
+            sources = RunSources(
+                github=stored_run.github_source,
+                jira=stored_run.jira_source,
+                explanation=stored_run.explanation_source,
+            )
 
         return MergeReadinessRun(
             run_id=stored_run.run_id,
             workflow_name=stored_run.workflow_name,
             workflow_version=stored_run.workflow_version,
+            sources=sources,
             status=stored_run.status,
             started_at=stored_run.started_at,
             completed_at=stored_run.completed_at,
@@ -303,6 +325,9 @@ class PostgresRunRepository:
         return {
             "workflow_name": stored_run.workflow_name,
             "workflow_version": stored_run.workflow_version,
+            "github_source": stored_run.github_source,
+            "jira_source": stored_run.jira_source,
+            "explanation_source": stored_run.explanation_source,
             "status": stored_run.status,
             "started_at": stored_run.started_at,
             "completed_at": stored_run.completed_at,
@@ -321,6 +346,16 @@ class PostgresRunRepository:
         if (
             stored_run.workflow_name != run.workflow_name
             or stored_run.workflow_version != run.workflow_version
+            or stored_run.github_source
+            != (run.sources.github.value if run.sources and run.sources.github else None)
+            or stored_run.jira_source
+            != (run.sources.jira.value if run.sources and run.sources.jira else None)
+            or stored_run.explanation_source
+            != (
+                run.sources.explanation.value
+                if run.sources and run.sources.explanation
+                else None
+            )
             or stored_run.request_payload != _json_value(run.request)
         ):
             raise RunStateConflictError(

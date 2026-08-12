@@ -1,5 +1,3 @@
-pass
-
 import asyncio
 import os
 import unittest
@@ -7,12 +5,12 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import delete, inspect
+from sqlalchemy import delete, inspect, update
 
 from app.config import DatabaseSettings
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.fixture_catalog import MERGE_READY_REQUEST
-from app.connectors.models import ConnectorRequest, GitHubPullRequest
+from app.connectors.models import ConnectorRequest, ConnectorSource, GitHubPullRequest
 from app.database import (
     PostgresRunRepository,
     create_database_engine,
@@ -28,6 +26,8 @@ TEST_DATABASE_URL = load_safe_test_database_url()
 
 
 class FailingGitHubConnector:
+    source = ConnectorSource.LIVE
+
     async def get_pull_request(
         self,
         _request: ConnectorRequest,
@@ -106,6 +106,27 @@ class PostgresRuntimePersistenceTests(unittest.TestCase):
             [step.name for step in retrieved.steps],
             [step.name for step in created.steps],
         )
+        self.assertEqual(retrieved.sources.github.value, "fake")
+        self.assertEqual(retrieved.sources.jira.value, "fake")
+        self.assertEqual(retrieved.sources.explanation.value, "fake")
+
+    def test_pre_provenance_run_remains_readable(self) -> None:
+        created = self.execute_workflow()
+        with self.session_factory.begin() as session:
+            session.execute(
+                update(WorkflowRunRow)
+                .where(WorkflowRunRow.run_id == created.run_id)
+                .values(
+                    github_source=None,
+                    jira_source=None,
+                    explanation_source=None,
+                )
+            )
+
+        retrieved = self.repository.get(created.run_id)
+
+        self.assertIsNotNone(retrieved)
+        self.assertIsNone(retrieved.sources)
 
     def test_failed_run_and_sanitized_error_are_durable(self) -> None:
         created = self.execute_workflow(FailingGitHubConnector())

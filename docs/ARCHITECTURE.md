@@ -222,8 +222,11 @@ apps/web/src/features/inspection/
 - GitHub and Jira source modes are selected independently, supporting all four
   fake/live combinations. A bounded `runtime.connector_sources.selected`
   startup event makes the selected pair visible in server logs, and connector
-  spans identify the source used by each operation. Public run source metadata
-  remains deferred to avoid a database/API migration.
+  spans identify the source used by each operation. `RunSources` persists the
+  bounded GitHub, Jira, and configured explanation source in nullable checked
+  columns and exposes them through POST and GET. A read-time response uses the
+  provider that actually enriched that response; old rows remain readable with
+  unknown connector sources.
 - The basic runtime creates a unique run, records three ordered steps, enforces
   terminal state transitions, and returns immutable Pydantic snapshots. A
   completed run contains `result`; a failed run returns HTTP `500`, contains a
@@ -248,15 +251,23 @@ apps/web/src/features/inspection/
   measurements and logs occur only after the terminal database commit.
 - An independently invoked explanation call creates one
   `merge_readiness.explanation.generate` span and bounded duration/token
-  metrics. Attributes contain only fixed provider, operation, result, sanitized
-  failure, and token categories/counts; prompts, outputs, configured model
-  names, identities, request IDs, and exception text are excluded.
+  metrics. Span attributes include the stable prompt ID/version, a short
+  SHA-256 fingerprint of the configured model, fixed provider, operation,
+  result, sanitized failure, and token counts. Operators can compare the
+  fingerprint with their known deployment configuration without exporting an
+  arbitrary environment value.
+  Model and prompt identity never become metric labels. Prompts, outputs,
+  repository/Jira identities, request IDs, credentials, and exception text are
+  excluded.
 - OpenTelemetry exports traces and metrics through OTLP HTTP/protobuf when
   explicitly enabled. Grafana Cloud is configuration, not a domain dependency;
   setup and exporter failures degrade safely without changing HTTP, runtime,
   policy, or persistence behavior.
 - Frontend network data remains `unknown` until `responseValidation.ts` proves
-  the expected runtime structure.
+  the expected runtime structure. The parser accepts completed runs and the
+  existing typed failed-run HTTP 500 body as distinct unions. The panel shows
+  run ID, terminal status, ordered steps, and source provenance without
+  deriving a policy decision.
 
 ## Not implemented
 

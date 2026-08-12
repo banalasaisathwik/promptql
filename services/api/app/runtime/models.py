@@ -1,5 +1,3 @@
-pass
-
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Self
@@ -9,6 +7,7 @@ from pydantic import Field, model_validator
 
 from app.connectors.models import (
     ConnectorRequest,
+    ConnectorSource,
     ContractModel,
     GitHubPullRequest,
     JiraIssue,
@@ -18,8 +17,6 @@ from app.policy.models import MergeReadinessResult
 
 
 class RunStatus(StrEnum):
-    pass
-
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -28,8 +25,6 @@ class RunStatus(StrEnum):
 
 
 class StepStatus(StrEnum):
-    pass
-
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -38,31 +33,35 @@ class StepStatus(StrEnum):
 
 
 class WorkflowStepName(StrEnum):
-    pass
-
     FETCH_GITHUB_FACTS = "fetch_github_facts"
     FETCH_JIRA_FACTS = "fetch_jira_facts"
     EVALUATE_MERGE_READINESS = "evaluate_merge_readiness"
 
 
 class RuntimeErrorCode(StrEnum):
-    pass
-
     CONNECTOR_EXECUTION_FAILED = "connector_execution_failed"
     POLICY_EXECUTION_FAILED = "policy_execution_failed"
     FIXTURE_NOT_FOUND = "fixture_not_found"
 
 
 class RuntimeErrorInfo(ContractModel):
-    pass
-
     code: RuntimeErrorCode
     message: NonEmptyString
 
 
-class RuntimeStep(ContractModel):
-    pass
+class ExplanationSource(StrEnum):
+    FAKE = "fake"
+    GEMINI = "gemini"
+    OPENAI = "openai"
 
+
+class RunSources(ContractModel):
+    github: ConnectorSource | None
+    jira: ConnectorSource | None
+    explanation: ExplanationSource | None
+
+
+class RuntimeStep(ContractModel):
     step_id: UUID
     name: WorkflowStepName
     status: StepStatus
@@ -74,8 +73,6 @@ class RuntimeStep(ContractModel):
 
     @model_validator(mode="after")
     def validate_lifecycle_fields(self) -> Self:
-        pass
-
         if self.status is StepStatus.PENDING:
             if any(
                 value is not None
@@ -108,11 +105,10 @@ class RuntimeStep(ContractModel):
 
 
 class MergeReadinessRun(ContractModel):
-    pass
-
     run_id: UUID
     workflow_name: NonEmptyString
     workflow_version: NonEmptyString
+    sources: RunSources | None = None
     status: RunStatus
     started_at: datetime | None
     completed_at: datetime | None
@@ -125,8 +121,6 @@ class MergeReadinessRun(ContractModel):
 
     @model_validator(mode="after")
     def validate_lifecycle_fields(self) -> Self:
-        pass
-
         if self.status is RunStatus.PENDING:
             if any(
                 value is not None

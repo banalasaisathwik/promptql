@@ -1,10 +1,8 @@
-pass
-
 import unittest
 
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.fixture_catalog import FAILED_CI_REQUEST, MERGE_READY_REQUEST
-from app.connectors.models import ConnectorRequest, GitHubPullRequest
+from app.connectors.models import ConnectorRequest, ConnectorSource, GitHubPullRequest
 from app.policy.models import MergeReadinessDecision, MergeReadinessResult
 from app.runtime import (
     InMemoryRunRepository,
@@ -17,11 +15,21 @@ from app.workflows import MergeReadinessWorkflowService
 
 
 class FailingGitHubConnector:
+    source = ConnectorSource.FAKE
+
     async def get_pull_request(
         self,
         _request: ConnectorRequest,
     ) -> GitHubPullRequest:
         raise RuntimeError("secret-token-must-not-leak")
+
+
+class LiveFactsGitHubConnector(FakeGitHubConnector):
+    source = ConnectorSource.LIVE
+
+
+class LiveFactsJiraConnector(FakeJiraConnector):
+    source = ConnectorSource.LIVE
 
 
 def failing_policy(_github, _jira) -> MergeReadinessResult:
@@ -45,6 +53,16 @@ def create_workflow(
 
 
 class MergeReadinessWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_connector_sources_are_preserved_in_the_run(self) -> None:
+        run = await MergeReadinessWorkflowService(
+            LiveFactsGitHubConnector(),
+            LiveFactsJiraConnector(),
+            InMemoryRunRepository(),
+        ).execute(MERGE_READY_REQUEST)
+
+        self.assertEqual(run.sources.github, ConnectorSource.LIVE)
+        self.assertEqual(run.sources.jira, ConnectorSource.LIVE)
+
     async def test_successful_ready_workflow_completes(self) -> None:
         repository = InMemoryRunRepository()
 

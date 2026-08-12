@@ -304,6 +304,15 @@ class OpenAILLMClientTests(unittest.IsolatedAsyncioTestCase):
             span = harness.span_exporter.get_finished_spans()[0]
             self.assertEqual(span.attributes["promptql.llm.provider"], "openai")
             self.assertEqual(
+                span.attributes["promptql.llm.prompt.id"],
+                "merge-readiness-explanation",
+            )
+            self.assertEqual(span.attributes["promptql.llm.prompt.version"], "v1")
+            self.assertEqual(
+                span.attributes["promptql.llm.model.fingerprint"],
+                "4bbcf8b89b51d285",
+            )
+            self.assertEqual(
                 span.attributes["promptql.llm.failure.category"],
                 "connection",
             )

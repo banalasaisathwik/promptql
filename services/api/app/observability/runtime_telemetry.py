@@ -53,6 +53,9 @@ SPAN_ATTRIBUTE_ALLOWLIST = frozenset(
         "promptql.pagination.page_count",
         "promptql.llm.operation",
         "promptql.llm.provider",
+        "promptql.llm.prompt.id",
+        "promptql.llm.prompt.version",
+        "promptql.llm.model.fingerprint",
         "promptql.llm.result",
         "promptql.llm.failure.category",
         "promptql.llm.validation.result",
@@ -256,6 +259,9 @@ class RuntimeTelemetry:
     def observe_llm_explanation(
         self,
         provider: str,
+        prompt_id: str,
+        prompt_version: str,
+        model_fingerprint: str,
     ) -> Iterator[SpanObservation]:
         if provider not in SUPPORTED_LLM_PROVIDERS:
             return self._observe_span("llm.invalid", {})
@@ -265,6 +271,9 @@ class RuntimeTelemetry:
             {
                 "promptql.llm.operation": "merge_readiness_explanation",
                 "promptql.llm.provider": provider,
+                "promptql.llm.prompt.id": prompt_id,
+                "promptql.llm.prompt.version": prompt_version,
+                "promptql.llm.model.fingerprint": model_fingerprint,
             },
         )
 

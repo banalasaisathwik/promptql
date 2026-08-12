@@ -191,6 +191,15 @@ export interface RuntimeErrorInfo {
   message: string
 }
 
+export type ConnectorSource = 'fake' | 'live'
+export type ExplanationSource = 'fake' | 'gemini' | 'openai'
+
+export interface RunSources {
+  github: ConnectorSource | null
+  jira: ConnectorSource | null
+  explanation: ExplanationSource | null
+}
+
 export interface RuntimeStep {
   step_id: string
   name: WorkflowStepName
@@ -202,19 +211,35 @@ export interface RuntimeStep {
   error: RuntimeErrorInfo | null
 }
 
-export interface PullRequestMergeReadiness {
+interface MergeReadinessRunBase {
   run_id: string
   workflow_name: string
   workflow_version: string
-  status: 'completed'
+  sources: RunSources | null
   started_at: string
   completed_at: string
   steps: RuntimeStep[]
-  error: null
-  result: MergeReadinessResult
   request: ConnectorRequest
   github: GitHubPullRequest | null
   jira: JiraIssue | null
+}
+
+export interface CompletedMergeReadinessRun extends MergeReadinessRunBase {
+  status: 'completed'
+  error: null
+  result: MergeReadinessResult
   explanation: MergeReadinessExplanation | null
   explanation_error: ExplanationApiError | null
 }
+
+export interface FailedMergeReadinessRun extends MergeReadinessRunBase {
+  status: 'failed'
+  error: RuntimeErrorInfo
+  result: null
+  explanation: null
+  explanation_error: null
+}
+
+export type PullRequestMergeReadiness =
+  | CompletedMergeReadinessRun
+  | FailedMergeReadinessRun

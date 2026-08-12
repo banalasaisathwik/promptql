@@ -1134,3 +1134,86 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** After the first approved complete provider run,
   should the zero-provider-failure operational threshold remain strict or be
   replaced by a separately versioned measured availability threshold?
+
+### 2026-08-12 — Preserve execution provenance and typed failure state end to end
+
+- **Concept:** Operational provenance is different from business evidence. The
+  policy still consumes only normalized GitHub/Jira facts, while `RunSources`
+  records which bounded implementations supplied a run. Likewise, an HTTP 500
+  failed run is an execution result with a run ID and step history, not an
+  `unknown` merge-readiness decision.
+- **Important syntax:** Python `StrEnum` gives JSON-friendly closed values while
+  Pydantic rejects unknown strings. SQLAlchemy `Mapped[str | None]` creates
+  nullable relational columns, and Alembic `create_check_constraint()` keeps
+  the database vocabulary aligned. In TypeScript, a discriminated union on
+  `status: 'completed' | 'failed'` lets React access a non-null policy result
+  only in the completed branch. Runtime type guards reconstruct network data
+  without an unchecked cast.
+- **Implementation locations:** `app/runtime/models.py` owns `RunSources`;
+  `workflows/merge_readiness.py` captures it before the first commit;
+  `database/models.py`, `postgres_run_repository.py`, and migration
+  `20260812_0002` persist and reconstruct it; `connector_router.py` reports the
+  provider used for read-time explanation enrichment. Frontend types,
+  `responseValidation.ts`, `api.ts`, and `MergeReadinessPanel.tsx` preserve and
+  render completed and failed runtime states.
+- **Design decision:** Three nullable, checked columns were selected instead of
+  generic JSONB metadata. This keeps V1 queryable and bounded, avoids secrets
+  and uncontrolled identities, and leaves old rows readable. Explanation
+  output remains read-time and unpersisted; therefore the HTTP response reports
+  the provider used for that enrichment.
+- **Invariant or failure behavior:** Provenance cannot change the deterministic
+  decision. A completed run has a policy result and HTTP 200; a failed run has
+  a sanitized error, `result=null`, and HTTP 500. The frontend never converts
+  one into the other. Unknown or absent legacy source fields display as source
+  `unknown`, not policy `unknown`.
+- **Observability implication:** Explanation spans include prompt ID/version,
+  provider, and a short SHA-256 configured-model fingerprint for operational
+  traceability without exporting an arbitrary environment value. Those values
+  are excluded from metric labels, and prompt/output content remains excluded
+  from all telemetry.
+- **Trade-off:** New source families require a deliberate schema migration, and
+  a later GET can use a different explanation provider because explanations are
+  not persisted. This is narrower and safer than an unbounded metadata system;
+  versioned explanation persistence remains postponed.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  ran 193 tests successfully with five PostgreSQL tests skipped because
+  `TEST_DATABASE_URL` was absent. `bun run test:web` passed 14 tests; web lint
+  and build passed. `compileall`, one-head Alembic inspection, offline migration
+  SQL, `git diff --check`, and a sensitive-pattern scan passed. The fake
+  development eval completed 33/33 attempts and all release thresholds without
+  an external provider call.
+- **Unresolved question:** Should a later milestone persist the validated
+  explanation and exact model identity so GET never performs a second provider
+  call, or should explanations remain intentionally read-time?
+
+### 2026-08-12 — Separate model quality from provider reliability in release evals
+
+- **Concept:** A completed evaluation can demonstrate perfect candidate quality
+  and still fail release readiness because provider reliability is measured on
+  every planned attempt. Candidate metrics use only returned candidates, while
+  operational metrics retain rate-limited attempts in their denominator.
+- **Important syntax:** The runner's `--acknowledge-paid-calls` flag is an
+  explicit network/cost gate, and `--save-baseline <path>` records the exact
+  prompt, dataset, provider, configured model, settings, and sample-count
+  identity. A command exit code of `1` means execution completed but at least
+  one release threshold failed; it is different from a configuration failure.
+- **Implementation evidence:** `app/evals/runner.py` preserved 33 incremental
+  observations and wrote the completed development report before returning
+  exit code 1. `app/evals/graders.py` independently evaluated candidate quality
+  and the zero-provider-failure operational threshold.
+- **Decision and invariant:** The untouched holdout was not run after the
+  development release gate failed. Holdout evidence must never be spent to
+  diagnose a development-stage provider or prompt problem.
+- **Trade-off:** Requiring zero provider failures makes V1 promotion strict and
+  easy to interpret, but one transient rate limit can block a release even when
+  every returned candidate is correct. Changing pacing, quota, or the threshold
+  requires a deliberate follow-up rather than silently retrying or excluding
+  failed attempts.
+- **Validation evidence:** The approved `gemini-3.1-flash-lite` development run
+  completed 33/33 attempts. Thirty provider responses achieved 100% schema,
+  decision, reason-set, action-set, validator, and end-to-end candidate quality;
+  three `rate_limit` failures produced 90.9% provider success, so quality passed
+  while operational and release thresholds failed. No holdout call was made.
+- **Unresolved question:** Should the next approved run keep the one-second
+  pacing with higher provider quota, or version a slower pacing configuration
+  before reconsidering the strict zero-failure threshold?

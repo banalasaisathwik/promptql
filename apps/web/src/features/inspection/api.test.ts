@@ -8,6 +8,7 @@ const READY_RESPONSE: PullRequestMergeReadiness = {
   run_id: '49a8a46d-5c69-4e5d-a928-6a149b84d6e7',
   workflow_name: 'merge_readiness',
   workflow_version: '1',
+  sources: { github: 'fake', jira: 'fake', explanation: 'fake' },
   status: 'completed',
   started_at: '2026-08-02T10:00:00Z',
   completed_at: '2026-08-02T10:00:01Z',
@@ -75,29 +76,30 @@ describe('merge-readiness API client', () => {
   })
 
   test('keeps backend failures separate from an unknown policy decision', async () => {
+    const failedResponse: PullRequestMergeReadiness = {
+      ...READY_RESPONSE,
+      status: 'failed',
+      result: null,
+      error: {
+        code: 'connector_execution_failed',
+        message: 'The GitHub connector step failed unexpectedly.',
+      },
+      explanation: null,
+      explanation_error: null,
+    }
     globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify({
-          status: 'failed',
-          result: null,
-          error: {
-            code: 'connector_execution_failed',
-            message: 'The GitHub connector step failed unexpectedly.',
-          },
-        }),
-        {
+      new Response(JSON.stringify(failedResponse), {
         status: 500,
         headers: { 'Content-Type': 'application/json' },
-        },
-      )) as typeof fetch
+      })) as typeof fetch
 
-    await expect(
-      analyzePullRequestMergeReadiness(READY_RESPONSE.request),
-    ).rejects.toMatchObject({
-      name: 'ConnectorApiError',
-      status: 500,
-      message: 'The GitHub connector step failed unexpectedly.',
-    } satisfies Partial<ConnectorApiError>)
+    const result = await analyzePullRequestMergeReadiness(READY_RESPONSE.request)
+
+    expect(result.status).toBe('failed')
+    if (result.status === 'failed') {
+      expect(result.error.code).toBe('connector_execution_failed')
+      expect(result.result).toBeNull()
+    }
   })
 
   test('rejects an explanation that changes the backend policy decision', async () => {
@@ -108,6 +110,43 @@ describe('merge-readiness API client', () => {
           explanation: {
             ...READY_RESPONSE.explanation,
             decision: 'blocked',
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )) as typeof fetch
+
+    await expect(
+      analyzePullRequestMergeReadiness(READY_RESPONSE.request),
+    ).rejects.toMatchObject({
+      name: 'ConnectorApiError',
+      message: 'The merge-readiness response is malformed.',
+    } satisfies Partial<ConnectorApiError>)
+  })
+
+  test('accepts an older completed response without source provenance', async () => {
+    const { sources: _sources, ...olderResponse } = READY_RESPONSE
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(olderResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch
+
+    const result = await analyzePullRequestMergeReadiness(READY_RESPONSE.request)
+
+    expect(result.sources).toBeNull()
+  })
+
+  test('rejects unbounded source identities', async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          ...READY_RESPONSE,
+          sources: {
+            ...READY_RESPONSE.sources,
+            github: 'github-enterprise',
           },
         }),
         {

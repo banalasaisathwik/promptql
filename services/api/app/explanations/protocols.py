@@ -9,6 +9,7 @@ from app.explanations.models import (
 
 class LLMClient(Protocol):
     provider: LLMProviderName
+    model: str
 
     async def generate_structured(
         self,

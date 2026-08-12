@@ -23,7 +23,9 @@ from app.observability import (
 from app.observability.runtime_telemetry import SpanObservation
 from app.runtime import (
     MergeReadinessRun,
+    ExplanationSource,
     RunRepository,
+    RunSources,
     RunStatus,
     RuntimeErrorCode,
     RuntimeErrorInfo,
@@ -70,6 +72,7 @@ class MergeReadinessWorkflowService:
         timestamp_clock: TimestampClock = _utc_now,
         duration_clock: DurationClock = perf_counter_ns,
         telemetry: RuntimeTelemetry | None = None,
+        explanation_provider: ExplanationSource = ExplanationSource.FAKE,
     ) -> None:
         self._github_connector = github_connector
         self._jira_connector = jira_connector
@@ -78,6 +81,11 @@ class MergeReadinessWorkflowService:
         self._timestamp_clock = timestamp_clock
         self._duration_clock = duration_clock
         self._telemetry = telemetry or NoOpRuntimeTelemetry()
+        self._sources = RunSources(
+            github=github_connector.source,
+            jira=jira_connector.source,
+            explanation=explanation_provider,
+        )
 
     def _save_synchronously(
         self,
@@ -247,7 +255,7 @@ class MergeReadinessWorkflowService:
         return FailureCategory.PERSISTENCE_UNAVAILABLE
 
     async def execute(self, request: ConnectorRequest) -> MergeReadinessRun:
-        run = create_pending_run(request)
+        run = create_pending_run(request, sources=self._sources)
         with self._telemetry.observe_workflow(run) as workflow_observation:
             try:
                 return await self._execute_workflow(

@@ -1,8 +1,8 @@
-pass
-
 from app.runtime.models import (
+    ExplanationSource,
     MergeReadinessRun,
     RunStatus,
+    RunSources,
     RuntimeErrorCode,
     RuntimeErrorInfo,
     RuntimeStep,
@@ -25,6 +25,7 @@ from app.runtime.state import (
 )
 
 __all__ = [
+    "ExplanationSource",
     "InMemoryRunRepository",
     "InvalidStateTransitionError",
     "MergeReadinessRun",
@@ -34,6 +35,7 @@ __all__ = [
     "RunRepositoryError",
     "RunStateConflictError",
     "RunStatus",
+    "RunSources",
     "RuntimeErrorCode",
     "RuntimeErrorInfo",
     "RuntimeStep",

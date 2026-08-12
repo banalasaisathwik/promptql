@@ -12,7 +12,7 @@ from app.config import TelemetrySettings
 from app.connectors.errors import ConnectorUnavailableError
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.fixture_catalog import FAILED_CI_REQUEST, MERGE_READY_REQUEST
-from app.connectors.models import ConnectorRequest, GitHubPullRequest
+from app.connectors.models import ConnectorRequest, ConnectorSource, GitHubPullRequest
 from app.observability import ObservedRunRepository, RuntimeTelemetry
 from app.observability.contracts import (
     METRIC_LABEL_ALLOWLISTS,
@@ -44,6 +44,8 @@ from opentelemetry.sdk.trace.export import (
 
 
 class FailingGitHubConnector:
+    source = ConnectorSource.FAKE
+
     async def get_pull_request(
         self,
         _request: ConnectorRequest,
@@ -54,6 +56,8 @@ class FailingGitHubConnector:
 
 
 class UnavailableJiraConnector:
+    source = ConnectorSource.LIVE
+
     async def get_issue(self, _issue_key):
         raise ConnectorUnavailableError("jira")
 

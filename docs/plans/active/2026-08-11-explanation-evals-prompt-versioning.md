@@ -3,7 +3,7 @@
 - Status: Active — Stage 2 verified offline; waiting for formal live-run approval
 - Owner: Repository owner
 - Created: 2026-08-11
-- Last updated: 2026-08-11
+- Last updated: 2026-08-12
 - Related ADRs: ADR-011, ADR-012, ADR-013, ADR-014, ADR-015
 - Related tasks: None
 
@@ -163,8 +163,23 @@ Failures use existing sanitized provider and validator categories.
       all release thresholds. Gemini preflight reported 33 development calls
       with a 16,896-output-token cap and 18 holdout calls with a 9,216-token
       cap; both made zero external calls.
-- [ ] Formal development and holdout provider runs require separate explicit
-      approval. A baseline may be saved only from a completed Stage 2 run.
+- [x] 2026-08-12: Completed the offline V1 audit. Added bounded durable source
+      provenance and typed failed-run rendering. The complete backend suite ran
+      193 tests successfully with five guarded PostgreSQL skips; all 14 web
+      tests, lint, build, compileall, one-head migration inspection, offline SQL,
+      diff hygiene, and the 33-attempt fake development eval passed.
+- [x] 2026-08-12: Ran the explicitly approved formal Gemini development
+      evaluation with `gemini-3.1-flash-lite`. All 33 attempts completed; 30
+      provider responses passed every candidate-quality and validator check,
+      while three `rate_limit` failures reduced operational success to 90.9%.
+      Quality thresholds passed, but the zero-provider-failure operational
+      threshold and combined release threshold failed. The completed report
+      and a compatible non-release-passing baseline were saved under ignored
+      local artifacts. The holdout remained untouched because development did
+      not pass.
+- [ ] A new development run requires separate paid-call approval after quota
+      or pacing is addressed. Run the untouched holdout only after development
+      passes all release thresholds.
 
 ## Decisions and discoveries
 
@@ -188,3 +203,43 @@ Failures use existing sanitized provider and validator categories.
 Stage 1 and offline Stage 2 implementation are complete. The plan remains
 active until explicitly approved formal provider runs are reviewed and a
 completed compatible baseline decision is made.
+
+## V1 completion matrix
+
+This matrix records the repository audit for the bounded V1 completion pass.
+External calls remain separate release gates and are not implied by offline
+engineering verification.
+
+| Capability | Current status | Evidence | Remaining work | Verification command | External blocker |
+| --- | --- | --- | --- | --- | --- |
+| Fake and live GitHub connectors | Complete | Shared protocol, fake fixtures, HTTP normalization and typed-failure tests; complete backend suite passed | None | `uv run python -m unittest tests.unit.test_github_connector_factory tests.unit.test_github_http_connector -v` | Live smoke needs credentials |
+| Fake and live Jira connectors | Complete | Shared protocol, fake fixtures, HTTP normalization and typed-failure tests; complete backend suite passed | None | `uv run python -m unittest tests.unit.test_jira_connector_factory tests.unit.test_jira_http_connector -v` | Live smoke needs credentials |
+| Deterministic policy | Complete | Ready, blocker, unknown, precedence and determinism tests passed | None | `uv run python -m unittest tests.unit.test_merge_readiness_policy -v` | None |
+| Runtime and ordered steps | Complete | Explicit state transitions, sequential workflow, provenance and typed failed-run tests passed | None | `uv run python -m unittest tests.unit.test_runtime_state tests.unit.test_merge_readiness_workflow -v` | None |
+| PostgreSQL persistence and retrieval | Verified externally | Application database upgraded to `20260812_0002`; five guarded tests passed against an isolated Neon branch | Apply the migration separately in any other deployed environment | `uv run --env-file .env python -m alembic current` and guarded PostgreSQL suite | None for the verified development environment |
+| Source provenance | Verified externally | Typed sources round-tripped through PostgreSQL and mixed live-GitHub/fake-Jira runs persisted bounded source identities | Apply the migration separately in any other deployed environment | Focused runtime/API/UI tests and guarded PostgreSQL tests | None for the verified development environment |
+| Explanation boundary | Complete | Trusted-claim builder, provider abstraction, parser, validator and deterministic renderer passed the complete suite | None | `uv run python -m unittest tests.unit.test_merge_readiness_explanations tests.unit.test_openai_llm_client tests.unit.test_gemini_llm_client -v` | Real-provider smoke needs credentials and approval |
+| API and frontend V1 states | Complete | Ready/blocked/unknown, typed failed run, explanations, run metadata, steps and sources have backend/frontend tests | None | `bun run test:web`; `bun run lint:web`; `bun run build:web` | None |
+| Eval and prompt versioning | Development quality passed; release gate failed | Formal Gemini development run completed 33 attempts; all 30 returned candidates passed quality checks, but three rate limits failed the zero-provider-failure threshold | Resolve quota/pacing, obtain approval for a new development run, then run untouched holdout only after it passes | Formal development report plus fake runner and focused eval suite | Provider availability/quota and new paid-call approval |
+| Observability | Complete offline | Runtime, connector, policy, persistence and explanation telemetry/redaction tests passed | Inspect deployed export | Observability-focused backend tests | Grafana/live inspection needs deployed telemetry backend |
+| Security and release documentation | Complete offline | Typed errors, redaction tests, HTTPS validation, bounded labels, ignored secrets/artifacts, smoke procedures and sensitive-pattern scan | Perform external smoke checks | Full verification loop and sensitive-pattern scan | Live provider checks remain external |
+
+## V1 completion checklist
+
+- [x] Fake and live GitHub implementations normalize to shared typed facts.
+- [x] Fake and live Jira implementations normalize to shared typed facts.
+- [x] The deterministic policy owns ready, blocked, and unknown decisions.
+- [x] Runtime steps are ordered, terminal states are enforced, and failures are sanitized.
+- [x] PostgreSQL persistence, retrieval, migration safety gates, and one Alembic head exist.
+- [x] Bounded source provenance is durable and visible in POST, GET, and the UI.
+- [x] Explanation parsing, grounding, deterministic rendering, and failure fallback are enforced.
+- [x] Offline telemetry, eval, backend, and frontend verification pass.
+- [x] Ordinary automated tests use fakes or injected transports/SDK doubles.
+- [ ] Live GitHub completed in a mixed-source smoke; live Jira still cannot read
+      `KAN-4` and the successful policy smoke used a process-local fake Jira fact.
+- [ ] Grafana export inspection requires a configured external backend.
+- [ ] Formal development produced perfect returned-candidate quality but failed
+      the operational threshold after three rate limits; holdout remains untouched.
+
+Engineering status is complete. Release status remains gated by the three
+external verification groups above.

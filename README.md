@@ -152,7 +152,7 @@ Do not commit `.env`, API tokens, or rendered authorization headers.
 Apply migrations explicitly, then start the API:
 
 ```bash
-uv run --env-file .env alembic upgrade head
+uv run --env-file .env python -m alembic upgrade head
 uv run --env-file .env python -m uvicorn app.main:app --reload
 ```
 
@@ -191,7 +191,7 @@ exception details.
 2. From `services/api`, apply the existing migration and start FastAPI:
 
    ```powershell
-   uv run --env-file .env alembic upgrade head
+   uv run --env-file .env python -m alembic upgrade head
    uv run --env-file .env python -m uvicorn app.main:app --reload
    ```
 
@@ -211,6 +211,9 @@ exception details.
        -Body $requestBody
 
    $response.result.decision
+   $response.run_id
+   $response.status
+   $response.sources
    $response.explanation
    $response.explanation_error
    ```
@@ -252,7 +255,7 @@ This procedure is manual because ordinary tests never contact GitHub.
 2. From `services/api`, apply migrations and start the API:
 
    ```powershell
-   uv run --env-file .env alembic upgrade head
+   uv run --env-file .env python -m alembic upgrade head
    uv run --env-file .env python -m uvicorn app.main:app --reload
    ```
 
@@ -277,8 +280,9 @@ This procedure is manual because ordinary tests never contact GitHub.
    ```
 
    Verify that authentication and repository access succeed, GitHub fields are
-   normalized and persisted, and connector spans identify GitHub `source=live`
-   and Jira `source=fake` when telemetry is enabled.
+   normalized and persisted, `$run.sources.github` is `live`, and
+   `$run.sources.jira` is `fake`. Connector spans must report the same bounded
+   sources when telemetry is enabled.
 
 4. Stop FastAPI and switch back to deterministic fixtures:
 
@@ -312,7 +316,7 @@ GitHub PR title, body, or branch. Password authentication is not supported.
 
    ```powershell
    cd C:\projects\promptql\services\api
-   uv run --env-file .env alembic upgrade head
+   uv run --env-file .env python -m alembic upgrade head
    uv run --env-file .env python -m uvicorn app.main:app --reload
    ```
 
@@ -336,11 +340,13 @@ GitHub PR title, body, or branch. Password authentication is not supported.
    ```
 
 4. Verify three ordered completed steps, normalized Jira category/status
-   evidence, durable retrieval, and `github=live` plus `jira=live` span sources.
+   evidence, durable retrieval, and `github=live` plus `jira=live` in both run
+   provenance and connector spans.
    Inspect logs/spans to ensure no email, token, Basic header, URL, issue key, or
    raw response appears. A non-done category is a verified blocker. A done
-   category removes that blocker, but the result remains `unknown` while the
-   standard Jira API cannot prove the site-specific blocker state.
+   category removes that blocker; standard Jira's unknown site-specific blocker
+   metadata remains visible evidence but does not make required evidence
+   unavailable.
 
 5. If practical, move only the harmless test issue between an in-progress and
    done-category status and repeat the request. Do not manufacture error states.

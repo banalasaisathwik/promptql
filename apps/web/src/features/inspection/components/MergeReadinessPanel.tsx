@@ -67,7 +67,60 @@ function ActionList({ actions }: { actions: PendingAction[] }) {
 }
 
 
+function RuntimeDetails({ analysis }: { analysis: PullRequestMergeReadiness }) {
+  return (
+    <section className="result-section" aria-labelledby="runtime-heading">
+      <h3 id="runtime-heading">Runtime execution</h3>
+      <dl className="evidence-reference-list">
+        <div><dt>Run ID</dt><dd><code>{analysis.run_id}</code></dd></div>
+        <div><dt>Run status</dt><dd>{analysis.status}</dd></div>
+        <div>
+          <dt>Sources</dt>
+          <dd>
+            GitHub: {analysis.sources?.github ?? 'unknown'}; Jira:{' '}
+            {analysis.sources?.jira ?? 'unknown'}; explanation:{' '}
+            {analysis.sources?.explanation ?? 'unknown'}
+          </dd>
+        </div>
+      </dl>
+      <h4>Ordered steps</h4>
+      <ol className="result-list">
+        {analysis.steps.map((step) => (
+          <li key={step.step_id}>
+            <code>{step.name}</code> — {step.status}
+            {step.duration_ms !== null && <small>{step.duration_ms} ms</small>}
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+
+function FailedRuntime({ analysis }: { analysis: PullRequestMergeReadiness }) {
+  if (analysis.status !== 'failed') {
+    return null
+  }
+
+  return (
+    <div className="inspection-result">
+      <section className="decision-card decision-card--blocked">
+        <p className="step-label">Runtime failed</p>
+        <h3>Merge readiness was not decided</h3>
+        <p>{analysis.error.message}</p>
+        <code>{analysis.error.code}</code>
+      </section>
+      <RuntimeDetails analysis={analysis} />
+    </div>
+  )
+}
+
+
 function AnalysisResult({ analysis }: { analysis: PullRequestMergeReadiness }) {
+  if (analysis.status === 'failed') {
+    return <FailedRuntime analysis={analysis} />
+  }
+
   const policyResult = analysis.result
 
   return (
@@ -83,6 +136,8 @@ function AnalysisResult({ analysis }: { analysis: PullRequestMergeReadiness }) {
         <p>{policyResult.summary}</p>
         <code>{policyResult.reason_code}</code>
       </section>
+
+      <RuntimeDetails analysis={analysis} />
 
       {analysis.explanation ? (
         <section className="result-section explanation-card">

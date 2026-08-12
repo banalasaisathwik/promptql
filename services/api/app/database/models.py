@@ -1,5 +1,3 @@
-pass
-
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -22,8 +20,6 @@ class DatabaseModel(DeclarativeBase):
 
 
 class WorkflowRunRow(DatabaseModel):
-    pass
-
     __tablename__ = "workflow_runs"
     __table_args__ = (
         CheckConstraint(
@@ -37,6 +33,19 @@ class WorkflowRunRow(DatabaseModel):
         CheckConstraint(
             "length(btrim(workflow_version)) > 0",
             name="ck_workflow_runs_version_not_empty",
+        ),
+        CheckConstraint(
+            "github_source IS NULL OR github_source IN ('fake', 'live')",
+            name="ck_workflow_runs_github_source",
+        ),
+        CheckConstraint(
+            "jira_source IS NULL OR jira_source IN ('fake', 'live')",
+            name="ck_workflow_runs_jira_source",
+        ),
+        CheckConstraint(
+            "explanation_source IS NULL OR "
+            "explanation_source IN ('fake', 'gemini', 'openai')",
+            name="ck_workflow_runs_explanation_source",
         ),
         CheckConstraint(
             "jsonb_typeof(request_payload) = 'object'",
@@ -79,12 +88,13 @@ class WorkflowRunRow(DatabaseModel):
     run_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True)
     workflow_name: Mapped[str] = mapped_column(Text, nullable=False)
     workflow_version: Mapped[str] = mapped_column(Text, nullable=False)
+    github_source: Mapped[str | None] = mapped_column(Text)
+    jira_source: Mapped[str | None] = mapped_column(Text)
+    explanation_source: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     request_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-
-
 
 
     github_facts: Mapped[dict[str, Any] | None] = mapped_column(
@@ -102,8 +112,6 @@ class WorkflowRunRow(DatabaseModel):
 
 
 class WorkflowStepRow(DatabaseModel):
-    pass
-
     __tablename__ = "workflow_steps"
     __table_args__ = (
         UniqueConstraint(

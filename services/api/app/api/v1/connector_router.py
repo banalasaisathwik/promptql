@@ -35,10 +35,12 @@ from app.observability import (
     RuntimeTelemetry,
 )
 from app.runtime import (
+    ExplanationSource,
     MergeReadinessRun,
     RunPersistenceError,
     RunRepository,
     RunStatus,
+    RunSources,
 )
 from app.workflows import MergeReadinessWorkflowService
 
@@ -73,32 +75,42 @@ def get_run_repository(
     )
 
 
-def get_merge_readiness_workflow(
-    github_connector: Annotated[GitHubConnector, Depends(get_github_connector)],
-    jira_connector: Annotated[JiraConnector, Depends(get_jira_connector)],
-    run_repository: Annotated[RunRepository, Depends(get_run_repository)],
-    telemetry: Annotated[RuntimeTelemetry, Depends(get_runtime_telemetry)],
-) -> MergeReadinessWorkflowService:
-    return MergeReadinessWorkflowService(
-        github_connector,
-        jira_connector,
-        run_repository,
-        telemetry=telemetry,
-    )
-
-
 def get_merge_readiness_explanation_service(
     request: Request,
 ) -> MergeReadinessExplanationService:
     return request.app.state.merge_readiness_explanation_service
 
 
+def get_merge_readiness_workflow(
+    github_connector: Annotated[GitHubConnector, Depends(get_github_connector)],
+    jira_connector: Annotated[JiraConnector, Depends(get_jira_connector)],
+    run_repository: Annotated[RunRepository, Depends(get_run_repository)],
+    telemetry: Annotated[RuntimeTelemetry, Depends(get_runtime_telemetry)],
+    explanation_service: Annotated[
+        MergeReadinessExplanationService,
+        Depends(get_merge_readiness_explanation_service),
+    ],
+) -> MergeReadinessWorkflowService:
+    return MergeReadinessWorkflowService(
+        github_connector,
+        jira_connector,
+        run_repository,
+        telemetry=telemetry,
+        explanation_provider=ExplanationSource(
+            explanation_service.provider.value
+        ),
+    )
 async def build_merge_readiness_response(
     run: MergeReadinessRun,
     explanation_service: MergeReadinessExplanationService,
 ) -> MergeReadinessResponse:
     explanation = None
     explanation_error = None
+    sources = RunSources(
+        github=run.sources.github if run.sources is not None else None,
+        jira=run.sources.jira if run.sources is not None else None,
+        explanation=ExplanationSource(explanation_service.provider.value),
+    )
     if run.status is RunStatus.COMPLETED and run.result is not None:
         try:
             explanation = await explanation_service.explain(run.result)
@@ -111,6 +123,7 @@ async def build_merge_readiness_response(
     return MergeReadinessResponse.model_validate(
         {
             **run.model_dump(),
+            "sources": sources,
             "explanation": explanation,
             "explanation_error": explanation_error,
         }

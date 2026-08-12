@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from hashlib import sha256
 from time import perf_counter_ns
 
 from pydantic import ValidationError
@@ -14,10 +15,12 @@ from app.explanations.models import (
     GeneratedExplanation,
     LLMStructuredResponse,
     LLMTokenUsage,
+    LLMProviderName,
     MergeReadinessExplanation,
     MergeReadinessExplanationInput,
     ValidatedExplanation,
 )
+from app.explanations.instructions import PROMPT_ID, PROMPT_VERSION
 from app.explanations.protocols import LLMClient
 from app.explanations.templates import render_validated_explanation
 from app.explanations.validator import (
@@ -67,6 +70,10 @@ class MergeReadinessExplanationService:
         self._duration_clock = duration_clock
         self._validator = validator or StrictMergeReadinessExplanationValidator()
 
+    @property
+    def provider(self) -> LLMProviderName:
+        return self._client.provider
+
     def _duration_ms(self, started_at_ns: int) -> int:
         elapsed_ns = max(0, self._duration_clock() - started_at_ns)
         return elapsed_ns // 1_000_000
@@ -113,7 +120,12 @@ class MergeReadinessExplanationService:
         started_at_ns = self._duration_clock()
 
         with self._telemetry.observe_llm_explanation(
-            self._client.provider.value
+            provider=self._client.provider.value,
+            prompt_id=PROMPT_ID,
+            prompt_version=PROMPT_VERSION,
+            model_fingerprint=sha256(
+                getattr(self._client, "model", "unreported").encode("utf-8")
+            ).hexdigest()[:16],
         ) as observation:
             try:
                 generated_response = await self._client.generate_structured(

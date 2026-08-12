@@ -42,6 +42,9 @@ generated claims, grounded reason/action coverage, deterministic rendering,
 decision preservation, sanitized failures, persistence non-mutation, and
 bounded telemetry without contacting a model provider. API integration tests
 separately prove the existing validated response contract remains unchanged.
+Provider-adapter tests also prove the explanation span carries prompt ID,
+prompt version, provider, and a configured-model fingerprint while metrics
+retain their closed low-cardinality label sets.
 
 `test_llm_provider_factory.py` verifies the credential-free fake default,
 OpenAI/Gemini configuration requirements, secret-free errors/representations,
@@ -57,7 +60,8 @@ refusal handling, Google's HTTP 400 invalid-key
 normalization, and a sanitized structured failure log without opening a Google
 connection.
 
-PostgreSQL repository and migration tests are opt-in. Without credentials they
+PostgreSQL repository and migration tests are opt-in. They include source
+provenance round trips and a pre-provenance nullable-row reconstruction. Without credentials they
 report explicit skips and do not create an engine or connect to a database.
 
 To run them, create a dedicated Neon test branch that contains no production
@@ -141,13 +145,13 @@ output.
 | --- | --- | --- | --- |
 | Frontend unit/component | Near `apps/web/src` as `*.test.ts(x)` | Transport, response rendering, and loading state | Configured with Bun test; no browser DOM runner |
 | Backend unit | `services/api/tests/unit` | Fake contracts, mocked GitHub/Jira HTTP normalization and errors, policy behavior, runtime transitions, and workflow execution | Configured with `unittest` discovery; no live provider calls |
-| Backend API integration | `services/api/tests/integration` | V1 catalog, raw inspection, completed runs, typed failed runs, delegation, and validation | Configured with `unittest` discovery and FastAPI TestClient |
+| Backend API integration | `services/api/tests/integration` | V1 catalog, raw inspection, completed runs, typed failed runs, source provenance, retrieval, delegation, and validation | Configured with `unittest` discovery and FastAPI TestClient |
 | Observability | `services/api/tests/unit/test_runtime_observability.py` and `services/api/tests/integration/test_observability_api.py` | In-memory spans/metrics, hierarchy, durable terminal emission, redaction, exporter isolation, health exclusion | Runs without Grafana credentials |
 | LLM explanation harness | `services/api/tests/unit/test_merge_readiness_explanations.py` | Minimized input, generated/validated trust separation, grounded code completeness, deterministic rendering, sanitized failures, persistence isolation, and safe telemetry | Internal fake/recording clients only; no real provider calls |
 | OpenAI adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_openai_llm_client.py` | Configuration, one-attempt SDK construction, Structured Output request shape, provider error normalization, token telemetry, validator preservation, and secret exclusion | Injected SDK boundary only; no external requests |
 | Gemini compatibility adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_gemini_llm_client.py` | Gemini-specific configuration, fixed Google endpoint, Chat Completions structured parsing, token mapping, validator preservation, and sanitized failures | Injected OpenAI SDK boundary only; no external requests |
 | Versioned explanation evals | `services/api/tests/unit/test_explanation_eval_*.py` | Development/holdout versioning, repeated samples, separate denominators, deterministic graders, pacing without retry, thresholds, safe artifacts, baselines, and paid-call gates | Automated tests use only fake/injected clients; real runs require approval |
-| PostgreSQL integration | `services/api/tests/integration/test_postgres_runtime_persistence.py` | Alembic schema, durable reconstruction, ordering, failures, and conflicts | Opt-in; skipped unless guarded test credentials are configured |
+| PostgreSQL integration | `services/api/tests/integration/test_postgres_runtime_persistence.py` | Alembic schema, durable reconstruction, ordering, provenance, legacy nullable rows, failures, and conflicts | Opt-in; skipped unless guarded test credentials are configured |
 | Cross-layer/end-to-end | Future repository-level area | Browser-to-API journeys | Planned; tooling not selected |
 
 Tests should assert observable behavior and invariants. Security boundaries,

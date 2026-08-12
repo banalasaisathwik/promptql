@@ -9,6 +9,7 @@ from app.explanations.models import (
 
 class FakeLLMClient:
     provider = LLMProviderName.FAKE
+    model = "deterministic-fake-v1"
 
     async def generate_structured(
         self,

@@ -23,6 +23,7 @@ import type {
   RequiredCheck,
   RuntimeErrorInfo,
   RuntimeStep,
+  RunSources,
 } from './types'
 
 
@@ -319,6 +320,51 @@ function isRuntimeStep(value: unknown): value is RuntimeStep {
 }
 
 
+function isRunSources(value: unknown): value is RunSources {
+  return (
+    isRecord(value) &&
+    (value.github === null || isOneOf(value.github, ['fake', 'live'])) &&
+    (value.jira === null || isOneOf(value.jira, ['fake', 'live'])) &&
+    (value.explanation === null ||
+      isOneOf(value.explanation, ['fake', 'gemini', 'openai']))
+  )
+}
+
+
+function hasCompletedRunState(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & {
+  status: 'completed'
+  error: null
+  result: MergeReadinessResult
+} {
+  return (
+    value.status === 'completed' &&
+    value.error === null &&
+    isMergeReadinessResult(value.result)
+  )
+}
+
+
+function hasFailedRunState(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & {
+  status: 'failed'
+  error: RuntimeErrorInfo
+  result: null
+  explanation: null
+  explanation_error: null
+} {
+  return (
+    value.status === 'failed' &&
+    isRuntimeError(value.error) &&
+    value.result === null &&
+    value.explanation === null &&
+    value.explanation_error === null
+  )
+}
+
+
 export function parseMergeReadiness(
   value: unknown,
 ): PullRequestMergeReadiness {
@@ -330,51 +376,76 @@ export function parseMergeReadiness(
     isRecord(value) &&
     (value.explanation_error === null ||
       isExplanationApiError(value.explanation_error))
-  const hasExactlyOneExplanationOutcome =
+  const completedExplanationOutcomeIsValid =
     isRecord(value) &&
-    ((value.explanation !== null && value.explanation_error === null) ||
+    (value.status !== 'completed' ||
+      (value.explanation !== null && value.explanation_error === null) ||
       (value.explanation === null && value.explanation_error !== null))
+  const sourcesAreValid =
+    isRecord(value) &&
+    (value.sources === undefined ||
+      value.sources === null ||
+      isRunSources(value.sources))
+  const completedRunIsValid = isRecord(value) && hasCompletedRunState(value)
+  const failedRunIsValid = isRecord(value) && hasFailedRunState(value)
 
   if (
     !isRecord(value) ||
     !isNonEmptyString(value.run_id) ||
     !isNonEmptyString(value.workflow_name) ||
     !isNonEmptyString(value.workflow_version) ||
-    value.status !== 'completed' ||
+    !(completedRunIsValid || failedRunIsValid) ||
     !isTimestamp(value.started_at) ||
     !isTimestamp(value.completed_at) ||
     !Array.isArray(value.steps) ||
     !value.steps.every(isRuntimeStep) ||
-    value.error !== null ||
-    !isMergeReadinessResult(value.result) ||
     !isConnectorRequest(value.request) ||
     !(value.github === null || isGitHubPullRequest(value.github)) ||
     !(value.jira === null || isJiraIssue(value.jira)) ||
     !explanationIsValid ||
     !explanationErrorIsValid ||
-    !hasExactlyOneExplanationOutcome ||
+    !completedExplanationOutcomeIsValid ||
+    !sourcesAreValid ||
     (isMergeReadinessExplanation(value.explanation) &&
+      isMergeReadinessResult(value.result) &&
       value.explanation.decision !== value.result.decision)
   ) {
     throw new ConnectorApiError('The merge-readiness response is malformed.')
   }
 
-  // Reconstructing the object after guards makes the proven types explicit to
-  // both TypeScript and a reader. No unchecked `as PullRequestInspection` cast
-  // crosses this network boundary.
-  return {
+  const commonRun = {
     run_id: value.run_id,
     workflow_name: value.workflow_name,
     workflow_version: value.workflow_version,
-    status: value.status,
+    sources: isRunSources(value.sources) ? value.sources : null,
     started_at: value.started_at,
     completed_at: value.completed_at,
     steps: value.steps,
-    error: value.error,
-    result: value.result,
     request: value.request,
     github: value.github,
     jira: value.jira,
+  }
+
+  if (hasFailedRunState(value)) {
+    return {
+      ...commonRun,
+      status: value.status,
+      error: value.error,
+      result: value.result,
+      explanation: value.explanation,
+      explanation_error: value.explanation_error,
+    }
+  }
+
+  // The earlier guard proved that a non-failed body is a completed body.
+  if (!hasCompletedRunState(value)) {
+    throw new ConnectorApiError('The merge-readiness response is malformed.')
+  }
+  return {
+    ...commonRun,
+    status: value.status,
+    error: value.error,
+    result: value.result,
     explanation: isMergeReadinessExplanation(value.explanation)
       ? value.explanation
       : null,

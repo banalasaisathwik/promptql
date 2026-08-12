@@ -1,15 +1,16 @@
-pass
-
 import asyncio
 import unittest
 from datetime import UTC, datetime, timedelta
+from pydantic import ValidationError
 
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.fixture_catalog import MERGE_READY_REQUEST
 from app.policy import evaluate_merge_readiness
 from app.runtime import (
+    ExplanationSource,
     InvalidStateTransitionError,
     RunStatus,
+    RunSources,
     RuntimeErrorCode,
     RuntimeErrorInfo,
     StepStatus,
@@ -22,6 +23,28 @@ from app.runtime import (
 
 
 class RuntimeStateTests(unittest.TestCase):
+    def test_unknown_source_values_are_rejected(self) -> None:
+        with self.assertRaises(ValidationError):
+            RunSources(
+                github="github-enterprise",
+                jira="fake",
+                explanation="fake",
+            )
+
+    def test_pending_run_keeps_bounded_source_provenance(self) -> None:
+        run = create_pending_run(
+            MERGE_READY_REQUEST,
+            sources=RunSources(
+                github="live",
+                jira="fake",
+                explanation=ExplanationSource.GEMINI,
+            ),
+        )
+
+        self.assertEqual(run.sources.github.value, "live")
+        self.assertEqual(run.sources.jira.value, "fake")
+        self.assertEqual(run.sources.explanation.value, "gemini")
+
     def test_completed_and_failed_runs_cannot_return_to_running(self) -> None:
         started_at = datetime(2026, 8, 2, 10, 0, tzinfo=UTC)
         completed_at = started_at + timedelta(seconds=1)
