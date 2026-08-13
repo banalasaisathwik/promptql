@@ -5,6 +5,10 @@ by PromptQL-like systems. This repository currently provides the frontend,
 backend, documentation, testing, and agent-development foundations; it does not
 yet contain the complete agent runtime.
 
+## Architecture
+
+![PromptQL V1 architecture](docs/arch/v1.png)
+
 ## Repository layout
 
 | Path | Purpose |
