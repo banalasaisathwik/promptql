@@ -5,6 +5,29 @@ by PromptQL-like systems. This repository currently provides the frontend,
 backend, documentation, testing, and agent-development foundations; it does not
 yet contain the complete agent runtime.
 
+## Live workflow dashboard
+
+The V1 developer dashboard opens at `/runs/<run_id>` and repeatedly reads the
+persisted current snapshot from `GET /v1/runs/{run_id}`. It is deliberately a
+snapshot-polling view, not an SSE/WebSocket/event-stream implementation.
+
+To start a dashboard-visible local run, send the same validated request body to
+`POST /v1/pull-request-merge-readiness-runs`. The API commits a pending run and
+returns `202 Accepted` with `{ "run_id": "...", "status": "pending" }`; the
+browser then navigates to the run page and polls approximately once a second.
+The existing `POST /v1/pull-request-merge-readiness` remains synchronous and
+returns its terminal result unchanged.
+
+Vite development serves the SPA entry point for `/runs/<run_id>`. A production
+web server must provide the same history fallback for `/runs/*` so a bookmarked
+or refreshed dashboard URL still loads the React application.
+
+Live execution currently uses a process-local task. It is suitable for local
+developer visibility but is not a durable worker: a process crash interrupts
+unfinished work, although PostgreSQL snapshots already committed before that
+crash remain readable. Grafana/OTel remains operational telemetry and is not
+used to populate the dashboard.
+
 ## Architecture
 
 ![PromptQL V1 architecture](docs/arch/v1.png)

@@ -16,6 +16,7 @@ from app.runtime.errors import (
     RunStateConflictError,
 )
 from app.runtime.repository import InMemoryRunRepository, RunRepository
+from app.runtime.live_run_tasks import LiveRunTaskRegistry
 from app.runtime.state import (
     InvalidStateTransitionError,
     create_pending_run,
@@ -28,6 +29,7 @@ __all__ = [
     "ExplanationSource",
     "InMemoryRunRepository",
     "InvalidStateTransitionError",
+    "LiveRunTaskRegistry",
     "MergeReadinessRun",
     "RunRepository",
     "RunPersistenceError",

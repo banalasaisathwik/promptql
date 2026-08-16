@@ -1,14 +1,18 @@
 /** Render the backend-owned policy decision and its supporting evidence. */
 
 import type {
+  CompletedMergeReadinessRun,
+  FailedMergeReadinessRun,
   PendingAction,
   PolicyFinding,
-  PullRequestMergeReadiness,
 } from '../types'
 
+type DisplayableMergeReadinessRun =
+  | CompletedMergeReadinessRun
+  | FailedMergeReadinessRun
 
 interface MergeReadinessPanelProps {
-  analysis: PullRequestMergeReadiness | null
+  analysis: DisplayableMergeReadinessRun | null
   loading: boolean
 }
 
@@ -67,7 +71,7 @@ function ActionList({ actions }: { actions: PendingAction[] }) {
 }
 
 
-function RuntimeDetails({ analysis }: { analysis: PullRequestMergeReadiness }) {
+function RuntimeDetails({ analysis }: { analysis: DisplayableMergeReadinessRun }) {
   return (
     <section className="result-section" aria-labelledby="runtime-heading">
       <h3 id="runtime-heading">Runtime execution</h3>
@@ -97,7 +101,7 @@ function RuntimeDetails({ analysis }: { analysis: PullRequestMergeReadiness }) {
 }
 
 
-function FailedRuntime({ analysis }: { analysis: PullRequestMergeReadiness }) {
+function FailedRuntime({ analysis }: { analysis: DisplayableMergeReadinessRun }) {
   if (analysis.status !== 'failed') {
     return null
   }
@@ -116,7 +120,7 @@ function FailedRuntime({ analysis }: { analysis: PullRequestMergeReadiness }) {
 }
 
 
-function AnalysisResult({ analysis }: { analysis: PullRequestMergeReadiness }) {
+function AnalysisResult({ analysis }: { analysis: DisplayableMergeReadinessRun }) {
   if (analysis.status === 'failed') {
     return <FailedRuntime analysis={analysis} />
   }

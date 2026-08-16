@@ -42,6 +42,7 @@ from app.explanations import (
 )
 from app.observability import Observability, create_observability
 from app.runtime import (
+    LiveRunTaskRegistry,
     RunPersistenceError,
     RunRecordInvalidError,
     RunStateConflictError,
@@ -149,6 +150,7 @@ def create_app(
         selected_llm_client,
         telemetry=app_observability.runtime_telemetry,
     )
+    live_run_task_registry = LiveRunTaskRegistry()
 
 
     @asynccontextmanager
@@ -167,7 +169,9 @@ def create_app(
             application.state.run_session_factory = create_session_factory(engine)
             yield
         finally:
+            await live_run_task_registry.shutdown()
             application.state.run_session_factory = None
+            application.state.live_run_task_registry = None
             if engine is not None:
                 engine.dispose()
             if isinstance(github_connector, HttpGitHubConnector):
@@ -187,6 +191,7 @@ def create_app(
     application.state.github_connector = github_connector
     application.state.jira_connector = jira_connector
     application.state.merge_readiness_explanation_service = explanation_service
+    application.state.live_run_task_registry = live_run_task_registry
     application.include_router(connector_router)
     application.add_exception_handler(
         FixtureNotFoundError,

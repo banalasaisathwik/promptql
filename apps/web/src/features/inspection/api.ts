@@ -8,12 +8,14 @@
 
 import { ConnectorApiError } from './apiError'
 import {
+  parseLiveRunStart,
   parseMergeReadiness,
   parseScenarioCatalog,
 } from './responseValidation'
 import type {
   ConnectorRequest,
   FixtureScenario,
+  LiveRunStart,
   PullRequestMergeReadiness,
 } from './types'
 
@@ -128,5 +130,28 @@ export async function analyzePullRequestMergeReadiness(
     body: JSON.stringify(request),
   })
 
+  return parseMergeReadiness(body)
+}
+
+
+export async function startLiveMergeReadinessRun(
+  request: ConnectorRequest,
+): Promise<LiveRunStart> {
+  const body = await requestJson('/v1/pull-request-merge-readiness-runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  return parseLiveRunStart(body)
+}
+
+
+export async function fetchMergeReadinessRun(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<PullRequestMergeReadiness> {
+  const body = await requestMergeReadiness(`/v1/runs/${encodeURIComponent(runId)}`, {
+    signal,
+  })
   return parseMergeReadiness(body)
 }

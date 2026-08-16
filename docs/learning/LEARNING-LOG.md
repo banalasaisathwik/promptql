@@ -1540,3 +1540,42 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** After an explicitly approved development eval, does
   20B meet the existing candidate-quality thresholds, or does evidence justify
   the higher latency and token price of 120B?
+
+### 2026-08-16 - Observe a workflow through snapshots before introducing events
+
+- **Concept:** A snapshot tells the dashboard what is true now; an event would
+  tell it what happened. V1 already writes meaningful immutable snapshots, so
+  a dashboard can poll the existing run resource without SSE, WebSockets, or a
+  new event table.
+- **Important syntax:** `asyncio.create_task()` schedules an awaitable in the
+  current process; `asyncio.gather(..., return_exceptions=True)` lets lifespan
+  shutdown cancel and await those tasks. In the browser, `AbortController`
+  cancels an in-flight fetch, while a recursive `setTimeout` after each response
+  prevents overlapping polls that `setInterval` could create.
+- **Implementation locations:** The additive start contract is in
+  `api/v1/connector_router.py` and `api/v1/models.py`; the existing workflow
+  now separates pending-snapshot creation from continuation in
+  `workflows/merge_readiness.py`; `runtime/live_run_tasks.py` owns only task
+  references. The frontend validates active snapshots in
+  `responseValidation.ts`, polls through `runPolling.ts`, and renders
+  `/runs/:runId` with `RunDashboardPage.tsx`.
+- **Design decision:** Preserve the synchronous V1 POST and add a distinct
+  `202 Accepted` route. `202` means the pending snapshot committed and work was
+  accepted, not that policy execution completed. ADR-018 records why this is a
+  local/developer boundary rather than durable worker execution.
+- **Invariant or failure behavior:** PostgreSQL snapshots remain the browser's
+  source of truth. Temporary dashboard refresh errors never become workflow
+  failures. Only backend policy can supply ready/blocked/unknown. Raw JSON is
+  rendered only after frontend validation, and runtime errors stay sanitized.
+- **Trade-off:** One polling read per active dashboard per second is simple and
+  inspectable at this small scale, but not suitable for high fan-out. A process
+  crash stops local tasks; committed snapshots survive but work does not resume.
+- **Validation evidence:** Focused API/workflow/task-registry tests verify
+  pending acceptance, GET-visible transitions, typed failure, synchronous
+  compatibility, and shutdown cancellation. Frontend tests verify transport
+  validation, serialized terminal-aware polling, abort cleanup, refresh-error
+  separation, and dashboard rendering; frontend build and lint provide type and
+  bundling evidence.
+- **Unresolved question:** When V2 needs history, replay, crash recovery, or
+  many live viewers, what durable `RunEvent` shape and SSE cursor contract can
+  extend snapshots without exposing private model reasoning?

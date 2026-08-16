@@ -23,6 +23,21 @@ bun run test:web
 The Bun tests validate frontend transport and server-rendered presentation
 behavior. No root command currently validates the Python application.
 
+`test_merge_readiness_api.py` proves the additive live-start route commits and
+returns a pending ID before continuation, exposes running and terminal
+snapshots through `GET /v1/runs/{run_id}`, preserves the synchronous route, and
+keeps background connector failures as sanitized failed runs. The API test uses
+a small threaded launcher only because the repository's synchronous
+`TestClient` does not keep detached asyncio tasks alive between requests; the
+application runtime uses its own asyncio task registry. `test_live_run_tasks.py`
+proves application shutdown cancels unfinished in-process work.
+
+`runPolling.test.ts` proves frontend snapshot refreshes are serialized, stop on
+a terminal run, abort on stop, and report a temporary refresh failure without
+turning it into a workflow failure. `RunDashboardPage.test.tsx` proves the
+rendered developer view uses readable step labels, durations, source
+provenance, sanitized errors, and only validated raw run JSON.
+
 `test_github_http_connector.py` injects `httpx.MockTransport` into the real
 `HttpGitHubConnector`. It exercises request handling, Pydantic response
 validation, pagination, and normalization without opening a network connection.

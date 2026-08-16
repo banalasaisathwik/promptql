@@ -9,6 +9,7 @@ from app.api.v1.models import (
     ApiError,
     ApiErrorCode,
     ExplanationApiError,
+    LiveRunStartResponse,
     MergeReadinessResponse,
     RuntimePersistenceApiError,
 )
@@ -41,6 +42,7 @@ from app.runtime import (
     RunRepository,
     RunStatus,
     RunSources,
+    LiveRunTaskRegistry,
 )
 from app.workflows import MergeReadinessWorkflowService
 
@@ -79,6 +81,10 @@ def get_merge_readiness_explanation_service(
     request: Request,
 ) -> MergeReadinessExplanationService:
     return request.app.state.merge_readiness_explanation_service
+
+
+def get_live_run_task_registry(request: Request) -> LiveRunTaskRegistry:
+    return request.app.state.live_run_task_registry
 
 
 def get_merge_readiness_workflow(
@@ -182,6 +188,41 @@ async def analyze_pull_request(
             content=response.model_dump(mode="json"),
         )
     return response
+
+
+@router.post(
+    "/pull-request-merge-readiness-runs",
+    status_code=202,
+    response_model=LiveRunStartResponse,
+    responses={
+        404: {"model": ApiError},
+        503: {"model": RuntimePersistenceApiError},
+    },
+)
+async def start_live_merge_readiness_run(
+    request: ConnectorRequest,
+    workflow: Annotated[
+        MergeReadinessWorkflowService,
+        Depends(get_merge_readiness_workflow),
+    ],
+    task_registry: Annotated[
+        LiveRunTaskRegistry,
+        Depends(get_live_run_task_registry),
+    ],
+) -> LiveRunStartResponse:
+    pending_run = await workflow.create_persisted_run(request)
+    task_registry.start(_continue_live_run(workflow, pending_run))
+    return LiveRunStartResponse(run_id=pending_run.run_id, status=pending_run.status)
+
+
+async def _continue_live_run(
+    workflow: MergeReadinessWorkflowService,
+    pending_run: MergeReadinessRun,
+) -> None:
+    try:
+        await workflow.continue_persisted_run(pending_run)
+    except Exception:
+        return
 
 
 @router.get(

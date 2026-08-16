@@ -1,5 +1,7 @@
 import asyncio
 import unittest
+from threading import Event, Thread
+from time import monotonic, sleep
 from uuid import UUID
 
 from fastapi.testclient import TestClient
@@ -7,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.api.v1.connector_router import (
     get_github_connector,
     get_jira_connector,
+    get_live_run_task_registry,
     get_merge_readiness_explanation_service,
     get_merge_readiness_workflow,
     get_run_repository,
@@ -51,6 +54,33 @@ class FailingGitHubConnector:
         _request: ConnectorRequest,
     ) -> GitHubPullRequest:
         raise RuntimeError("secret-connector-detail")
+
+
+class BlockingGitHubConnector(FakeGitHubConnector):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = Event()
+        self.release = Event()
+
+    async def get_pull_request(self, request: ConnectorRequest) -> GitHubPullRequest:
+        self.started.set()
+        await asyncio.to_thread(self.release.wait)
+        return await super().get_pull_request(request)
+
+
+class HoldingLiveRunTaskRegistry:
+    def start(self, operation) -> None:
+        operation.close()
+
+
+class ThreadedLiveRunTaskRegistry:
+    def __init__(self) -> None:
+        self.threads: list[Thread] = []
+
+    def start(self, operation) -> None:
+        thread = Thread(target=lambda: asyncio.run(operation), daemon=True)
+        self.threads.append(thread)
+        thread.start()
 
 
 class AlteredExplanationClient:
@@ -126,6 +156,21 @@ class MergeReadinessApiTests(unittest.TestCase):
             json=request.model_dump(mode="json"),
         )
 
+    def start_live_request(self, request: ConnectorRequest):
+        return self.client.post(
+            "/v1/pull-request-merge-readiness-runs",
+            json=request.model_dump(mode="json"),
+        )
+
+    def wait_for_run_status(self, run_id: str, expected_status: str) -> dict:
+        deadline = monotonic() + 2
+        while monotonic() < deadline:
+            response = self.client.get(f"/v1/runs/{run_id}")
+            if response.status_code == 200 and response.json()["status"] == expected_status:
+                return response.json()
+            sleep(0.01)
+        self.fail(f"run {run_id} did not become {expected_status}")
+
     def test_failed_ci_returns_completed_blocked_run(self) -> None:
         response = self.post_request(FAILED_CI_REQUEST)
 
@@ -135,6 +180,56 @@ class MergeReadinessApiTests(unittest.TestCase):
         self.assertEqual(body["result"]["decision"], "blocked")
         self.assertIsNone(body["error"])
         self.assertEqual(len(body["steps"]), 3)
+
+    def test_live_start_returns_committed_pending_run_before_execution(self) -> None:
+        app.dependency_overrides[get_live_run_task_registry] = (
+            HoldingLiveRunTaskRegistry
+        )
+
+        response = self.start_live_request(MERGE_READY_REQUEST)
+
+        self.assertEqual(response.status_code, 202)
+        body = response.json()
+        self.assertEqual(body["status"], "pending")
+        stored = self.repository.get(UUID(body["run_id"]))
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.status.value, "pending")
+        self.assertEqual(stored.steps, ())
+
+    def test_live_run_transitions_are_visible_through_get(self) -> None:
+        github_connector = BlockingGitHubConnector()
+        app.dependency_overrides[get_github_connector] = lambda: github_connector
+        task_registry = ThreadedLiveRunTaskRegistry()
+        app.dependency_overrides[get_live_run_task_registry] = lambda: task_registry
+
+        response = self.start_live_request(MERGE_READY_REQUEST)
+
+        self.assertEqual(response.status_code, 202)
+        run_id = response.json()["run_id"]
+        self.assertTrue(github_connector.started.wait(timeout=1))
+        running = self.client.get(f"/v1/runs/{run_id}")
+        self.assertEqual(running.status_code, 200)
+        self.assertEqual(running.json()["status"], "running")
+        self.assertEqual(running.json()["steps"][-1]["status"], "running")
+
+        github_connector.release.set()
+        completed = self.wait_for_run_status(run_id, "completed")
+        self.assertEqual(completed["result"]["decision"], "ready")
+        for thread in task_registry.threads:
+            thread.join(timeout=1)
+
+    def test_live_background_connector_failure_persists_sanitized_failed_run(self) -> None:
+        app.dependency_overrides[get_github_connector] = provide_failing_github_connector
+        app.dependency_overrides[get_live_run_task_registry] = (
+            ThreadedLiveRunTaskRegistry
+        )
+
+        response = self.start_live_request(MERGE_READY_REQUEST)
+
+        self.assertEqual(response.status_code, 202)
+        failed = self.wait_for_run_status(response.json()["run_id"], "failed")
+        self.assertEqual(failed["error"]["code"], "connector_execution_failed")
+        self.assertNotIn("secret-connector-detail", failed["error"]["message"])
 
     def test_merge_ready_facts_return_completed_ready_run(self) -> None:
         response = self.post_request(MERGE_READY_REQUEST)

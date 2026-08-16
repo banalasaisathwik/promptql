@@ -365,6 +365,44 @@ function hasFailedRunState(
 }
 
 
+function hasActiveRunState(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & {
+  status: 'pending' | 'running'
+  error: null
+  result: null
+  explanation: null
+  explanation_error: null
+} {
+  return (
+    isOneOf(value.status, ['pending', 'running']) &&
+    value.error === null &&
+    value.result === null &&
+    value.explanation === null &&
+    value.explanation_error === null
+  )
+}
+
+
+function hasCancelledRunState(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & {
+  status: 'cancelled'
+  error: RuntimeErrorInfo | null
+  result: null
+  explanation: null
+  explanation_error: null
+} {
+  return (
+    value.status === 'cancelled' &&
+    (value.error === null || isRuntimeError(value.error)) &&
+    value.result === null &&
+    value.explanation === null &&
+    value.explanation_error === null
+  )
+}
+
+
 export function parseMergeReadiness(
   value: unknown,
 ): PullRequestMergeReadiness {
@@ -388,15 +426,17 @@ export function parseMergeReadiness(
       isRunSources(value.sources))
   const completedRunIsValid = isRecord(value) && hasCompletedRunState(value)
   const failedRunIsValid = isRecord(value) && hasFailedRunState(value)
+  const activeRunIsValid = isRecord(value) && hasActiveRunState(value)
+  const cancelledRunIsValid = isRecord(value) && hasCancelledRunState(value)
 
   if (
     !isRecord(value) ||
     !isNonEmptyString(value.run_id) ||
     !isNonEmptyString(value.workflow_name) ||
     !isNonEmptyString(value.workflow_version) ||
-    !(completedRunIsValid || failedRunIsValid) ||
-    !isTimestamp(value.started_at) ||
-    !isTimestamp(value.completed_at) ||
+    !(completedRunIsValid || failedRunIsValid || activeRunIsValid || cancelledRunIsValid) ||
+    !(value.started_at === null || isTimestamp(value.started_at)) ||
+    !(value.completed_at === null || isTimestamp(value.completed_at)) ||
     !Array.isArray(value.steps) ||
     !value.steps.every(isRuntimeStep) ||
     !isConnectorRequest(value.request) ||
@@ -418,8 +458,8 @@ export function parseMergeReadiness(
     workflow_name: value.workflow_name,
     workflow_version: value.workflow_version,
     sources: isRunSources(value.sources) ? value.sources : null,
-    started_at: value.started_at,
-    completed_at: value.completed_at,
+    started_at: value.started_at as string | null,
+    completed_at: value.completed_at as string | null,
     steps: value.steps,
     request: value.request,
     github: value.github,
@@ -434,6 +474,28 @@ export function parseMergeReadiness(
       result: value.result,
       explanation: value.explanation,
       explanation_error: value.explanation_error,
+    }
+  }
+
+  if (hasActiveRunState(value)) {
+    return {
+      ...commonRun,
+      status: value.status,
+      error: null,
+      result: null,
+      explanation: null,
+      explanation_error: null,
+    }
+  }
+
+  if (hasCancelledRunState(value)) {
+    return {
+      ...commonRun,
+      status: value.status,
+      error: value.error,
+      result: null,
+      explanation: null,
+      explanation_error: null,
     }
   }
 
@@ -453,4 +515,19 @@ export function parseMergeReadiness(
       ? value.explanation_error
       : null,
   }
+}
+
+
+export function parseLiveRunStart(value: unknown): {
+  run_id: string
+  status: 'pending'
+} {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyString(value.run_id) ||
+    value.status !== 'pending'
+  ) {
+    throw new ConnectorApiError('The live-run start response is malformed.')
+  }
+  return { run_id: value.run_id, status: value.status }
 }

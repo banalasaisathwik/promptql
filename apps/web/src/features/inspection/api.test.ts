@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { analyzePullRequestMergeReadiness } from './api'
+import {
+  analyzePullRequestMergeReadiness,
+  fetchMergeReadinessRun,
+  startLiveMergeReadinessRun,
+} from './api'
 import { ConnectorApiError } from './apiError'
 import type { PullRequestMergeReadiness } from './types'
 
@@ -42,6 +46,36 @@ const READY_RESPONSE: PullRequestMergeReadiness = {
 
 const originalFetch = globalThis.fetch
 
+const RUNNING_RESPONSE = {
+  ...READY_RESPONSE,
+  status: 'running' as const,
+  started_at: '2026-08-02T10:00:00Z',
+  completed_at: null,
+  steps: [
+    {
+      step_id: 'c3bdb98c-1389-4eb8-a8bb-b004b323dd64',
+      name: 'fetch_github_facts' as const,
+      status: 'running' as const,
+      started_at: '2026-08-02T10:00:00Z',
+      completed_at: null,
+      duration_ms: null,
+      attempt: 1,
+      error: null,
+    },
+  ],
+  error: null,
+  result: null,
+  explanation: null,
+  explanation_error: null,
+}
+
+const PENDING_RESPONSE = {
+  ...RUNNING_RESPONSE,
+  status: 'pending' as const,
+  started_at: null,
+  steps: [],
+}
+
 
 afterEach(() => {
   globalThis.fetch = originalFetch
@@ -49,6 +83,66 @@ afterEach(() => {
 
 
 describe('merge-readiness API client', () => {
+  test('starts a live run through the additive accepted-work endpoint', async () => {
+    let requestedUrl = ''
+    let requestedInit: RequestInit | undefined
+    globalThis.fetch = (async (url, init) => {
+      requestedUrl = String(url)
+      requestedInit = init
+      return new Response(
+        JSON.stringify({ run_id: READY_RESPONSE.run_id, status: 'pending' }),
+        { status: 202, headers: { 'Content-Type': 'application/json' } },
+      )
+    }) as typeof fetch
+
+    const accepted = await startLiveMergeReadinessRun(READY_RESPONSE.request)
+
+    expect(requestedUrl).toBe('/v1/pull-request-merge-readiness-runs')
+    expect(requestedInit?.method).toBe('POST')
+    expect(accepted).toEqual({ run_id: READY_RESPONSE.run_id, status: 'pending' })
+  })
+
+  test('parses a current running snapshot retrieved by run ID', async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(RUNNING_RESPONSE), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch
+
+    const run = await fetchMergeReadinessRun(READY_RESPONSE.run_id)
+
+    expect(run.status).toBe('running')
+    expect(run.completed_at).toBeNull()
+    expect(run.steps[0]?.status).toBe('running')
+  })
+
+  test('parses a valid pending run before its first step starts', async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(PENDING_RESPONSE), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch
+
+    const run = await fetchMergeReadinessRun(READY_RESPONSE.run_id)
+
+    expect(run.status).toBe('pending')
+    expect(run.started_at).toBeNull()
+    expect(run.steps).toEqual([])
+  })
+
+  test('rejects malformed live snapshots before dashboard rendering', async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ ...RUNNING_RESPONSE, result: READY_RESPONSE.result }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )) as typeof fetch
+
+    await expect(fetchMergeReadinessRun(READY_RESPONSE.run_id)).rejects.toMatchObject({
+      name: 'ConnectorApiError',
+      message: 'The merge-readiness response is malformed.',
+    } satisfies Partial<ConnectorApiError>)
+  })
+
   test('submits the exact request fields to the complete workflow endpoint', async () => {
     let requestedUrl = ''
     let requestedInit: RequestInit | undefined

@@ -26,6 +26,17 @@ class RuntimePersistenceApiError(ApiError):
     run_id: UUID | None
 
 
+class LiveRunStartResponse(ContractModel):
+    run_id: UUID
+    status: RunStatus
+
+    @model_validator(mode="after")
+    def validate_pending_status(self) -> Self:
+        if self.status is not RunStatus.PENDING:
+            raise ValueError("a newly accepted live run must be pending")
+        return self
+
+
 class ExplanationApiError(ContractModel):
     code: ExplanationErrorCode
     message: NonEmptyString

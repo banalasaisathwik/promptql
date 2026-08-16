@@ -16,6 +16,171 @@
   justify-content: space-between;
 }
 
+/* --------------------------------------------------------------------------
+   Developer runtime dashboard
+   -------------------------------------------------------------------------- */
+.run-workspace {
+  display: grid;
+  gap: 22px;
+}
+
+.run-header,
+.run-summary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 22px;
+  align-items: start;
+}
+
+.run-header h1 {
+  max-width: 780px;
+  margin: 9px 0;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font: 650 clamp(24px, 4vw, 42px)/1.1 var(--mono);
+  letter-spacing: -0.04em;
+}
+
+.run-status,
+.run-card {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
+}
+
+.run-status {
+  min-width: 125px;
+  padding: 14px 16px;
+  text-align: right;
+}
+
+.run-status span {
+  display: block;
+  font-size: 13px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.run-status small {
+  color: var(--text-muted);
+  font: 12px var(--mono);
+}
+
+.run-status--completed { border-color: rgb(43 166 109 / 35%); }
+.run-status--failed { border-color: rgb(190 58 76 / 35%); }
+.run-status--running { border-color: var(--purple-border); }
+
+.run-summary-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.run-card {
+  padding: 22px;
+}
+
+.run-card h2,
+.run-section-heading h2 {
+  margin: 6px 0 9px;
+  color: var(--text-strong);
+  font-size: 20px;
+  letter-spacing: -0.025em;
+}
+
+.run-card > p:not(.step-label) {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.run-metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 15px 0 0;
+}
+
+.run-metadata dt,
+.run-metadata dd {
+  margin: 0;
+}
+
+.run-metadata dt {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.run-metadata dd {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+.run-section-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.run-section-heading > span {
+  color: var(--text-faint);
+  font: 11px var(--mono);
+}
+
+.run-timeline {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.run-step {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 70%);
+}
+
+.run-step--running { border-color: var(--purple-border); background: var(--purple-soft); }
+.run-step--failed { border-color: rgb(190 58 76 / 25%); }
+
+.run-step-symbol {
+  color: var(--text-faint);
+  font-size: 17px;
+  line-height: 1.1;
+}
+
+.run-step--completed .run-step-symbol { color: #2ba66d; }
+.run-step--running .run-step-symbol { color: var(--purple); }
+.run-step--failed .run-step-symbol { color: var(--error); }
+
+.run-step-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.run-step-copy strong { color: var(--text-strong); font-size: 13px; }
+.run-step-copy > span { color: var(--text-muted); font-size: 11px; }
+.run-step-copy small { color: var(--text-faint); font-size: 10px; line-height: 1.45; }
+.run-step-error { margin: 5px 0 0; color: var(--error); font-size: 11px; }
+.run-step-duration { color: var(--text-muted); font: 11px var(--mono); white-space: nowrap; }
+.run-empty { color: var(--text-muted); font-size: 13px; }
+.run-card--error { border-color: rgb(190 58 76 / 30%); }
+.run-result .preview-card { min-height: auto; }
+.run-raw { margin-bottom: 20px; }
+
 .site-header {
   min-height: 78px;
   border-bottom: 1px solid var(--border);
@@ -752,6 +917,15 @@
     grid-template-columns: 1fr;
   }
 
+  .run-header,
+  .run-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .run-status {
+    text-align: left;
+  }
+
   .preview-card {
     min-height: 390px;
   }
@@ -805,6 +979,15 @@
   .fact-grid--jira,
   .people-list {
     grid-template-columns: 1fr;
+  }
+
+  .run-metadata,
+  .run-step {
+    grid-template-columns: 1fr;
+  }
+
+  .run-step-symbol {
+    display: none;
   }
 }
 

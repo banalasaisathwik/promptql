@@ -21,15 +21,17 @@ browser -> Vite React application -> FastAPI API -> Neon PostgreSQL
                                       `-> OTLP traces/metrics -> Grafana Cloud
 ```
 
-The frontend loads the backend-owned demo scenario catalog, posts a validated
-connector request, and renders the backend-owned merge-readiness decision plus
-its supporting GitHub and Jira fixture evidence. The API also serves
-`GET /health`.
+The frontend loads the backend-owned demo scenario catalog, starts or
+synchronously executes a validated connector request, and renders the
+backend-owned merge-readiness decision plus its supporting GitHub and Jira
+fixture evidence. A developer run page repeatedly reads the persisted current
+snapshot for an accepted run. The API also serves `GET /health`.
 
 ```text
 GET  /v1/demo/pull-request-scenarios -> selectable fixture metadata
 POST /v1/pull-request-inspections    -> combined GitHub and Jira facts
 POST /v1/pull-request-merge-readiness -> runtime run, policy result, and facts
+POST /v1/pull-request-merge-readiness-runs -> accepted pending run ID (202)
 GET  /v1/runs/{run_id}               -> persisted typed runtime run
 ```
 
@@ -41,7 +43,7 @@ same routing contract.
 
 | Path | Current responsibility |
 | --- | --- |
-| `apps/web` | Browser UI, runtime response validation, backend fixture selection, request submission, and evidence presentation |
+| `apps/web` | Browser UI, runtime response validation, backend fixture selection, synchronous/live request submission, snapshot polling, and evidence presentation |
 | `services/api` | Backend HTTP boundary, independently selected fake/live GitHub and Jira connectors, asynchronous workflow execution, PostgreSQL persistence, and pure merge-readiness policy |
 | `packages` | Reserved for reusable TypeScript packages; not yet present |
 | `docs` | Product, architecture, testing, decisions, work records, and learning |
@@ -233,7 +235,13 @@ apps/web/src/features/inspection/
 - The basic runtime creates a unique run, records three ordered steps, enforces
   terminal state transitions, and returns immutable Pydantic snapshots. A
   completed run contains `result`; a failed run returns HTTP `500`, contains a
-  sanitized error, and has `result=null`.
+  sanitized error, and has `result=null` on the synchronous route.
+- `POST /v1/pull-request-merge-readiness-runs` is additive developer-facing
+  execution: it first commits a pending snapshot, returns `202 Accepted` with
+  its run ID, and starts the existing workflow in a process-local task. The
+  task registry keeps only task references and cancels them at app shutdown; it
+  is not durable execution or crash recovery. PostgreSQL snapshots committed
+  before a crash remain readable.
 - `RunRepository` isolates workflow execution from storage. Production route
   dependencies require `PostgresRunRepository`; memory is available only when
   unit and HTTP tests inject it explicitly.
@@ -267,10 +275,41 @@ apps/web/src/features/inspection/
   setup and exporter failures degrade safely without changing HTTP, runtime,
   policy, or persistence behavior.
 - Frontend network data remains `unknown` until `responseValidation.ts` proves
-  the expected runtime structure. The parser accepts completed runs and the
-  existing typed failed-run HTTP 500 body as distinct unions. The panel shows
-  run ID, terminal status, ordered steps, and source provenance without
-  deriving a policy decision.
+  the expected runtime structure. The parser accepts pending, running,
+  completed, failed, and cancelled snapshots as distinct unions. The dashboard
+  shows run ID, status, ordered steps, timing, source provenance, sanitized
+  failures, final backend result, and a pretty-printed copy of the validated
+  run without deriving a policy decision.
+
+## Live run dashboard
+
+`GET /v1/runs/{run_id}` means **the persisted current workflow snapshot**. The
+live dashboard at `/runs/:runId` observes that state by issuing a serialized
+GET request about once per second while the snapshot is `pending` or `running`.
+It stops once the snapshot is `completed`, `failed`, or `cancelled`, and also
+stops and aborts its request on route change or component unmount. A temporary
+refresh failure remains a dashboard refresh notice; it never changes a
+workflow's backend-owned status to `failed`.
+
+The page can open any existing persisted ID, including after a browser refresh.
+It does not keep critical run state only in React memory. The immediate live
+flow is:
+
+```text
+browser POST live-start -> PostgreSQL pending snapshot -> 202 {run_id, pending}
+browser navigate /runs/:runId -> repeated GET snapshot -> validated dashboard
+in-process task -> existing workflow transitions -> PostgreSQL current snapshot
+```
+
+Vite development supplies the SPA history fallback for `/runs/*`; a production
+web server must serve the same application entry point for bookmarked or
+refreshed run URLs before the browser can make its relative `/v1` requests.
+
+This is state, not an event architecture: state says what is true now; an event
+says what happened. V2 may add durable `RunEvent` history and an SSE stream
+alongside snapshots when replay, recovery, or high-fan-out updates justify it.
+The dashboard neither queries Grafana nor exposes OTel spans. Grafana/OTel
+remains operational telemetry; the dashboard is product/runtime visibility.
 
 ## Not implemented
 

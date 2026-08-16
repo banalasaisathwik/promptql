@@ -268,12 +268,33 @@ class MergeReadinessWorkflowService:
 
     async def execute(self, request: ConnectorRequest) -> MergeReadinessRun:
         run = create_pending_run(request, sources=self._sources)
+        return await self._execute_created_run(run, initial_snapshot_is_saved=False)
+
+    async def create_persisted_run(
+        self,
+        request: ConnectorRequest,
+    ) -> MergeReadinessRun:
+        run = create_pending_run(request, sources=self._sources)
+        return await self._save(run, PersistenceCheckpoint.RUN_CREATED)
+
+    async def continue_persisted_run(
+        self,
+        run: MergeReadinessRun,
+    ) -> MergeReadinessRun:
+        return await self._execute_created_run(run, initial_snapshot_is_saved=True)
+
+    async def _execute_created_run(
+        self,
+        run: MergeReadinessRun,
+        *,
+        initial_snapshot_is_saved: bool,
+    ) -> MergeReadinessRun:
         with self._telemetry.observe_workflow(run) as workflow_observation:
             try:
                 return await self._execute_workflow(
-                    request,
                     run,
                     workflow_observation,
+                    initial_snapshot_is_saved=initial_snapshot_is_saved,
                 )
             except (
                 RunPersistenceError,
@@ -296,11 +317,13 @@ class MergeReadinessWorkflowService:
 
     async def _execute_workflow(
         self,
-        request: ConnectorRequest,
         run: MergeReadinessRun,
         workflow_observation: SpanObservation,
+        *,
+        initial_snapshot_is_saved: bool,
     ) -> MergeReadinessRun:
-        run = await self._save(run, PersistenceCheckpoint.RUN_CREATED)
+        if not initial_snapshot_is_saved:
+            run = await self._save(run, PersistenceCheckpoint.RUN_CREATED)
         run = await self._save(
             transition_run(
                 run,
@@ -312,7 +335,7 @@ class MergeReadinessWorkflowService:
 
         run, github_facts, workflow_must_stop = await self._fetch_github_facts(
             run,
-            request,
+            run.request,
             workflow_observation,
         )
         if workflow_must_stop:

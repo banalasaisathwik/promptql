@@ -7,8 +7,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
-  analyzePullRequestMergeReadiness,
   fetchFixtureScenarios,
+  startLiveMergeReadinessRun,
 } from './api'
 import { ConnectorApiError } from './apiError'
 import { MergeReadinessPanel } from './components/MergeReadinessPanel'
@@ -21,11 +21,14 @@ import type {
   ConnectorRequestDraft,
   ConnectorRequestErrors,
   FixtureScenario,
-  PullRequestMergeReadiness,
 } from './types'
 
 
-export function MergeReadinessPage() {
+export function MergeReadinessPage({
+  onLiveRunStarted,
+}: {
+  onLiveRunStarted: (runId: string) => void
+}) {
   // Each useState call owns one independent piece of changing UI data. Keeping
   // request, catalog, and submission state separate makes transitions explicit.
   const [draft, setDraft] = useState<ConnectorRequestDraft>(
@@ -36,7 +39,6 @@ export function MergeReadinessPage() {
   const [selectedScenarioId, setSelectedScenarioId] = useState('')
   const [catalogError, setCatalogError] = useState<string | null>(null)
   const [catalogLoading, setCatalogLoading] = useState(true)
-  const [analysis, setAnalysis] = useState<PullRequestMergeReadiness | null>(null)
   const [submissionError, setSubmissionError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const submissionInProgress = useRef(false)
@@ -72,7 +74,6 @@ export function MergeReadinessPage() {
   }, [])
 
   function clearAnalysisResult() {
-    setAnalysis(null)
     setSubmissionError(null)
   }
 
@@ -126,8 +127,8 @@ export function MergeReadinessPage() {
     clearAnalysisResult()
 
     try {
-      const response = await analyzePullRequestMergeReadiness(result.request)
-      setAnalysis(response)
+      const acceptedRun = await startLiveMergeReadinessRun(result.request)
+      onLiveRunStarted(acceptedRun.run_id)
     } catch (error) {
       setSubmissionError(
         error instanceof ConnectorApiError
@@ -175,7 +176,7 @@ export function MergeReadinessPage() {
             onScenarioChange={selectScenario}
             onSubmit={submitAnalysis}
           />
-          <MergeReadinessPanel analysis={analysis} loading={submitting} />
+          <MergeReadinessPanel analysis={null} loading={submitting} />
         </div>
       </section>
 

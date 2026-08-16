@@ -216,8 +216,8 @@ interface MergeReadinessRunBase {
   workflow_name: string
   workflow_version: string
   sources: RunSources | null
-  started_at: string
-  completed_at: string
+  started_at: string | null
+  completed_at: string | null
   steps: RuntimeStep[]
   request: ConnectorRequest
   github: GitHubPullRequest | null
@@ -240,6 +240,41 @@ export interface FailedMergeReadinessRun extends MergeReadinessRunBase {
   explanation_error: null
 }
 
-export type PullRequestMergeReadiness =
+export interface PendingMergeReadinessRun extends MergeReadinessRunBase {
+  status: 'pending'
+  error: null
+  result: null
+  explanation: null
+  explanation_error: null
+}
+
+export interface RunningMergeReadinessRun extends MergeReadinessRunBase {
+  status: 'running'
+  error: null
+  result: null
+  explanation: null
+  explanation_error: null
+}
+
+export interface CancelledMergeReadinessRun extends MergeReadinessRunBase {
+  status: 'cancelled'
+  error: RuntimeErrorInfo | null
+  result: null
+  explanation: null
+  explanation_error: null
+}
+
+export type TerminalMergeReadinessRun =
   | CompletedMergeReadinessRun
   | FailedMergeReadinessRun
+  | CancelledMergeReadinessRun
+
+export type PullRequestMergeReadiness =
+  | TerminalMergeReadinessRun
+  | PendingMergeReadinessRun
+  | RunningMergeReadinessRun
+
+export interface LiveRunStart {
+  run_id: string
+  status: 'pending'
+}

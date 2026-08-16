@@ -36,3 +36,4 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-015](ADR-015-versioned-explanation-eval-harness.md) | Accepted | Version local explanation datasets, repeated samples, graders, thresholds, and compatible baselines |
 | [ADR-016](ADR-016-durable-run-source-provenance.md) | Accepted | Persist bounded GitHub, Jira, and explanation source provenance and render typed failed runs |
 | [ADR-017](ADR-017-groq-openai-compatible-explanation-adapter.md) | Accepted | Add explicit Groq identity through the fixed OpenAI-compatible endpoint with unchanged deterministic validation |
+| [ADR-018](ADR-018-live-run-dashboard-snapshot-polling.md) | Accepted | Additive 202 live-start endpoint with in-process execution and persisted-snapshot polling |
