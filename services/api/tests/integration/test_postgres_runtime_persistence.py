@@ -17,7 +17,11 @@ from app.database import (
     create_session_factory,
 )
 from app.database.models import WorkflowRunRow
-from app.runtime import RunStateConflictError, create_pending_run
+from app.runtime import (
+    ExplanationSource,
+    RunStateConflictError,
+    create_pending_run,
+)
 from app.workflows import MergeReadinessWorkflowService
 from tests.postgres_support import load_safe_test_database_url
 
@@ -79,12 +83,17 @@ class PostgresRuntimePersistenceTests(unittest.TestCase):
                 )
             )
 
-    def execute_workflow(self, github_connector=FakeGitHubConnector()):
+    def execute_workflow(
+        self,
+        github_connector=FakeGitHubConnector(),
+        explanation_provider=ExplanationSource.FAKE,
+    ):
         run = asyncio.run(
             MergeReadinessWorkflowService(
                 github_connector,
                 FakeJiraConnector(),
                 self.repository,
+                explanation_provider=explanation_provider,
             ).execute(MERGE_READY_REQUEST)
         )
         self.created_run_ids.append(run.run_id)
@@ -127,6 +136,15 @@ class PostgresRuntimePersistenceTests(unittest.TestCase):
 
         self.assertIsNotNone(retrieved)
         self.assertIsNone(retrieved.sources)
+
+    def test_groq_explanation_source_round_trips(self) -> None:
+        created = self.execute_workflow(
+            explanation_provider=ExplanationSource.GROQ
+        )
+
+        retrieved = self.repository.get(created.run_id)
+
+        self.assertIs(retrieved.sources.explanation, ExplanationSource.GROQ)
 
     def test_failed_run_and_sanitized_error_are_durable(self) -> None:
         created = self.execute_workflow(FailingGitHubConnector())

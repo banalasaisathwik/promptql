@@ -212,6 +212,8 @@ class GeminiLLMClient:
             )
         except OpenAIError:
             category = LLMProviderFailureCategory.UPSTREAM_UNAVAILABLE
+
+
         else:
             message = self._first_message(response)
             parsed_output = getattr(message, "parsed", None)

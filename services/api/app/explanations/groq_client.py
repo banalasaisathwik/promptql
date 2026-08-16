@@ -32,22 +32,30 @@ from app.explanations.models import (
 )
 
 
-class ResponsesAPI(Protocol):
+class ChatCompletionsAPI(Protocol):
     async def parse(self, **request: object) -> object: ...
 
 
-class OpenAISDKClient(Protocol):
-    responses: ResponsesAPI
+class ChatAPI(Protocol):
+    completions: ChatCompletionsAPI
+
+
+class BetaAPI(Protocol):
+    chat: ChatAPI
+
+
+class GroqSDKClient(Protocol):
+    beta: BetaAPI
 
     async def close(self) -> None: ...
 
 
-class OpenAILLMClient:
-    provider = LLMProviderName.OPENAI
+class GroqLLMClient:
+    provider = LLMProviderName.GROQ
 
     def __init__(
         self,
-        client: OpenAISDKClient,
+        client: GroqSDKClient,
         model: str,
         request_timeout_seconds: float,
         max_output_tokens: int,
@@ -65,40 +73,42 @@ class OpenAILLMClient:
         return self._model
 
     @staticmethod
-    def _contains_refusal(response: object) -> bool:
-        output: Sequence[object] = getattr(response, "output", ())
-        for output_item in output:
-            content: Sequence[object] = getattr(output_item, "content", ())
-            if any(getattr(part, "type", None) == "refusal" for part in content):
-                return True
-        return False
-
-    @staticmethod
     def _token_usage(response: object) -> LLMTokenUsage | None:
         usage = getattr(response, "usage", None)
         if usage is None:
             return None
         try:
             return LLMTokenUsage(
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
+                input_tokens=usage.prompt_tokens,
+                output_tokens=usage.completion_tokens,
                 total_tokens=usage.total_tokens,
             )
         except (AttributeError, TypeError, ValidationError):
             return None
+
+    @staticmethod
+    def _first_message(response: object) -> object | None:
+        choices: Sequence[object] = getattr(response, "choices", None) or ()
+        if not choices:
+            return None
+        return getattr(choices[0], "message", None)
 
     async def generate_structured(
         self,
         explanation_input: MergeReadinessExplanationInput,
     ) -> LLMStructuredResponse:
         try:
-            response = await self._client.responses.parse(
+            response = await self._client.beta.chat.completions.parse(
                 model=self._model,
-                instructions=SYSTEM_INSTRUCTIONS,
-                input=explanation_input.model_dump_json(),
-                text_format=GeneratedExplanation,
-                store=False,
-                max_output_tokens=self._max_output_tokens,
+                messages=(
+                    {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+                    {
+                        "role": "user",
+                        "content": explanation_input.model_dump_json(),
+                    },
+                ),
+                response_format=GeneratedExplanation,
+                max_tokens=self._max_output_tokens,
                 timeout=self._request_timeout_seconds,
             )
         except AuthenticationError:
@@ -127,16 +137,13 @@ class OpenAILLMClient:
             )
         except OpenAIError:
             category = LLMProviderFailureCategory.UPSTREAM_UNAVAILABLE
-
-
         else:
-            parsed_output = getattr(response, "output_parsed", None)
-            if parsed_output is None:
-                category = (
-                    LLMProviderFailureCategory.REFUSAL
-                    if self._contains_refusal(response)
-                    else LLMProviderFailureCategory.INVALID_STRUCTURED_RESPONSE
-                )
+            message = self._first_message(response)
+            parsed_output = getattr(message, "parsed", None)
+            if getattr(message, "refusal", None):
+                category = LLMProviderFailureCategory.REFUSAL
+            elif parsed_output is None:
+                category = LLMProviderFailureCategory.INVALID_STRUCTURED_RESPONSE
             else:
                 try:
                     generated = GeneratedExplanation.model_validate(parsed_output)
@@ -149,6 +156,5 @@ class OpenAILLMClient:
                         output=generated.model_dump(mode="json"),
                         token_usage=self._token_usage(response),
                     )
-
 
         raise LLMProviderError(category) from None

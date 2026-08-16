@@ -16,8 +16,8 @@ from opentelemetry.metrics import NoOpMeterProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import (
     ConsoleMetricExporter,
-    MetricExportResult,
     MetricExporter,
+    MetricExportResult,
     PeriodicExportingMetricReader,
 )
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
@@ -25,8 +25,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     ConsoleSpanExporter,
-    SpanExportResult,
     SpanExporter,
+    SpanExportResult,
 )
 
 from app.config import TelemetrySettings
@@ -36,7 +36,6 @@ from app.observability.structured_logging import (
     StructuredEventLogger,
     configure_structured_logger,
 )
-
 
 EXPORT_TIMEOUT_MILLIS = 5_000
 METRIC_EXPORT_INTERVAL_MILLIS = 60_000
@@ -176,6 +175,8 @@ class FailureIsolatingMetricExporter(MetricExporter):
 
 
 @dataclass
+
+
 class Observability:
     pass
 
@@ -234,6 +235,7 @@ class Observability:
 def _quiet_otlp_internal_loggers() -> None:
     pass
 
+
     for logger_name in (
         "opentelemetry.exporter.otlp.proto.http.trace_exporter",
         "opentelemetry.exporter.otlp.proto.http.metric_exporter",
@@ -260,6 +262,7 @@ def create_observability(
 ) -> Observability:
     pass
 
+
     event_logger = StructuredEventLogger(configure_structured_logger())
     try:
         resolved_settings = settings or TelemetrySettings.from_environment()
@@ -274,6 +277,7 @@ def create_observability(
             shutdown_on_exit=False,
         )
         metric_readers = []
+
 
         if resolved_settings.console_enabled:
             console_span_exporter = FailureIsolatingSpanExporter(
@@ -335,6 +339,7 @@ def create_observability(
                     export_timeout_millis=EXPORT_TIMEOUT_MILLIS,
                 )
             )
+
 
         meter_provider = MeterProvider(
             metric_readers=metric_readers,

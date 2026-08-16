@@ -67,7 +67,7 @@ SPAN_ATTRIBUTE_ALLOWLIST = frozenset(
     }
 )
 SUPPORTED_WORKFLOWS = frozenset({("merge_readiness", "1")})
-SUPPORTED_LLM_PROVIDERS = frozenset({"fake", "gemini", "openai"})
+SUPPORTED_LLM_PROVIDERS = frozenset({"fake", "gemini", "groq", "openai"})
 SUPPORTED_LLM_FAILURE_CATEGORIES = frozenset(
     {
         "authentication",

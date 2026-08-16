@@ -16,6 +16,17 @@ class DatabaseModelTests(unittest.TestCase):
         self.assertIn("ck_workflow_runs_github_source", constraint_names)
         self.assertIn("ck_workflow_runs_jira_source", constraint_names)
         self.assertIn("ck_workflow_runs_explanation_source", constraint_names)
+        explanation_constraint = next(
+            constraint
+            for constraint in WorkflowRunRow.__table__.constraints
+            if constraint.name == "ck_workflow_runs_explanation_source"
+        )
+        constraint_sql = str(
+            explanation_constraint.sqltext.compile(
+                dialect=postgresql.dialect()
+            )
+        )
+        self.assertIn("'groq'", constraint_sql)
 
     def test_optional_json_snapshots_bind_none_as_sql_null(self) -> None:
         optional_json_columns = (

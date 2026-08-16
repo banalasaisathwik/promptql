@@ -55,6 +55,16 @@ def real_settings() -> LLMSettings:
     )
 
 
+def groq_settings() -> LLMSettings:
+    return LLMSettings(
+        provider=LLMProvider.GROQ,
+        api_key="test-groq-secret-never-serialized",
+        model="openai/gpt-oss-20b",
+        request_timeout_seconds=20,
+        max_output_tokens=400,
+    )
+
+
 class CountingFakeClient(FakeLLMClient):
     def __init__(self) -> None:
         self.call_count = 0
@@ -110,6 +120,13 @@ class UnexpectedFailureClient:
 
     async def generate_structured(self, _explanation_input):
         raise RuntimeError("raw secret exception must not escape")
+
+
+class InvalidGroqCandidateClient:
+    provider = LLMProviderName.GROQ
+
+    async def generate_structured(self, _explanation_input):
+        return LLMStructuredResponse(output={"unsupported": "shape"})
 
 
 class ExplanationEvalRunnerTests(unittest.IsolatedAsyncioTestCase):
@@ -195,6 +212,31 @@ class ExplanationEvalRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(unexpected.candidate_returned)
         self.assertEqual(unexpected.sanitized_failure_category, "unexpected")
         self.assertNotIn("raw secret", unexpected.model_dump_json())
+
+    async def test_groq_identity_preserves_schema_failure_denominator(self) -> None:
+        ready_case = self.small_development.cases[0]
+        identity = build_run_identity(
+            groq_settings(),
+            self.small_development,
+            samples_per_case=1,
+            inter_request_delay_seconds=0,
+        )
+
+        record = await observe_case(
+            ready_case,
+            InvalidGroqCandidateClient(),
+            run_identity=identity,
+            sample_number=1,
+        )
+
+        self.assertIs(identity.provider, LLMProviderName.GROQ)
+        self.assertEqual(identity.configured_model, "openai/gpt-oss-20b")
+        self.assertIs(record.provider, LLMProviderName.GROQ)
+        self.assertTrue(record.provider_success)
+        self.assertTrue(record.candidate_returned)
+        self.assertFalse(record.schema_valid)
+        self.assertIs(record.validator_result, ValidatorResult.NOT_RUN)
+        self.assertEqual(record.sanitized_failure_category, "invalid_structure")
 
     async def test_missing_acknowledgement_prevents_client_and_files(self) -> None:
         client_factory = Mock()

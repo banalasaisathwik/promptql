@@ -102,6 +102,8 @@ class PostgresRunRepository:
                 else:
                     self._update_existing_run(session, stored_run, run)
                 self._save_steps(session, run)
+
+
             self._confirmed_run_ids.add(run.run_id)
         except RunStateConflictError:
             raise
@@ -133,6 +135,7 @@ class PostgresRunRepository:
             raise RunPersistenceError(
                 "Runtime persistence is unavailable."
             ) from None
+
 
         try:
             self._validate_step_sequence(stored_steps, run_id)
@@ -245,6 +248,7 @@ class PostgresRunRepository:
                 run.run_id,
             )
 
+
         statement = (
             update(WorkflowRunRow)
             .where(
@@ -302,6 +306,8 @@ class PostgresRunRepository:
                 )
 
             update_values = dict(incoming_values)
+
+
             update_values.pop("step_id")
             update_values.pop("run_id")
             update_values.pop("sequence_number")

@@ -24,7 +24,6 @@ from app.connectors.models import (
 )
 from app.evals.models import EvalDatasetSplit
 
-
 DEVELOPMENT_DATASET_ID = "merge-readiness-development-v1"
 HOLDOUT_DATASET_ID = "merge-readiness-holdout-v1"
 DATASET_VERSION = "v1"

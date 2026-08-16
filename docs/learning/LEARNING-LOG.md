@@ -1217,3 +1217,326 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** Should the next approved run keep the one-second
   pacing with higher provider quota, or version a slower pacing configuration
   before reconsidering the strict zero-failure threshold?
+
+### 2026-08-13 - Annotate the FastAPI composition root without changing behavior
+
+- **Concept:** Teaching comments should explain architecture boundaries and
+  invariants rather than narrate individual statements. Foldable `# region`
+  blocks use a consistent `Purpose`, `Flow`, `Key syntax`, `Why here`, and
+  `Watch out` shape to make the FastAPI composition root readable.
+- **Important syntax:** `@asynccontextmanager` turns the nested async function
+  into FastAPI's application-lifespan context manager; code before `yield` is
+  startup and `finally` still runs on shutdown or startup failure.
+- **Implementation locations:** `services/api/app/main.py` now identifies its
+  typed HTTP error handlers, health route, dependency composition, lifespan,
+  route registration, and ASGI entry point.
+- **Design decision:** Use normal-depth regions with only the applicable parts
+  of the five-part shape, rather than line-by-line notes. This gives learners
+  the request-to-response map without altering the public API or duplicating
+  obvious Python syntax.
+- **Invariant or failure behavior:** The exception status mappings, startup
+  database verification, resource shutdown, application state fields, and
+  imported `app` entry point remain executable code with identical tokens.
+- **Trade-off:** Regions add visual detail, but the checkout-local clean filter
+  strips them from Git's stored representation; it leaves harmless collapsed
+  blank-line artifacts in the filtered diff.
+- **Validation evidence:** The focused
+  `uv run python -m unittest tests.unit.test_application_startup_logging -v`
+  test passed, `uv run python -m py_compile app/main.py` passed, and a Python
+  token comparison confirmed the HEAD and working copy have identical
+  executable tokens after comments are ignored.
+- **Unresolved question:** Should the clean filter be adjusted in a separate
+  task so multiline teaching regions do not create filtered blank-line diffs?
+
+### 2026-08-13 - Explain the FastAPI routing boundary without changing behavior
+
+- **Concept:** A router is an HTTP adapter, not the workflow itself. It validates
+  request shapes, resolves dependencies, delegates to application services, and
+  maps results to public status codes and response models.
+- **Important syntax:** `Annotated[T, Depends(provider)]` asks FastAPI to build
+  a typed dependency graph before a route runs. `await` lets a route pause for
+  async workflow or explanation work without blocking other event-loop tasks.
+- **Implementation locations:** `services/api/app/api/v1/connector_router.py`
+  now has normal-depth regions for connector, telemetry, repository, and
+  explanation dependencies; workflow assembly; response enrichment; and all
+  four public route handlers.
+- **Design decision:** Explain dependency providers separately from route
+  handlers and keep the response-enrichment boundary explicit. This matches the
+  real request flow and makes it clear that optional LLM wording cannot alter
+  the durable policy result.
+- **Invariant or failure behavior:** Production repository lookup never falls
+  back to memory; unavailable persistence remains a sanitized 503. A failed
+  workflow run is a persisted execution record returned as HTTP 500, not an
+  `unknown` policy decision. Read-time explanations do not mutate stored runs.
+- **Trade-off:** More regions make the HTTP path longer to scan, but stable
+  `Purpose` through `Watch out` labels let a learner skip directly to the
+  relevant concern without reading a line-by-line narration.
+- **Validation evidence:** `test_merge_readiness_api.py` and
+  `test_database_config.py` are the focused behavior checks. Compilation and an
+  executable-token comparison verify that annotation changes do not alter the
+  router's Python behavior.
+- **Unresolved question:** If explanation retrieval becomes expensive for real
+  providers, should a future design persist a validated rendered explanation,
+  or keep the current read-time enrichment boundary?
+
+### 2026-08-13 - Explain a durable async workflow without changing behavior
+
+- **Concept:** An application workflow coordinates side effects while the domain
+  policy remains pure. It records each state transition around connector and
+  policy work so a response can distinguish a completed decision from a failed
+  execution.
+- **Important syntax:** `asyncio.to_thread(...)` lets async code wait for the
+  synchronous repository without blocking the event loop. Tuple unpacking and
+  `(*run.steps, step)` produce updated immutable snapshots, while `yield` is
+  not involved in this workflow; FastAPI lifespan owns application resources.
+- **Implementation locations:** `services/api/app/workflows/merge_readiness.py`
+  now has normal-depth regions for injected collaborators, persistence helpers,
+  state transitions, telemetry, GitHub/Jira boundaries, and policy completion.
+- **Design decision:** Keep the explicit named sequence GitHub -> Jira ->
+  policy instead of a generic step loop. The fixed order makes the business
+  path, evidence ownership, state history, and failure behavior easier to read.
+- **Invariant or failure behavior:** A terminal failed step and failed run save
+  together; a terminal policy step and completed run save together. Connector
+  unavailability remains optional evidence, but unexpected connector or policy
+  errors become sanitized failed runs. Terminal telemetry follows persistence.
+- **Trade-off:** Many small helpers make the service longer than one linear
+  method, but each helper names one transition boundary and permits focused
+  tests for ordering, atomic terminal state, and safe error handling.
+- **Validation evidence:** `test_merge_readiness_workflow.py` proves ready,
+  blocked, failed-connector, failed-policy, ordered-step, and terminal-save
+  behavior. Compilation and a clean-filtered token comparison protect the
+  comment-only change.
+- **Unresolved question:** If future steps require retries or cancellation,
+  should that extend this state machine directly or introduce a separate job
+  execution boundary?
+
+### 2026-08-14 - Explain structural connector contracts without changing behavior
+
+- **Concept:** A Python `Protocol` describes the shape an implementation must
+  have without requiring inheritance. The workflow can therefore use fake and
+  HTTP connectors through the same GitHub and Jira contracts.
+- **Important syntax:** An `async def` protocol method is awaited by callers;
+  the `...` body declares the required signature but provides no implementation.
+  `source: ConnectorSource` is a required typed attribute, not a method call.
+- **Implementation locations:** `services/api/app/connectors/protocols.py` now
+  explains both provider-neutral protocols and their asynchronous lookup methods.
+- **Design decision:** Keep GitHub request lookup and Jira issue-key lookup as
+  separate minimal contracts. Each provider can normalize its own API boundary,
+  while the workflow receives typed facts instead of vendor-specific JSON.
+- **Invariant or failure behavior:** Live and fake implementations report an
+  accurate bounded source and never silently substitute fixture facts. Unknown
+  or unavailable data leaves through typed connector errors or missing evidence;
+  policy decides what incomplete evidence means.
+- **Trade-off:** Two protocols repeat a small `source` attribute, but make the
+  different input contracts visible and allow GitHub/Jira fake-live selection to
+  stay independent.
+- **Validation evidence:** `test_connector_contracts.py` covers validated
+  fixtures, typed unknown-fixture errors, and deterministic fake outputs.
+  Compilation and a clean-filtered token comparison verify comment-only changes.
+- **Unresolved question:** If a future provider supplies both pull requests and
+  issues, should it implement both focused protocols or introduce a new adapter
+  that composes them?
+
+### 2026-08-14 - Explain connector construction at the application boundary
+
+- **Concept:** A factory is a narrow composition boundary: validated settings
+  select concrete fake or HTTP implementations, while workflows consume only
+  the provider-neutral protocols.
+- **Important syntax:** `httpx.AsyncClient` owns an async connection pool and
+  must be closed by application lifespan. `httpx.BasicAuth` supplies Jira
+  credentials outside the URL. An enum identity check (`is`) selects one mode.
+- **Implementation locations:** `services/api/app/connectors/factory.py` now
+  explains GitHub/Jira HTTP-client construction and fake/live connector choice.
+- **Design decision:** Keep independent GitHub and Jira factory functions.
+  This permits every fake/live source combination and keeps provider credentials,
+  pool limits, timeouts, and protocol construction out of workflow code.
+- **Invariant or failure behavior:** Live mode requires complete validated
+  configuration and an application-scoped HTTP client. A missing client or
+  credential raises a typed configuration error; no live path falls back to
+  fixture facts. Redirects remain disabled at both external-service boundaries.
+- **Trade-off:** Two similar factory pairs repeat some selection logic, but they
+  expose each provider's different auth and timeout needs more clearly than a
+  generic connector factory with conditional options.
+- **Validation evidence:** GitHub and Jira factory tests cover fake defaults,
+  live implementation selection, explicit Jira timeouts, safe settings errors,
+  and independent source combinations. Compilation and a teaching-region token
+  comparison protect the comment-only change.
+- **Unresolved question:** If connection-pool limits need runtime tuning, should
+  each provider gain separate settings or should a bounded shared transport
+  settings object be introduced?
+
+### 2026-08-14 - Explain read-only HTTP connector adapters without changing behavior
+
+- **Concept:** An HTTP connector is an anti-corruption boundary. It translates
+  provider REST payloads and status codes into validated internal facts and
+  stable typed errors before workflow or policy code sees them.
+- **Important syntax:** `await` suspends a connector while HTTP I/O is pending.
+  Pydantic `model_validate()` rejects malformed external JSON. `quote()` encodes
+  path segments, and `fullmatch()` validates an entire Jira key.
+- **Implementation locations:** `github_http.py` now explains aggregation of PR,
+  review, requirement, check-run, and status evidence, bounded pagination, and
+  GitHub status mapping. `jira_http.py` explains selected-field issue lookup,
+  status-category normalization, bounded retry metadata, and safe telemetry.
+- **Design decision:** Normalize provider shapes inside separate adapters and
+  return repository-owned models. GitHub merges overlapping REST evidence;
+  Jira maps universal status categories while retaining custom display evidence.
+- **Invariant or failure behavior:** Raw payloads, URLs, headers, credentials,
+  and private exceptions never become public errors or telemetry. Inaccessible
+  optional evidence remains explicitly unknown; malformed, rate-limited, timed
+  out, or unexpected provider operations become sanitized typed failures.
+- **Trade-off:** Bounded pagination and multiple validation helpers add code,
+  but prevent unbounded work, partial truncation, and accidental coupling of
+  workflow policy to changing GitHub or Jira response formats.
+- **Validation evidence:** Mock-transport GitHub and Jira connector tests cover
+  request construction, pagination, normalization, error categories, and
+  telemetry without live provider calls. Compilation and teaching-region token
+  comparisons verify comments do not change executable behavior.
+- **Unresolved question:** If GitHub adds a new required-check API, should the
+  adapter merge it into the current worst-status algorithm or version a new
+  explicit evidence field first?
+
+### 2026-08-14 - Explain immutable connector facts without changing behavior
+
+- **Concept:** Provider-neutral Pydantic models form a trust boundary. Adapters
+  normalize external data into frozen, closed-vocabulary facts; workflow and
+  policy can then operate without parsing raw provider JSON.
+- **Important syntax:** `Annotated` attaches reusable validation metadata to a
+  base type. `StrEnum` is a closed Python enum that serializes as a JSON string.
+  A `model_validator(mode="after")` checks a complete Pydantic model across
+  several fields after individual field validation succeeds.
+- **Implementation locations:** `services/api/app/connectors/models.py` now
+  explains shared aliases, strict frozen base configuration, state enums,
+  connector request identity, GitHub/Jira snapshots, and evidence availability.
+- **Design decision:** Represent unavailable reviews/checks with explicit
+  `*_known` flags and closed `UNKNOWN` states rather than substituting empty
+  collections or a false negative. This keeps missing provider access visible
+  to policy and avoids false-ready decisions.
+- **Invariant or failure behavior:** Extra fields fail validation, snapshots are
+  immutable, PR numbers are true positive integers, and unknown review/check
+  evidence cannot contain approval or check conclusions. Jira blocker state
+  remains unknown unless an implementation supplies an explicit supported fact.
+- **Trade-off:** More small types and validators make adapters construct more
+  objects, but give every fake, HTTP, persistence, and policy path one precise,
+  testable vocabulary instead of ad-hoc dictionaries.
+- **Validation evidence:** Connector-contract tests round-trip fixtures, reject
+  invalid enum/request values, and prove typed unknown-fixture behavior.
+  Compilation and a teaching-region token comparison protect comment-only edits.
+- **Unresolved question:** If additional provider evidence becomes optional,
+  should it follow the current `*_known` convention or require a more general
+  explicit evidence-status model?
+
+### 2026-08-14 - Explain deterministic policy evaluation without changing behavior
+
+- **Concept:** A pure policy function converts already-normalized facts into a
+  decision without I/O, persistence, telemetry, clocks, or provider SDKs. It
+  accumulates evidence and findings before selecting one terminal decision.
+- **Important syntax:** Optional model inputs represent unavailable connectors;
+  list accumulation preserves all findings before immutable tuples enter the
+  result. Ordered `if`/`elif` branches encode `BLOCKED > UNKNOWN > READY`.
+- **Implementation locations:** `services/api/app/policy/evaluator.py` now
+  explains evidence IDs, blocker/action pairing, missing information, GitHub
+  lifecycle/CI/review rules, Jira identity/rules, and final precedence.
+- **Design decision:** Evaluate every applicable rule and preserve every verified
+  blocker rather than returning on the first failure. The first blocker remains
+  the primary reason, while the complete list supports remediation and evidence.
+- **Invariant or failure behavior:** Missing evidence never becomes a verified
+  blocker or implicit success. A verified blocker takes precedence over unknown
+  evidence. Jira facts are evaluated only when their key matches GitHub's link;
+  unknown Jira blocker state is neither blocked nor proven not blocked.
+- **Trade-off:** Explicit rule branches are longer than a generic rule engine,
+  but make evidence mapping, precedence, messages, and pending actions visible
+  and straightforward to test without framework abstractions.
+- **Validation evidence:** `test_merge_readiness_policy.py` covers every blocker,
+  simultaneous blockers, unknown inputs, mismatched Jira evidence, deterministic
+  output, decision precedence, and evidence references. Compilation and a
+  teaching-region token comparison protect comment-only edits.
+- **Unresolved question:** As rule count grows, when would data-driven rule
+  definitions improve maintainability without hiding precedence and evidence
+  construction from learners?
+
+### 2026-08-14 - Explain immutable runtime state machines without changing behavior
+
+- **Concept:** Runtime safety has two layers. Transition maps define which status
+  movements are legal; Pydantic validators define which fields make each status
+  internally coherent. Immutable snapshots make every lifecycle change explicit.
+- **Important syntax:** Dictionary-of-set transition maps express directed state
+  edges. `model_dump()` plus `model_validate()` creates a changed frozen copy.
+  `model_validator(mode="after")` compares status with timestamps, errors, and result.
+- **Implementation locations:** `runtime/models.py` now explains lifecycle enums,
+  sanitized errors, bounded source provenance, step/run snapshots, and validators.
+  `runtime/state.py` explains allowed edges, replacement helpers, initial factories,
+  and run/step transition functions.
+- **Design decision:** Keep transition legality separate from snapshot validation.
+  This makes the state graph readable while ensuring database reconstruction and
+  direct model creation receive the same field-level invariants as live execution.
+- **Invariant or failure behavior:** Terminal records cannot return to running.
+  Completed runs contain a result and no error; failed runs contain an error and
+  no result. Pending/running records cannot contain terminal metadata. A blocked
+  policy decision remains a completed execution.
+- **Trade-off:** Rebuilding and validating complete snapshots allocates more
+  objects than mutation, but makes history, persistence, tests, and concurrency
+  reasoning clearer and prevents partial in-memory updates.
+- **Validation evidence:** `test_runtime_state.py` proves bounded provenance,
+  legal construction, and terminal-state irreversibility. Compilation and
+  teaching-region token comparisons protect the comment-only edits.
+- **Unresolved question:** Cancellation exists in the model but has no public
+  API or worker coordination yet; what ownership boundary should initiate and
+  durably confirm cancellation before enabling that state?
+
+### 2026-08-14 - Trace persistence, grounded explanations, and telemetry boundaries
+
+- **Concept:** Production boundaries can be composed around authoritative domain
+  behavior: repositories own durability, adapters own providers, deterministic
+  validators own trust, and telemetry decorators observe without changing results.
+- **Important syntax:** `Protocol` provides structural dependency inversion;
+  SQLAlchemy `Mapped[...]` declares runtime ORM fields; conditional SQL UPDATE plus
+  `rowcount` implements optimistic concurrency; `@contextmanager` and `yield` own
+  span lifecycle; `try/except/else` separates provider failure from safe parsing.
+- **Implementation locations:** Teaching comments in `runtime/repository.py`,
+  `observability/observed_run_repository.py`, `database/postgres_run_repository.py`,
+  `database/models.py`, `explanations/`, and `observability/` trace these boundaries.
+- **Design decision:** Keep generated prose and provider/SQL details outside the
+  trusted result. Only policy-supported codes reach backend templates, and only
+  bounded categories and labels reach telemetry.
+- **Invariant or failure behavior:** Terminal runtime state is exposed only after
+  commit; stale writers fail conditional updates; explanation failure cannot mutate
+  policy or persistence; telemetry setup/export failure degrades without changing HTTP.
+- **Trade-off:** Explicit mappers, validators, adapters, and telemetry wrappers add
+  code, but make concurrency, trust, redaction, and vendor coupling independently
+  testable instead of hiding them behind one large infrastructure service.
+- **Validation evidence:** Python compilation, focused runtime/explanation/
+  observability tests, `git diff --check`, and executable-token comparison verify
+  that this annotation pass changes teaching text without changing Python behavior.
+- **Unresolved question:** If explanations become persisted, which component should
+  own prompt/model/template versioning without weakening the policy authority boundary?
+
+### 2026-08-16 - Add an OpenAI-compatible provider without confusing identity
+
+- **Concept:** API compatibility belongs inside an adapter; it does not change
+  provider identity or move trust into the SDK. Groq reuses `AsyncOpenAI`, while
+  configuration, telemetry, eval reports, run provenance, and failures say `groq`.
+- **Important syntax:** Passing a Pydantic class as Chat Completions
+  `response_format` makes the installed SDK build a strict JSON Schema. A Python
+  `Protocol` describes only the nested SDK methods the adapter calls, allowing
+  small async test doubles without constructing a network client.
+- **Implementation locations:** `config.py`, `explanations/groq_client.py`,
+  `explanations/factory.py`, `runtime/models.py`, `database/models.py`, migration
+  `20260816_0003`, runtime telemetry, frontend response validation, and the
+  Groq/provider/eval/API tests.
+- **Design decision:** Use the existing OpenAI SDK with Groq's fixed compatibility
+  URL and required `GROQ_MODEL`; recommend `openai/gpt-oss-20b` for the bounded
+  V1 workload. The owner approved extending durable provenance through a narrow
+  constraint migration instead of making Groq eval-only.
+- **Invariant or failure behavior:** SDK retries stay disabled. A 429 is one
+  provider failure; malformed candidate structure is separate from a schema-valid
+  semantic validation failure. Generated prose remains untrusted and discarded,
+  and only policy-supported complete codes reach deterministic templates.
+- **Trade-off:** A separate adapter repeats some SDK error mapping, but keeps
+  Groq-specific API behavior isolated. Downgrade cannot represent Groq rows and
+  therefore fails transactionally rather than silently erasing their provenance.
+- **Validation evidence:** Focused configuration, adapter, runtime, database,
+  API, and eval tests; offline Alembic SQL; complete backend discovery;
+  `compileall`; one-head inspection; and `git diff --check` provide evidence.
+- **Unresolved question:** After an explicitly approved development eval, does
+  20B meet the existing candidate-quality thresholds, or does evidence justify
+  the higher latency and token price of 120B?

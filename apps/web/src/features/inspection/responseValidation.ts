@@ -326,7 +326,7 @@ function isRunSources(value: unknown): value is RunSources {
     (value.github === null || isOneOf(value.github, ['fake', 'live'])) &&
     (value.jira === null || isOneOf(value.jira, ['fake', 'live'])) &&
     (value.explanation === null ||
-      isOneOf(value.explanation, ['fake', 'gemini', 'openai']))
+      isOneOf(value.explanation, ['fake', 'gemini', 'groq', 'openai']))
   )
 }
 

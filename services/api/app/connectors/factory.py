@@ -1,5 +1,3 @@
-pass
-
 import httpx
 
 from app.config import (
@@ -17,8 +15,6 @@ from app.observability import RuntimeTelemetry
 
 
 def create_github_http_client(settings: GitHubSettings) -> httpx.AsyncClient:
-    pass
-
     if settings.mode is not GitHubConnectorMode.GITHUB or settings.token is None:
         raise GitHubConfigurationError()
     return httpx.AsyncClient(
@@ -40,8 +36,6 @@ def create_github_connector(
     telemetry: RuntimeTelemetry,
     http_client: httpx.AsyncClient | None = None,
 ) -> GitHubConnector:
-    pass
-
     if settings.mode is GitHubConnectorMode.FAKE:
         return FakeGitHubConnector()
     if http_client is None:
@@ -52,8 +46,6 @@ def create_github_connector(
 
 
 def create_jira_http_client(settings: JiraSettings) -> httpx.AsyncClient:
-    pass
-
     if (
         settings.mode is not JiraConnectorMode.JIRA
         or settings.base_url is None
@@ -85,8 +77,6 @@ def create_jira_connector(
     telemetry: RuntimeTelemetry,
     http_client: httpx.AsyncClient | None = None,
 ) -> JiraConnector:
-    pass
-
     if settings.mode is JiraConnectorMode.FAKE:
         return FakeJiraConnector()
     if http_client is None:

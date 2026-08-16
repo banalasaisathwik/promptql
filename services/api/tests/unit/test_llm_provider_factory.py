@@ -10,10 +10,14 @@ from app.config import (
 from app.explanations import (
     FakeLLMClient,
     GeminiLLMClient,
+    GroqLLMClient,
     OpenAILLMClient,
     create_llm_client,
 )
-from app.explanations.factory import GEMINI_OPENAI_BASE_URL
+from app.explanations.factory import (
+    GEMINI_OPENAI_BASE_URL,
+    GROQ_OPENAI_BASE_URL,
+)
 
 
 class LLMSettingsTests(unittest.TestCase):
@@ -66,6 +70,26 @@ class LLMSettingsTests(unittest.TestCase):
                         LLMSettings.from_environment()
                 self.assertNotIn("secret-key", str(raised.exception))
 
+    def test_groq_requires_its_own_api_key_and_model(self) -> None:
+        incomplete_environments = (
+            {"PROMPTQL_LLM_PROVIDER": "groq"},
+            {
+                "PROMPTQL_LLM_PROVIDER": "groq",
+                "GROQ_API_KEY": "secret-key",
+            },
+            {
+                "PROMPTQL_LLM_PROVIDER": "groq",
+                "GROQ_MODEL": "openai/gpt-oss-20b",
+            },
+        )
+
+        for environment in incomplete_environments:
+            with self.subTest(environment=tuple(environment)):
+                with patch.dict(os.environ, environment, clear=True):
+                    with self.assertRaises(LLMConfigurationError) as raised:
+                        LLMSettings.from_environment()
+                self.assertNotIn("secret-key", str(raised.exception))
+
     def test_unsupported_provider_fails_clearly(self) -> None:
         with patch.dict(
             os.environ,
@@ -74,7 +98,7 @@ class LLMSettingsTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 LLMConfigurationError,
-                "PROMPTQL_LLM_PROVIDER must be fake, gemini, or openai",
+                "PROMPTQL_LLM_PROVIDER must be fake, gemini, groq, or openai",
             ):
                 LLMSettings.from_environment()
 
@@ -135,6 +159,26 @@ class LLMSettingsTests(unittest.TestCase):
         self.assertEqual(settings.max_output_tokens, 400)
         self.assertNotIn("private-gemini-key", repr(settings))
 
+    def test_groq_uses_groq_names_and_validates_numeric_settings(self) -> None:
+        environment = {
+            "PROMPTQL_LLM_PROVIDER": "groq",
+            "GROQ_API_KEY": "private-groq-key",
+            "GROQ_MODEL": "openai/gpt-oss-20b",
+            "GROQ_REQUEST_TIMEOUT_SECONDS": "16.5",
+            "GROQ_MAX_OUTPUT_TOKENS": "350",
+            "OPENAI_API_KEY": "must-not-be-selected",
+            "OPENAI_MODEL": "must-not-be-selected",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            settings = LLMSettings.from_environment()
+
+        self.assertEqual(settings.provider, LLMProvider.GROQ)
+        self.assertEqual(settings.api_key, "private-groq-key")
+        self.assertEqual(settings.model, "openai/gpt-oss-20b")
+        self.assertEqual(settings.request_timeout_seconds, 16.5)
+        self.assertEqual(settings.max_output_tokens, 350)
+        self.assertNotIn("private-groq-key", repr(settings))
+
 
 class LLMProviderFactoryTests(unittest.TestCase):
     @patch("app.explanations.factory.AsyncOpenAI")
@@ -181,6 +225,29 @@ class LLMProviderFactoryTests(unittest.TestCase):
             timeout=21,
             max_retries=0,
             base_url=GEMINI_OPENAI_BASE_URL,
+        )
+
+    @patch("app.explanations.factory.AsyncOpenAI")
+    def test_groq_factory_uses_fixed_url_and_disables_retries(
+        self,
+        async_openai,
+    ) -> None:
+        settings = LLMSettings(
+            provider=LLMProvider.GROQ,
+            api_key="private-groq-key",
+            model="openai/gpt-oss-20b",
+            request_timeout_seconds=15,
+            max_output_tokens=256,
+        )
+
+        client = create_llm_client(settings)
+
+        self.assertIsInstance(client, GroqLLMClient)
+        async_openai.assert_called_once_with(
+            api_key="private-groq-key",
+            timeout=15,
+            max_retries=0,
+            base_url=GROQ_OPENAI_BASE_URL,
         )
 
 

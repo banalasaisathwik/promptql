@@ -192,7 +192,7 @@ export interface RuntimeErrorInfo {
 }
 
 export type ConnectorSource = 'fake' | 'live'
-export type ExplanationSource = 'fake' | 'gemini' | 'openai'
+export type ExplanationSource = 'fake' | 'gemini' | 'groq' | 'openai'
 
 export interface RunSources {
   github: ConnectorSource | null

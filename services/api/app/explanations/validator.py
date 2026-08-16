@@ -75,6 +75,7 @@ class StrictMergeReadinessExplanationValidator:
         required_reason_set = set(required_reasons)
         required_action_set = set(required_actions)
 
+
         if policy_result.decision is MergeReadinessDecision.READY and (
             generated_reasons != {PolicyReasonCode.READY}
             or bool(generated_actions)
@@ -92,6 +93,7 @@ class StrictMergeReadinessExplanationValidator:
             _raise(
                 ExplanationValidationFailureCode.UNKNOWN_MISSING_EVIDENCE
             )
+
 
         if generated_reasons - required_reason_set:
             _raise(ExplanationValidationFailureCode.UNSUPPORTED_REASON)

@@ -87,6 +87,7 @@ class MergeReadinessWorkflowService:
             explanation=explanation_provider,
         )
 
+
     def _save_synchronously(
         self,
         run: MergeReadinessRun,
@@ -95,6 +96,7 @@ class MergeReadinessWorkflowService:
         with self._telemetry.checkpoint(checkpoint):
             self._run_repository.save(run)
 
+
     async def _save(
         self,
         run: MergeReadinessRun,
@@ -102,6 +104,7 @@ class MergeReadinessWorkflowService:
     ) -> MergeReadinessRun:
         await asyncio.to_thread(self._save_synchronously, run, checkpoint)
         return run
+
 
     async def _start_step(
         self,
@@ -125,9 +128,11 @@ class MergeReadinessWorkflowService:
         )
         return run, running_step, self._duration_clock()
 
+
     def _duration_ms(self, started_at_ns: int) -> int:
         elapsed_ns = max(0, self._duration_clock() - started_at_ns)
         return elapsed_ns // 1_000_000
+
 
     async def _complete_step(
         self,
@@ -146,6 +151,7 @@ class MergeReadinessWorkflowService:
             PersistenceCheckpoint.STEP_COMPLETED,
         )
 
+
     def _build_completed_step(
         self,
         step: RuntimeStep,
@@ -157,6 +163,7 @@ class MergeReadinessWorkflowService:
             self._timestamp_clock(),
             duration_ms=self._duration_ms(started_at_ns),
         )
+
 
     async def _fail_step_and_run(
         self,
@@ -186,6 +193,7 @@ class MergeReadinessWorkflowService:
 
         return await self._save(failed_run, PersistenceCheckpoint.RUN_FAILED)
 
+
     async def _persist_failed_step_and_run(
         self,
         run: MergeReadinessRun,
@@ -212,6 +220,7 @@ class MergeReadinessWorkflowService:
         )
         return failed_run
 
+
     def _record_terminal_step(
         self,
         run: MergeReadinessRun,
@@ -228,6 +237,7 @@ class MergeReadinessWorkflowService:
             outcome,
             failure_category,
         )
+
 
     def _record_terminal_run(
         self,
@@ -246,6 +256,7 @@ class MergeReadinessWorkflowService:
         self._telemetry.record_terminal_workflow(run)
         return run
 
+
     @staticmethod
     def _persistence_failure_category(error: Exception) -> FailureCategory:
         if isinstance(error, RunStateConflictError):
@@ -253,6 +264,7 @@ class MergeReadinessWorkflowService:
         if isinstance(error, RunRecordInvalidError):
             return FailureCategory.RECORD_INVALID
         return FailureCategory.PERSISTENCE_UNAVAILABLE
+
 
     async def execute(self, request: ConnectorRequest) -> MergeReadinessRun:
         run = create_pending_run(request, sources=self._sources)
@@ -280,6 +292,7 @@ class MergeReadinessWorkflowService:
             except Exception:
                 workflow_observation.mark_error(FailureCategory.SYSTEM_FAILURE)
                 raise
+
 
     async def _execute_workflow(
         self,
@@ -319,6 +332,7 @@ class MergeReadinessWorkflowService:
             jira_facts,
             workflow_observation,
         )
+
 
     async def _fetch_github_facts(
         self,
@@ -401,6 +415,7 @@ class MergeReadinessWorkflowService:
         )
         self._record_terminal_step(run, github_outcome)
         return run, github_facts, False
+
 
     async def _fetch_jira_facts(
         self,
@@ -491,6 +506,7 @@ class MergeReadinessWorkflowService:
         )
         self._record_terminal_step(run, jira_outcome)
         return run, jira_facts, False
+
 
     async def _evaluate_policy(
         self,

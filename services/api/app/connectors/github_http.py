@@ -1,5 +1,3 @@
-pass
-
 from dataclasses import dataclass
 import re
 from typing import Any, TypeVar
@@ -65,9 +63,8 @@ class RequirementEvidence:
 
 
 class HttpGitHubConnector:
-    pass
-
     source = ConnectorSource.LIVE
+
 
     def __init__(
         self,
@@ -81,10 +78,10 @@ class HttpGitHubConnector:
         self._telemetry = telemetry or NoOpRuntimeTelemetry()
         self._max_pages = max_pages
 
-    async def aclose(self) -> None:
-        pass
 
+    async def aclose(self) -> None:
         await self._client.aclose()
+
 
     async def get_pull_request(
         self,
@@ -116,6 +113,7 @@ class HttpGitHubConnector:
                 }
             )
             return facts
+
 
     async def _load_pull_request(
         self,
@@ -181,11 +179,13 @@ class HttpGitHubConnector:
             ),
         )
 
+
     @staticmethod
     def _repository_path(request: ConnectorRequest) -> str:
         owner = quote(request.repository_owner, safe="")
         repository = quote(request.repository_name, safe="")
         return f"/repos/{owner}/{repository}"
+
 
     async def _load_reviews(
         self,
@@ -201,6 +201,7 @@ class HttpGitHubConnector:
             return reviews, True
         except (GitHubForbiddenError, GitHubNotFoundError):
             return (), False
+
 
     async def _load_requirements(
         self,
@@ -233,6 +234,7 @@ class HttpGitHubConnector:
             return self._normalize_requirements(rules, protection)
         except (KeyError, TypeError, ValueError):
             raise GitHubInvalidResponseError() from None
+
 
     async def _load_required_checks(
         self,
@@ -293,6 +295,7 @@ class HttpGitHubConnector:
         )
         return checks, True
 
+
     async def _get_model(
         self,
         path: str,
@@ -305,6 +308,7 @@ class HttpGitHubConnector:
             return model_type.model_validate(payload)
         except ValidationError:
             raise GitHubInvalidResponseError() from None
+
 
     async def _get_paginated_list(
         self,
@@ -331,6 +335,7 @@ class HttpGitHubConnector:
                 return tuple(results)
         raise GitHubInvalidResponseError()
 
+
     async def _get_paginated_object_list(
         self,
         path: str,
@@ -355,6 +360,7 @@ class HttpGitHubConnector:
                 return tuple(results)
         raise GitHubInvalidResponseError()
 
+
     async def _request_json(
         self,
         path: str,
@@ -374,6 +380,7 @@ class HttpGitHubConnector:
             return response.json()
         except ValueError:
             raise GitHubInvalidResponseError() from None
+
 
     @staticmethod
     def _raise_for_status(response: httpx.Response) -> None:
@@ -398,6 +405,7 @@ class HttpGitHubConnector:
             raise GitHubUpstreamUnavailableError()
         if not 200 <= status <= 299:
             raise GitHubInvalidResponseError()
+
 
     @staticmethod
     def _normalize_state(pull: GitHubPullRequestResponse) -> PullRequestState:

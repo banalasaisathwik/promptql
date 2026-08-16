@@ -9,6 +9,7 @@ from app.explanations.errors import (
 from app.explanations.factory import create_llm_client
 from app.explanations.fakes import FakeLLMClient
 from app.explanations.gemini_client import GeminiLLMClient
+from app.explanations.groq_client import GroqLLMClient
 from app.explanations.models import (
     GeneratedExplanation,
     LLMStructuredResponse,
@@ -37,6 +38,7 @@ __all__ = [
     "FakeLLMClient",
     "GeneratedExplanation",
     "GeminiLLMClient",
+    "GroqLLMClient",
     "LLMClient",
     "LLMProviderError",
     "LLMProviderFailureCategory",

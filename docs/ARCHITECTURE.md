@@ -9,7 +9,7 @@ flowchart LR
     API --> PostgreSQL["Managed PostgreSQL<br/>Neon"]
     API -. "read-only REST" .-> GitHub["GitHub"]
     API -. "read-only REST" .-> Jira["Jira Cloud"]
-    API -. "optional structured explanation" .-> OpenAI["OpenAI Responses API"]
+    API -. "optional structured explanation" .-> LLM["Selected OpenAI, Gemini, or Groq API"]
     API -. "OTLP traces and metrics" .-> Observability["Hosted observability<br/>Grafana Cloud"]
 ```
 
@@ -17,7 +17,7 @@ Plain-text alternative:
 
 ```text
 browser -> Vite React application -> FastAPI API -> Neon PostgreSQL
-                                      `-> optional OpenAI Responses API
+                                      `-> optional selected LLM provider
                                       `-> OTLP traces/metrics -> Grafana Cloud
 ```
 
@@ -111,6 +111,8 @@ services/api/app/explanations/
 |-- fakes.py                     # Deterministic local/test implementation
 |-- factory.py                   # Application-boundary provider selection
 |-- openai_client.py             # Async Responses Structured Output adapter
+|-- gemini_client.py             # Google compatibility adapter and compact claims
+|-- groq_client.py               # Groq strict JSON Schema compatibility adapter
 |-- errors.py                    # Typed sanitized failure categories
 |-- validator.py                # Ground generated codes in policy facts
 |-- templates.py                # Render approved user-facing wording
@@ -192,7 +194,8 @@ apps/web/src/features/inspection/
   `MergeReadinessResult`. It minimizes that result to stable decision,
   reason, and action enums before calling an injected `LLMClient`. Application
   assembly selects the deterministic fake by default or an explicitly
-  configured async `OpenAILLMClient`. The OpenAI adapter uses Responses
+  configured async `OpenAILLMClient`, `GeminiLLMClient`, or `GroqLLMClient`.
+  The OpenAI adapter uses Responses
   Structured Outputs with `store=False`, a configured timeout/token limit, and
   SDK retries disabled. Pydantic validates generated structure, then
   `StrictMergeReadinessExplanationValidator` requires the generated
@@ -321,6 +324,12 @@ PROMPTQL_LLM_PROVIDER=gemini + Gemini key + model
   -> GeminiLLMClient.generate_structured()
   -> beta.chat.completions.parse(response_format=GeneratedExplanation)
   -> LLMStructuredResponse
+
+PROMPTQL_LLM_PROVIDER=groq + Groq key + model
+  -> AsyncOpenAI(base_url="https://api.groq.com/openai/v1", max_retries=0)
+  -> GroqLLMClient.generate_structured()
+  -> beta.chat.completions.parse(response_format=GeneratedExplanation)
+  -> LLMStructuredResponse
 ```
 
 The SDK client owns HTTP/authentication and provider response parsing. The
@@ -330,11 +339,21 @@ validator owns semantic grounding, and backend templates own every visible
 word. This division keeps a schema-valid model response from becoming an
 authoritative business result.
 
-Gemini has an explicit provider identity and `GEMINI_*` configuration rather
-than reusing OpenAI names. The Google compatibility URL is fixed in the factory,
-so environment configuration cannot redirect either provider's secret to an
-arbitrary host. Both adapters feed the same provider-neutral structured result
-into the unchanged deterministic validator; generated prose is never exposed.
+Gemini and Groq have explicit provider identities and provider-specific
+configuration rather than reusing OpenAI names. Both compatibility URLs are
+fixed in the factory, so environment configuration cannot redirect either
+provider's secret to an arbitrary host. All adapters feed the same
+provider-neutral structured result into the unchanged deterministic validator;
+generated prose is never exposed. Groq's bounded identity is also accepted by
+the existing durable run-source column after migration `20260816_0003`.
+
+Groq Chat Completions receives `GeneratedExplanation` as the Pydantic response
+format. The installed OpenAI SDK converts that model into a strict JSON Schema;
+Groq currently supports strict mode for `openai/gpt-oss-20b` and
+`openai/gpt-oss-120b`. PromptQL still revalidates the parsed object and then
+proves semantic support and completeness deterministically. API compatibility
+therefore does not make Groq an OpenAI provider or make generated claims
+authoritative.
 
 Google's compatibility layer rejects the complete `GeneratedExplanation` JSON
 Schema because its enum and length constraints create too many serving states.

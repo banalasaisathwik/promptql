@@ -1,5 +1,3 @@
-pass
-
 from uuid import UUID
 
 from app.observability.contracts import (
@@ -23,8 +21,6 @@ def persistence_failure_category(error: Exception) -> FailureCategory:
 
 
 class ObservedRunRepository:
-    pass
-
     def __init__(
         self,
         inner: RunRepository,

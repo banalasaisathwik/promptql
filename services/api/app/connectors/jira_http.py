@@ -1,5 +1,3 @@
-pass
-
 import re
 from urllib.parse import quote
 
@@ -33,9 +31,8 @@ JIRA_REQUIRED_FIELDS = "status,assignee,resolution"
 
 
 class HttpJiraConnector:
-    pass
-
     source = ConnectorSource.LIVE
+
 
     def __init__(
         self,
@@ -45,14 +42,12 @@ class HttpJiraConnector:
         self._client = client
         self._telemetry = telemetry or NoOpRuntimeTelemetry()
 
-    async def aclose(self) -> None:
-        pass
 
+    async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def get_issue(self, issue_key: str) -> JiraIssue:
-        pass
 
+    async def get_issue(self, issue_key: str) -> JiraIssue:
         if JIRA_ISSUE_KEY_PATTERN.fullmatch(issue_key) is None:
             raise JiraInvalidIssueKeyError()
 
@@ -95,6 +90,7 @@ class HttpJiraConnector:
             )
             return facts
 
+
     @staticmethod
     def _record_failure(span, error: JiraConnectorError, status_class: str) -> None:
         span.set_attributes(
@@ -104,6 +100,7 @@ class HttpJiraConnector:
             }
         )
         span.mark_error(FailureCategory.CONNECTOR_FAILURE)
+
 
     @staticmethod
     def _raise_for_status(response: httpx.Response) -> None:
@@ -126,6 +123,7 @@ class HttpJiraConnector:
             raise JiraUpstreamUnavailableError()
         if not 200 <= status <= 299:
             raise JiraInvalidResponseError()
+
 
     @staticmethod
     def _normalize_issue(raw_issue: JiraIssueResponse) -> JiraIssue:
