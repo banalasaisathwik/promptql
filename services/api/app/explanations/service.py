@@ -123,6 +123,8 @@ class MergeReadinessExplanationService:
             provider=self._client.provider.value,
             prompt_id=PROMPT_ID,
             prompt_version=PROMPT_VERSION,
+
+
             model_fingerprint=sha256(
                 getattr(self._client, "model", "unreported").encode("utf-8")
             ).hexdigest()[:16],
@@ -165,6 +167,7 @@ class MergeReadinessExplanationService:
                     "The explanation provider failed.",
                 ) from None
 
+
             try:
                 generated = LLMStructuredResponse.model_validate(
                     generated_response
@@ -180,6 +183,7 @@ class MergeReadinessExplanationService:
                     ExplanationErrorCode.INVALID_OUTPUT,
                     "The explanation provider returned invalid structured output.",
                 ) from None
+
 
             try:
                 validated = self._validate_generated_output(

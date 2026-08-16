@@ -45,6 +45,15 @@ class RuntimeStateTests(unittest.TestCase):
         self.assertEqual(run.sources.jira.value, "fake")
         self.assertEqual(run.sources.explanation.value, "gemini")
 
+    def test_groq_is_a_bounded_explanation_source(self) -> None:
+        sources = RunSources(
+            github="fake",
+            jira="fake",
+            explanation="groq",
+        )
+
+        self.assertIs(sources.explanation, ExplanationSource.GROQ)
+
     def test_completed_and_failed_runs_cannot_return_to_running(self) -> None:
         started_at = datetime(2026, 8, 2, 10, 0, tzinfo=UTC)
         completed_at = started_at + timedelta(seconds=1)

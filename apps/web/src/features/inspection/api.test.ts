@@ -139,6 +139,29 @@ describe('merge-readiness API client', () => {
     expect(result.sources).toBeNull()
   })
 
+  test('accepts Groq as a bounded explanation source', async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          ...READY_RESPONSE,
+          sources: {
+            ...READY_RESPONSE.sources,
+            explanation: 'groq',
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )) as typeof fetch
+
+    const result = await analyzePullRequestMergeReadiness(
+      READY_RESPONSE.request,
+    )
+
+    expect(result.sources?.explanation).toBe('groq')
+  })
+
   test('rejects unbounded source identities', async () => {
     globalThis.fetch = (async () =>
       new Response(

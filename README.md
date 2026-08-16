@@ -109,6 +109,22 @@ GEMINI_REQUEST_TIMEOUT_SECONDS=30
 GEMINI_MAX_OUTPUT_TOKENS=512
 ```
 
+Groq mode also reuses the installed OpenAI SDK, but it has its own provider
+identity and key. The application fixes the SDK base URL to
+`https://api.groq.com/openai/v1`; no environment variable can redirect the
+Groq key. `openai/gpt-oss-20b` is the initial recommendation for this small,
+bounded V1 claim-selection workload because it supports strict JSON Schema at
+lower latency and cost than 120B. Keep the model explicit so controlled eval
+evidence can justify changing it later:
+
+```text
+PROMPTQL_LLM_PROVIDER=groq
+GROQ_API_KEY=<local Groq API key>
+GROQ_MODEL=openai/gpt-oss-20b
+GROQ_REQUEST_TIMEOUT_SECONDS=30
+GROQ_MAX_OUTPUT_TOKENS=512
+```
+
 `GEMINI_API_KEY` must contain a Gemini API key created in Google AI Studio. It
 is not an OpenAI key, Google OAuth access token, project ID, or service-account
 JSON value. If Google rejects the key, the terminal emits a safe event like:
@@ -122,11 +138,12 @@ never contains the key, raw provider message, prompt, output, headers, or URL.
 This structured application event is emitted even when trace/metric exporters
 are disabled; the telemetry flags control exporters, not error sanitization.
 
-Both real adapters send only the minimized policy decision/reason/action
+All real adapters send only the minimized policy decision/reason/action
 contract, disable SDK retries, discard generated prose, and validate codes
 before rendering backend-owned text. OpenAI additionally sets `store=False` on
-its Responses request. Provider failure does not fall back to the fake and does
-not change the stored policy run.
+its Responses request. Gemini and Groq use separate fixed OpenAI-compatible
+endpoints without sharing provider identity. Provider failure does not fall
+back to the fake and does not change the stored policy run.
 
 Telemetry is safe and disabled by default. To inspect spans and metrics locally
 without an external service, opt into console exporters:
@@ -174,22 +191,22 @@ environment variables documented in [TESTING.md](docs/TESTING.md).
 
 ## Manual live explanation-provider smoke test
 
-Ordinary tests never contact OpenAI or Gemini. Perform this only after placing
+Ordinary tests never contact OpenAI, Gemini, or Groq. Perform this only after placing
 one provider's API key in `services/api/.env` and explicitly choosing its
 model. Do not print the key, prompt, raw output, request ID, headers, or raw
 exception details.
 
 1. Keep both connectors deterministic so this smoke test exercises only the
-   selected provider boundary. The following example selects Gemini:
+   selected provider boundary. The following example selects Groq:
 
    ```text
    PROMPTQL_GITHUB_CONNECTOR=fake
    PROMPTQL_JIRA_CONNECTOR=fake
-   PROMPTQL_LLM_PROVIDER=gemini
-   GEMINI_API_KEY=<local Gemini API key>
-   GEMINI_MODEL=gemini-2.5-flash
-   GEMINI_REQUEST_TIMEOUT_SECONDS=30
-   GEMINI_MAX_OUTPUT_TOKENS=512
+   PROMPTQL_LLM_PROVIDER=groq
+   GROQ_API_KEY=<local Groq API key>
+   GROQ_MODEL=openai/gpt-oss-20b
+   GROQ_REQUEST_TIMEOUT_SECONDS=30
+   GROQ_MAX_OUTPUT_TOKENS=512
    ```
 
 2. From `services/api`, apply the existing migration and start FastAPI:
@@ -240,6 +257,8 @@ exception details.
    GEMINI_MODEL=
    OPENAI_API_KEY=
    OPENAI_MODEL=
+   GROQ_API_KEY=
+   GROQ_MODEL=
    ```
 
 ## Manual live GitHub smoke test

@@ -100,6 +100,8 @@ def get_merge_readiness_workflow(
             explanation_service.provider.value
         ),
     )
+
+
 async def build_merge_readiness_response(
     run: MergeReadinessRun,
     explanation_service: MergeReadinessExplanationService,

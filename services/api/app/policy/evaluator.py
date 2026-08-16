@@ -93,6 +93,7 @@ def evaluate_merge_readiness(
     missing_information: list[PolicyFinding] = []
     evidence_references: list[EvidenceReference] = []
 
+
     if github is None:
         _add_missing_information(
             missing_information,
@@ -218,6 +219,7 @@ def evaluate_merge_readiness(
                 (mergeability_reference,),
             )
 
+
         if not github.required_checks_known:
             _add_missing_information(
                 missing_information,
@@ -258,6 +260,7 @@ def evaluate_merge_readiness(
                         action_message,
                     )
 
+
         if not github.reviews_known:
             _add_missing_information(
                 missing_information,
@@ -295,6 +298,7 @@ def evaluate_merge_readiness(
                 PendingActionCode.ADDRESS_REQUESTED_CHANGES,
                 "Address the requested changes and obtain a new review.",
             )
+
 
         if github.linked_jira_key is None:
             _add_blocker(
@@ -349,6 +353,7 @@ def evaluate_merge_readiness(
                     jira.blocker_state.value,
                 )
 
+
                 if jira.status is not JiraIssueStatus.DONE:
                     _add_blocker(
                         blockers,
@@ -370,6 +375,7 @@ def evaluate_merge_readiness(
                         PendingActionCode.CLEAR_JIRA_BLOCKER,
                         "Clear the blocker on the linked Jira issue.",
                     )
+
 
     if blockers:
         decision = MergeReadinessDecision.BLOCKED

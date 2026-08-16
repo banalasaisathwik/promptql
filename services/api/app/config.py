@@ -31,6 +31,7 @@ class JiraConnectorMode(StrEnum):
 class LLMProvider(StrEnum):
     FAKE = "fake"
     GEMINI = "gemini"
+    GROQ = "groq"
     OPENAI = "openai"
 
 
@@ -341,11 +342,13 @@ class LLMSettings:
             provider = LLMProvider(raw_provider)
         except ValueError:
             raise LLMConfigurationError(
-                "PROMPTQL_LLM_PROVIDER must be fake, gemini, or openai."
+                "PROMPTQL_LLM_PROVIDER must be fake, gemini, groq, or openai."
             ) from None
 
         if provider is LLMProvider.GEMINI:
             variable_prefix = "GEMINI"
+        elif provider is LLMProvider.GROQ:
+            variable_prefix = "GROQ"
         else:
             variable_prefix = "OPENAI"
 

@@ -52,6 +52,7 @@ class RuntimeErrorInfo(ContractModel):
 class ExplanationSource(StrEnum):
     FAKE = "fake"
     GEMINI = "gemini"
+    GROQ = "groq"
     OPENAI = "openai"
 
 
@@ -70,6 +71,7 @@ class RuntimeStep(ContractModel):
     duration_ms: Annotated[int, Field(strict=True, ge=0)] | None
     attempt: Annotated[int, Field(strict=True, gt=0)]
     error: RuntimeErrorInfo | None
+
 
     @model_validator(mode="after")
     def validate_lifecycle_fields(self) -> Self:
@@ -118,6 +120,7 @@ class MergeReadinessRun(ContractModel):
     request: ConnectorRequest
     github: GitHubPullRequest | None
     jira: JiraIssue | None
+
 
     @model_validator(mode="after")
     def validate_lifecycle_fields(self) -> Self:

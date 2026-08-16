@@ -47,8 +47,8 @@ prompt version, provider, and a configured-model fingerprint while metrics
 retain their closed low-cardinality label sets.
 
 `test_llm_provider_factory.py` verifies the credential-free fake default,
-OpenAI/Gemini configuration requirements, secret-free errors/representations,
-the fixed Google compatibility URL, and `max_retries=0` SDK construction.
+OpenAI/Gemini/Groq configuration requirements, secret-free errors and
+representations, fixed compatibility URLs, and `max_retries=0` SDK construction.
 `test_openai_llm_client.py` injects a small
 in-process SDK double. It proves Responses Structured Output request options,
 token handling, deterministic-validator integration, refusal/invalid-response
@@ -59,6 +59,14 @@ the low-complexity provider schema, strict PromptQL validator preservation,
 refusal handling, Google's HTTP 400 invalid-key
 normalization, and a sanitized structured failure log without opening a Google
 connection.
+
+`test_groq_llm_client.py` injects a Chat Completions SDK double. It proves the
+Pydantic structured-output request, fixed factory endpoint, token mapping,
+rate-limit and malformed-response normalization, deterministic-validator
+preservation, bounded telemetry identity/model fingerprinting, and prose/secret
+exclusion without opening a Groq connection. Eval tests prove `groq` appears in
+run identity while preserving provider-attempt and candidate-quality
+denominators.
 
 PostgreSQL repository and migration tests are opt-in. They include source
 provenance round trips and a pre-provenance nullable-row reconstruction. Without credentials they
@@ -80,7 +88,7 @@ and clean up only run IDs created by the tests.
 
 ## Manual real-provider smoke test
 
-Automated tests must never contact OpenAI or Gemini. The opt-in live procedure
+Automated tests must never contact OpenAI, Gemini, or Groq. The opt-in live procedure
 is in the root `README.md`. Run it only with a local API key, an explicitly selected
 Structured Output-capable model, an authorized test request, and repository
 owner approval. Inspect the final API explanation and bounded telemetry, but do
@@ -150,6 +158,7 @@ output.
 | LLM explanation harness | `services/api/tests/unit/test_merge_readiness_explanations.py` | Minimized input, generated/validated trust separation, grounded code completeness, deterministic rendering, sanitized failures, persistence isolation, and safe telemetry | Internal fake/recording clients only; no real provider calls |
 | OpenAI adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_openai_llm_client.py` | Configuration, one-attempt SDK construction, Structured Output request shape, provider error normalization, token telemetry, validator preservation, and secret exclusion | Injected SDK boundary only; no external requests |
 | Gemini compatibility adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_gemini_llm_client.py` | Gemini-specific configuration, fixed Google endpoint, Chat Completions structured parsing, token mapping, validator preservation, and sanitized failures | Injected OpenAI SDK boundary only; no external requests |
+| Groq compatibility adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_groq_llm_client.py` | Groq-specific configuration, fixed endpoint, strict-schema request, token mapping, validator preservation, sanitized failures, and safe telemetry | Injected OpenAI SDK boundary only; no external requests |
 | Versioned explanation evals | `services/api/tests/unit/test_explanation_eval_*.py` | Development/holdout versioning, repeated samples, separate denominators, deterministic graders, pacing without retry, thresholds, safe artifacts, baselines, and paid-call gates | Automated tests use only fake/injected clients; real runs require approval |
 | PostgreSQL integration | `services/api/tests/integration/test_postgres_runtime_persistence.py` | Alembic schema, durable reconstruction, ordering, provenance, legacy nullable rows, failures, and conflicts | Opt-in; skipped unless guarded test credentials are configured |
 | Cross-layer/end-to-end | Future repository-level area | Browser-to-API journeys | Planned; tooling not selected |

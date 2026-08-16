@@ -35,3 +35,4 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-014](ADR-014-gemini-compact-claim-indexes.md) | Accepted | Use compact request-local indexes for Gemini claims before strict typed and semantic validation |
 | [ADR-015](ADR-015-versioned-explanation-eval-harness.md) | Accepted | Version local explanation datasets, repeated samples, graders, thresholds, and compatible baselines |
 | [ADR-016](ADR-016-durable-run-source-provenance.md) | Accepted | Persist bounded GitHub, Jira, and explanation source provenance and render typed failed runs |
+| [ADR-017](ADR-017-groq-openai-compatible-explanation-adapter.md) | Accepted | Add explicit Groq identity through the fixed OpenAI-compatible endpoint with unchanged deterministic validation |

@@ -20,6 +20,7 @@ ExplanationText = Annotated[
 class LLMProviderName(StrEnum):
     FAKE = "fake"
     GEMINI = "gemini"
+    GROQ = "groq"
     OPENAI = "openai"
 
 

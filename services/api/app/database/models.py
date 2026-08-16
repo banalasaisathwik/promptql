@@ -44,7 +44,7 @@ class WorkflowRunRow(DatabaseModel):
         ),
         CheckConstraint(
             "explanation_source IS NULL OR "
-            "explanation_source IN ('fake', 'gemini', 'openai')",
+            "explanation_source IN ('fake', 'gemini', 'groq', 'openai')",
             name="ck_workflow_runs_explanation_source",
         ),
         CheckConstraint(
@@ -84,6 +84,7 @@ class WorkflowRunRow(DatabaseModel):
             name="ck_workflow_runs_lifecycle",
         ),
     )
+
 
     run_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True)
     workflow_name: Mapped[str] = mapped_column(Text, nullable=False)

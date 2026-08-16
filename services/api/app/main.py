@@ -34,6 +34,7 @@ from app.database import (
 )
 from app.explanations import (
     GeminiLLMClient,
+    GroqLLMClient,
     LLMClient,
     MergeReadinessExplanationService,
     OpenAILLMClient,
@@ -149,6 +150,7 @@ def create_app(
         telemetry=app_observability.runtime_telemetry,
     )
 
+
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         engine = None
@@ -172,9 +174,13 @@ def create_app(
                 await github_connector.aclose()
             if isinstance(jira_connector, HttpJiraConnector):
                 await jira_connector.aclose()
-            if isinstance(selected_llm_client, (GeminiLLMClient, OpenAILLMClient)):
+            if isinstance(
+                selected_llm_client,
+                (GeminiLLMClient, GroqLLMClient, OpenAILLMClient),
+            ):
                 await selected_llm_client.aclose()
             app_observability.shutdown()
+
 
     application = FastAPI(title="PromptQL API", lifespan=lifespan)
     application.state.runtime_telemetry = app_observability.runtime_telemetry

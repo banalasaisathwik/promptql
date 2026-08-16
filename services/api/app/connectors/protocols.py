@@ -1,5 +1,3 @@
-pass
-
 from typing import Protocol
 
 from app.connectors.models import (
@@ -11,9 +9,8 @@ from app.connectors.models import (
 
 
 class GitHubConnector(Protocol):
-    pass
-
     source: ConnectorSource
+
 
     async def get_pull_request(
         self,
@@ -22,8 +19,7 @@ class GitHubConnector(Protocol):
 
 
 class JiraConnector(Protocol):
-    pass
-
     source: ConnectorSource
+
 
     async def get_issue(self, issue_key: str) -> JiraIssue: ...

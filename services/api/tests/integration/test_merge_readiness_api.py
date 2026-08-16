@@ -22,6 +22,7 @@ from app.connectors.models import (
     JiraIssue,
 )
 from app.explanations import (
+    FakeLLMClient,
     LLMProviderName,
     LLMStructuredResponse,
     MergeReadinessExplanationService,
@@ -64,6 +65,11 @@ class AlteredExplanationClient:
                 "recommended_actions": (),
             }
         )
+
+
+class DeterministicGroqClient(FakeLLMClient):
+    provider = LLMProviderName.GROQ
+    model = "openai/gpt-oss-20b"
 
 
 class RecordingWorkflow:
@@ -141,6 +147,21 @@ class MergeReadinessApiTests(unittest.TestCase):
             body["sources"],
             {"github": "fake", "jira": "fake", "explanation": "fake"},
         )
+
+    def test_groq_provider_identity_is_preserved_in_run_and_response(self) -> None:
+        app.dependency_overrides[get_merge_readiness_explanation_service] = (
+            lambda: MergeReadinessExplanationService(
+                DeterministicGroqClient()
+            )
+        )
+
+        response = self.post_request(MERGE_READY_REQUEST)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["sources"]["explanation"], "groq")
+        stored = self.repository.get(UUID(body["run_id"]))
+        self.assertEqual(stored.sources.explanation.value, "groq")
 
     def test_missing_jira_evidence_completes_with_unknown(self) -> None:
         app.dependency_overrides[get_jira_connector] = (
