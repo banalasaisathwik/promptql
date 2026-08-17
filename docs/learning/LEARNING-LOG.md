@@ -1579,3 +1579,105 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** When V2 needs history, replay, crash recovery, or
   many live viewers, what durable `RunEvent` shape and SSE cursor contract can
   extend snapshots without exposing private model reasoning?
+
+### 2026-08-16 - Model investigation facts separately from hypotheses
+
+- **V2 milestone:** V2.1 Investigation Domain Model.
+- **Concept:** A domain contract encodes meaning and valid relationships, not
+  transport, storage, or runtime lifecycle. Typed facts are deterministically
+  supported findings; hypotheses remain candidate explanations whose grounding
+  does not prove objective correctness.
+- **Important syntax:** `Annotated[..., Field(discriminator="fact_type")]`
+  makes Pydantic select one fact schema from a union using a stable literal tag.
+  `StrEnum` restricts codes while preserving JSON strings, and
+  `@model_validator(mode="after")` validates relationships across already parsed
+  immutable values.
+- **Implementation locations:** `investigations/models.py` defines requests,
+  three fact variants, hypotheses, unknowns, actions, and result invariants;
+  `test_investigation_models.py` proves valid and invalid construction. ADR-019
+  records why runtime, evidence, and LLM integration remain separate.
+- **Design decision:** Use a small discriminated fact union and an extensible
+  constrained hypothesis code. This preserves machine-readable fact semantics
+  without pretending the project already knows a universal root-cause taxonomy.
+- **Invariant or failure behavior:** Every fact cites a future evidence ID;
+  entity IDs are unique; internal references resolve; grounded or contradicted
+  hypotheses cite facts/evidence; and insufficient evidence can produce explicit
+  unknowns without an invented hypothesis.
+- **Trade-off:** Adding a fact kind requires an explicit union change and tests,
+  but consumers never need to parse prose to discover which fields are valid.
+  Evidence existence cannot be validated until V2.2 owns evidence records.
+- **Validation evidence:** `.venv\Scripts\python.exe -m unittest
+  tests.unit.test_investigation_models -v`, complete backend discovery,
+  `compileall`, and `git diff --check` validate the domain boundary and V1
+  compatibility.
+- **Unresolved question:** Which provenance fields must V2.2 evidence expose so
+  a fact builder can prove both evidence existence and deterministic derivation?
+
+### 2026-08-17 - Preserve source observations before deriving facts
+
+- **V2 milestone:** V2.2 First-Class Evidence and Provenance Domain Model.
+- **Concept:** Evidence is an immutable normalized source observation; a fact is
+  a deterministic conclusion derived from evidence. Provenance records where an
+  observation came from and distinguishes source-event time from retrieval time.
+- **Important syntax:** Pydantic `AwareDatetime` rejects naive timestamps.
+  `Annotated[Union, Field(discriminator="content_type")]` validates exactly one
+  typed content variant, while an `after` model validator checks envelope kind,
+  logical source, and aggregate cross-references.
+- **Implementation locations:** `investigations/models.py` contains the envelope,
+  provenance, five content variants, and `InvestigationResult` reference checks;
+  `test_evidence_models.py` covers valid and invalid evidence states. ADR-020
+  records the envelope decision and why V1 `EvidenceReference` remains unchanged.
+- **Design decision:** Share provenance in one envelope and keep content as a
+  small discriminated union. This avoids repeated audit fields without accepting
+  an arbitrary `dict[str, Any]` or provider response schema.
+- **Invariant or failure behavior:** Evidence is frozen; IDs are unique;
+  source/kind/content agree; timestamps are timezone-aware; facts and direct
+  hypothesis evidence links resolve within one result; unavailable data creates
+  `MissingInformation`, not evidence with `None` content.
+- **Trade-off:** Adding a content kind requires an explicit model, enum, source
+  rule, and test. This is more work than accepting a dictionary, but it gives
+  deterministic validation, safer serialization, comparable eval inputs, and
+  clearer migrations. Retrieval may appear before observed time by a small
+  amount because strict ordering would mishandle distributed clock skew.
+- **Validation evidence:** Focused V2.1/V2.2 tests, application/test compilation,
+  complete backend unittest discovery, forbidden-pattern review, and
+  `git diff --check` prove the boundary without provider or persistence calls.
+- **Unresolved question:** In V2.3, should changed-file evidence identify only a
+  pull request, or also require a specific head commit to make repeated PR reads
+  distinguishable without introducing evidence versioning prematurely?
+
+### 2026-08-17 - Normalize GitHub code changes behind a focused capability
+
+- **V2 milestone:** V2.3 GitHub Code/Diff Evidence.
+- **Concept:** An anti-corruption layer validates GitHub's provider model and
+  translates only investigation-relevant fields into immutable V2 evidence.
+  Provider capability remains separate from a future planner-visible tool.
+- **Important syntax:** Python `Protocol` expresses structural async capability;
+  private Pydantic response models ignore unrelated provider fields while
+  validating required ones; a compiled regex parses unified-diff hunk headers;
+  injected `Callable[[], datetime]` clocks make retrieval provenance deterministic.
+- **Implementation locations:** `connectors/protocols.py` defines the focused
+  interface; `github_code_http.py` normalizes HTTP data; `github_diff.py` parses
+  bounded hunks; `github_code_fakes.py` supplies deterministic evidence;
+  `investigations/models.py` owns PR/file/hunk domain contracts; ADR-021 records
+  why the V1 connector remains unchanged.
+- **Design decision:** Use three focused read-only operations and dedicated fake/
+  HTTP implementations while reusing GitHub settings, the application-scoped
+  client, sanitized errors, and telemetry. This follows Interface Segregation
+  without creating planner tools or a generic raw-JSON client.
+- **Invariant or failure behavior:** Raw JSON, headers, profiles, emails, URLs,
+  and provider exceptions never cross the adapter. File counts and rename paths
+  agree; hunk lines consume declared old/new ranges; missing patch differs from
+  malformed patch; page/patch bounds raise `GitHubIncompleteResultError` rather
+  than returning partial evidence as complete.
+- **Trade-off:** Explicit response/content models and a small parser require more
+  code than `dict[str, Any]`, but downstream facts/evals receive predictable,
+  bounded structures. The initial 1,000-file local page budget may reject a
+  legitimate very large PR; that is safer than silent truncation and is
+  reversible when measured workloads justify another bound.
+- **Validation evidence:** 67 new/V2 focused tests, 95 combined V1/V2 connector
+  regression tests, and 278 complete backend tests passed; six PostgreSQL tests
+  were environment-guarded. Compilation, comment-pass reruns, and final diff
+  checks are recorded when the milestone closes.
+- **Unresolved question:** Should V2.6 derive file facts from every returned file,
+  or accept an explicit deterministic relevance filter before fact construction?

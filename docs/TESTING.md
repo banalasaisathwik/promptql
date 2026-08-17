@@ -23,6 +23,30 @@ bun run test:web
 The Bun tests validate frontend transport and server-rendered presentation
 behavior. No root command currently validates the Python application.
 
+`test_investigation_models.py` proves the V2.1 pure domain boundary: strict and
+immutable requests, discriminated typed facts, categorical hypothesis
+confidence and grounding, bounded missing-information/action codes, globally
+unique entity IDs, resolvable internal references, and an insufficient-evidence
+result that does not invent a fact or hypothesis. It uses no API, database,
+connector, provider, or LLM dependency.
+
+`test_evidence_models.py` proves the V2.2 evidence envelope and provenance
+boundary: bounded identities and sources, discriminated typed content,
+source/kind compatibility, timezone-aware source/retrieval times, clock-skew
+tolerance, immutability, raw-payload rejection, duplicate identity rejection,
+and resolvable fact/hypothesis evidence references. Missing source information
+remains a typed `MissingInformation` value rather than fake evidence. The tests
+make no connector, network, database, provider, or LLM call.
+
+V2.3 GitHub code evidence is verified without live credentials by
+`test_github_code_evidence_contracts.py`, `test_github_diff_parser.py`,
+`test_github_code_http.py`, and `test_github_code_factory.py`. These tests cover
+focused request/protocol/fake behavior, bounded unified-diff parsing, commit/PR/
+file/hunk normalization, missing patches, rename and count invariants, ordered
+pagination, explicit incomplete results, sanitized HTTP/network failures,
+provider-data exclusion, bounded telemetry, and factory selection. The original
+`test_github_http_connector.py` remains the separate V1 regression boundary.
+
 `test_merge_readiness_api.py` proves the additive live-start route commits and
 returns a pending ID before continuation, exposes running and terminal
 snapshots through `GET /v1/runs/{run_id}`, preserves the synchronous route, and

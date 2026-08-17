@@ -1,10 +1,13 @@
 from app.connectors.errors import ConnectorUnavailableError, FixtureNotFoundError
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
+from app.connectors.github_code_fakes import FakeGitHubCodeEvidenceSource
 from app.connectors.models import (
     BlockerState,
     CheckStatus,
     ConnectorRequest,
+    GitHubCommitEvidenceRequest,
     GitHubPullRequest,
+    GitHubPullRequestEvidenceRequest,
     GitHubUser,
     JiraAssignee,
     JiraIssue,
@@ -15,16 +18,18 @@ from app.connectors.models import (
 )
 
 
-
 __all__ = [
     "BlockerState",
     "CheckStatus",
     "ConnectorRequest",
     "ConnectorUnavailableError",
+    "FakeGitHubCodeEvidenceSource",
     "FakeGitHubConnector",
     "FakeJiraConnector",
     "FixtureNotFoundError",
+    "GitHubCommitEvidenceRequest",
     "GitHubPullRequest",
+    "GitHubPullRequestEvidenceRequest",
     "GitHubUser",
     "JiraAssignee",
     "JiraIssue",
