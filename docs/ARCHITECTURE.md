@@ -942,41 +942,52 @@ diff selection remain deferred.
 
 # V2.4 — IncidentSource boundary
 
-V2 should consume normalized incident information rather than coupling the
-domain directly to one observability vendor.
+> **Implemented and validated provider capability**
 
-Target port:
-
-```text
-IncidentSource
-      ↓
-NormalizedIncident
-```
-
-Possible adapters may eventually include:
+`IncidentSource` is a provider-neutral operational-evidence port with four
+read-only, validated operations:
 
 ```text
-Grafana / OpenTelemetry
-Sentry
-Datadog
+get_incident_evidence
+get_deployment_evidence
+get_failure_location_evidence
+get_telemetry_window_evidence
 ```
 
-Only adapters required by an implemented milestone should be built.
+Each operation returns one immutable V2.2 `Evidence` envelope. Incident
+metadata records an identifier, optional service/environment/event time, and
+optional bounded status/category. Deployment evidence records service,
+environment, full commit SHA, and deployment time. Failure-location evidence
+can preserve an error category and whatever normalized location fields are
+actually available; it does not retain raw stack dumps. Telemetry-window
+evidence preserves a typed service/signal/time-window/filter request shape and
+an observed event count, never raw PromQL, LogQL, or provider query text.
 
-The investigation domain must not depend on Grafana-, Sentry-, or
-Datadog-specific JSON.
-
-Conceptually:
+The current implementation is `FakeIncidentSource`, whose fixed fixtures make
+offline behavior deterministic without credentials. A lookup with no fixture
+raises `FixtureNotFoundError`; it never fabricates an empty `Evidence` record.
+This maintains the distinction between unavailable evidence and a source that
+observed zero matching events.
 
 ```text
-provider response
-      ↓
-provider adapter
-      ↓
-normalized incident
-      ↓
-investigation domain
+deterministic fixture
+       ↓
+FakeIncidentSource
+       ↓
+IncidentSource protocol
+       ↓
+Evidence: incident | deployment | stack_frame | telemetry_window
 ```
+
+Grafana Cloud remains the configured OpenTelemetry export destination for
+application operational telemetry. Exporting traces/metrics to Grafana does not
+create a read/query API for investigation evidence, so no live Grafana adapter,
+credentials, query language, or configuration was added in V2.4. A future live
+adapter must validate provider responses and translate them behind this port.
+
+Provider capability remains distinct from V2.5 planner-visible tools. V2.4 does
+not derive deployment timing facts, connect stack frames to diff hunks, plan,
+persist, expose an API, or generate hypotheses.
 
 ---
 

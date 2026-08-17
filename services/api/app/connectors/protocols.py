@@ -3,10 +3,14 @@ from typing import Protocol
 from app.connectors.models import (
     ConnectorRequest,
     ConnectorSource,
+    DeploymentEvidenceRequest,
+    FailureLocationEvidenceRequest,
     GitHubCommitEvidenceRequest,
     GitHubPullRequest,
     GitHubPullRequestEvidenceRequest,
+    IncidentEvidenceRequest,
     JiraIssue,
+    TelemetryWindowEvidenceRequest,
 )
 from app.investigations import Evidence
 
@@ -38,6 +42,30 @@ class GitHubCodeEvidenceSource(Protocol):
         self,
         request: GitHubPullRequestEvidenceRequest,
     ) -> tuple[Evidence, ...]: ...
+
+
+class IncidentSource(Protocol):
+    source: ConnectorSource
+
+    async def get_incident_evidence(
+        self,
+        request: IncidentEvidenceRequest,
+    ) -> Evidence: ...
+
+    async def get_deployment_evidence(
+        self,
+        request: DeploymentEvidenceRequest,
+    ) -> Evidence: ...
+
+    async def get_failure_location_evidence(
+        self,
+        request: FailureLocationEvidenceRequest,
+    ) -> Evidence: ...
+
+    async def get_telemetry_window_evidence(
+        self,
+        request: TelemetryWindowEvidenceRequest,
+    ) -> Evidence: ...
 
 
 class JiraConnector(Protocol):

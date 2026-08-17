@@ -11,6 +11,8 @@ from app.connectors.models import (
     JiraIssueStatus,
     NonEmptyString,
     PullRequestState,
+    TelemetryFilter,
+    TelemetrySignal,
 )
 
 
@@ -73,6 +75,7 @@ class EvidenceSource(StrEnum):
     JIRA = "jira"
     INCIDENT = "incident"
     DEPLOYMENT = "deployment"
+    TELEMETRY = "telemetry"
 
 
 class EvidenceKind(StrEnum):
@@ -83,6 +86,8 @@ class EvidenceKind(StrEnum):
     JIRA_ISSUE = "jira_issue"
     STACK_FRAME = "stack_frame"
     DEPLOYMENT = "deployment"
+    INCIDENT = "incident"
+    TELEMETRY_WINDOW = "telemetry_window"
 
 
 class EvidenceProvenance(ContractModel):
@@ -190,19 +195,65 @@ class JiraIssueEvidenceContent(ContractModel):
     status: JiraIssueStatus
 
 
+class IncidentStatus(StrEnum):
+    ACTIVE = "active"
+    RESOLVED = "resolved"
+    UNKNOWN = "unknown"
+
+
+class IncidentEvidenceContent(ContractModel):
+    content_type: Literal["incident"] = "incident"
+    incident_reference: NonEmptyString
+    service: NonEmptyString | None = None
+    environment: NonEmptyString | None = None
+    started_at: AwareDatetime | None = None
+    status: IncidentStatus | None = None
+    category: NonEmptyString | None = None
+
+
 class StackFrameEvidenceContent(ContractModel):
     content_type: Literal["stack_frame"] = "stack_frame"
-    service: NonEmptyString
-    file_path: NonEmptyString
-    function_name: NonEmptyString
-    line_number: Annotated[int, Field(strict=True, gt=0)]
+    service: NonEmptyString | None = None
+    error_category: NonEmptyString | None = None
+    file_path: NonEmptyString | None = None
+    function_name: NonEmptyString | None = None
+    line_number: Annotated[int, Field(strict=True, gt=0)] | None = None
+
+    @model_validator(mode="after")
+    def validate_failure_location(self) -> Self:
+        if self.error_category is None and self.file_path is None:
+            raise ValueError("a stack frame needs an error category or file path")
+        if self.line_number is not None and self.file_path is None:
+            raise ValueError("a stack-frame line number requires a file path")
+        return self
 
 
 class DeploymentEvidenceContent(ContractModel):
     content_type: Literal["deployment"] = "deployment"
     deployment_reference: NonEmptyString
+    service: NonEmptyString
     environment: NonEmptyString
-    revision: NonEmptyString
+    commit_sha: CommitSha
+    deployed_at: AwareDatetime
+
+
+class TelemetryWindowEvidenceContent(ContractModel):
+    content_type: Literal["telemetry_window"] = "telemetry_window"
+    service: NonEmptyString
+    signal: TelemetrySignal
+    start_time: AwareDatetime
+    end_time: AwareDatetime
+    filters: Annotated[tuple[TelemetryFilter, ...], Field(max_length=20)] = ()
+    event_count: Annotated[int, Field(strict=True, ge=0)]
+
+    @model_validator(mode="after")
+    def validate_window_and_filters(self) -> Self:
+        if self.start_time >= self.end_time:
+            raise ValueError("telemetry start_time must be before end_time")
+        filter_pairs = {(filter.key, filter.value) for filter in self.filters}
+        if len(filter_pairs) != len(self.filters):
+            raise ValueError("telemetry filters cannot contain duplicate key/value pairs")
+        return self
 
 
 EvidenceContent = Annotated[
@@ -211,8 +262,10 @@ EvidenceContent = Annotated[
     | PullRequestEvidenceContent
     | DiffHunkEvidenceContent
     | JiraIssueEvidenceContent
+    | IncidentEvidenceContent
     | StackFrameEvidenceContent
-    | DeploymentEvidenceContent,
+    | DeploymentEvidenceContent
+    | TelemetryWindowEvidenceContent,
     Field(discriminator="content_type"),
 ]
 
@@ -223,8 +276,10 @@ _EXPECTED_SOURCE_BY_KIND = {
     EvidenceKind.PULL_REQUEST: EvidenceSource.GITHUB,
     EvidenceKind.DIFF_HUNK: EvidenceSource.GITHUB,
     EvidenceKind.JIRA_ISSUE: EvidenceSource.JIRA,
+    EvidenceKind.INCIDENT: EvidenceSource.INCIDENT,
     EvidenceKind.STACK_FRAME: EvidenceSource.INCIDENT,
     EvidenceKind.DEPLOYMENT: EvidenceSource.DEPLOYMENT,
+    EvidenceKind.TELEMETRY_WINDOW: EvidenceSource.TELEMETRY,
 }
 
 

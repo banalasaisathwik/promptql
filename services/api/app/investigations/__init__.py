@@ -21,6 +21,8 @@ from app.investigations.models import (
     InvestigationIdentifier,
     InvestigationRequest,
     InvestigationResult,
+    IncidentEvidenceContent,
+    IncidentStatus,
     JiraIssueEvidenceContent,
     MissingInformation,
     MissingInformationKind,
@@ -29,6 +31,7 @@ from app.investigations.models import (
     RecommendedActionCode,
     StackFrameEvidenceContent,
     StackFrameFact,
+    TelemetryWindowEvidenceContent,
 )
 
 __all__ = [
@@ -54,6 +57,8 @@ __all__ = [
     "InvestigationIdentifier",
     "InvestigationRequest",
     "InvestigationResult",
+    "IncidentEvidenceContent",
+    "IncidentStatus",
     "JiraIssueEvidenceContent",
     "MissingInformation",
     "MissingInformationKind",
@@ -62,4 +67,5 @@ __all__ = [
     "RecommendedActionCode",
     "StackFrameEvidenceContent",
     "StackFrameFact",
+    "TelemetryWindowEvidenceContent",
 ]

@@ -74,8 +74,10 @@ def deployment_evidence() -> Evidence:
         ),
         content=DeploymentEvidenceContent(
             deployment_reference="deploy-1042",
+            service="checkout-api",
             environment="production",
-            revision="4f3a91c",
+            commit_sha="a" * 40,
+            deployed_at=datetime(2026, 8, 16, 10, 20, tzinfo=UTC),
         ),
     )
 
