@@ -1579,3 +1579,36 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** When V2 needs history, replay, crash recovery, or
   many live viewers, what durable `RunEvent` shape and SSE cursor contract can
   extend snapshots without exposing private model reasoning?
+
+### 2026-08-16 - Model investigation facts separately from hypotheses
+
+- **V2 milestone:** V2.1 Investigation Domain Model.
+- **Concept:** A domain contract encodes meaning and valid relationships, not
+  transport, storage, or runtime lifecycle. Typed facts are deterministically
+  supported findings; hypotheses remain candidate explanations whose grounding
+  does not prove objective correctness.
+- **Important syntax:** `Annotated[..., Field(discriminator="fact_type")]`
+  makes Pydantic select one fact schema from a union using a stable literal tag.
+  `StrEnum` restricts codes while preserving JSON strings, and
+  `@model_validator(mode="after")` validates relationships across already parsed
+  immutable values.
+- **Implementation locations:** `investigations/models.py` defines requests,
+  three fact variants, hypotheses, unknowns, actions, and result invariants;
+  `test_investigation_models.py` proves valid and invalid construction. ADR-019
+  records why runtime, evidence, and LLM integration remain separate.
+- **Design decision:** Use a small discriminated fact union and an extensible
+  constrained hypothesis code. This preserves machine-readable fact semantics
+  without pretending the project already knows a universal root-cause taxonomy.
+- **Invariant or failure behavior:** Every fact cites a future evidence ID;
+  entity IDs are unique; internal references resolve; grounded or contradicted
+  hypotheses cite facts/evidence; and insufficient evidence can produce explicit
+  unknowns without an invented hypothesis.
+- **Trade-off:** Adding a fact kind requires an explicit union change and tests,
+  but consumers never need to parse prose to discover which fields are valid.
+  Evidence existence cannot be validated until V2.2 owns evidence records.
+- **Validation evidence:** `.venv\Scripts\python.exe -m unittest
+  tests.unit.test_investigation_models -v`, complete backend discovery,
+  `compileall`, and `git diff --check` validate the domain boundary and V1
+  compatibility.
+- **Unresolved question:** Which provenance fields must V2.2 evidence expose so
+  a fact builder can prove both evidence existence and deterministic derivation?

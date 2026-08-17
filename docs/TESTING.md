@@ -23,6 +23,13 @@ bun run test:web
 The Bun tests validate frontend transport and server-rendered presentation
 behavior. No root command currently validates the Python application.
 
+`test_investigation_models.py` proves the V2.1 pure domain boundary: strict and
+immutable requests, discriminated typed facts, categorical hypothesis
+confidence and grounding, bounded missing-information/action codes, globally
+unique entity IDs, resolvable internal references, and an insufficient-evidence
+result that does not invent a fact or hypothesis. It uses no API, database,
+connector, provider, or LLM dependency.
+
 `test_merge_readiness_api.py` proves the additive live-start route commits and
 returns a pending ID before continuation, exposes running and terminal
 snapshots through `GET /v1/runs/{run_id}`, preserves the synchronous route, and
