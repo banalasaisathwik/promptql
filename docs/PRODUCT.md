@@ -550,7 +550,7 @@ V2.3
 GitHub code/diff evidence (provider capability implemented)
 
 V2.4
-IncidentSource abstraction
+IncidentSource abstraction (provider capability implemented)
 
 V2.5
 Tool abstraction and registry
@@ -722,6 +722,14 @@ pull-request, changed-file, and bounded diff-hunk evidence through deterministic
 fake or validated read-only GitHub HTTP sources. It does not yet derive facts,
 choose relevant hunks, expose planner tools, or connect this capability to a V2
 runtime/API. Persistence, raw payload snapshots, and evidence UI remain planned.
+
+V2.4 adds a provider-neutral `IncidentSource` capability for normalized incident,
+deployment, failure-location, and bounded telemetry-window evidence. The current
+deterministic fake source makes these records available without credentials or a
+vendor dependency. Grafana Cloud remains an OpenTelemetry export destination;
+that export configuration is not a Grafana evidence-query integration. Live
+Grafana, Sentry, and Datadog adapters, provider query languages, fact derivation,
+and planner-visible tools remain deferred.
 
 ---
 

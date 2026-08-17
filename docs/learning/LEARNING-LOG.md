@@ -1681,3 +1681,41 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   checks are recorded when the milestone closes.
 - **Unresolved question:** Should V2.6 derive file facts from every returned file,
   or accept an explicit deterministic relevance filter before fact construction?
+
+### 2026-08-17 - Separate operational evidence from observability export
+
+- **V2 milestone:** V2.4 IncidentSource and normalized operational evidence.
+- **Concept:** A provider-neutral port translates incident-provider observations
+  into immutable evidence without making Grafana, Sentry, Datadog, PromQL, or
+  LogQL part of the investigation domain. Operational telemetry export is not
+  the same capability as querying provider data for an investigation.
+- **Important syntax:** `Protocol` describes the four asynchronous source
+  capabilities structurally; Pydantic `AwareDatetime` and `model_validator`
+  enforce timezone-aware ordered telemetry windows and source-specific content
+  invariants; frozen tuple filters make fixture requests stable dictionary keys.
+- **Implementation locations:** `connectors/models.py` owns bounded provider-
+  neutral requests; `connectors/protocols.py` defines `IncidentSource`;
+  `connectors/incident_fakes.py` supplies deterministic fixtures; and
+  `investigations/models.py` adds incident, deployment, stack/error, and
+  telemetry-window content to the shared V2.2 envelope.
+- **Design decision:** Use four semantic operations instead of one bundled
+  incident lookup. Incident metadata, deployment data, failure locations, and
+  telemetry windows can be independently unavailable and later workflows can
+  request only the evidence they need. The initial implementation is fake-only
+  because existing OTLP/Grafana setup exports telemetry but does not provide a
+  safe configured query boundary.
+- **Invariant or failure behavior:** Provider-specific JSON/query text and raw
+  stacks cannot enter the discriminated content union. Unavailable fixture data
+  raises `FixtureNotFoundError`; it is never represented as invented empty
+  evidence. Observed timestamps remain distinct from retrieval timestamps, and
+  clock skew is not treated as invalid evidence.
+- **Trade-off:** Multiple typed methods and models are more explicit than a
+  generic `query()` function, but they make authorization, testing, future tool
+  design, and provider adaptation safer. Deferring a live adapter postpones
+  real-provider validation, but avoids inventing credentials and query semantics.
+- **Validation evidence:** Focused incident/evidence/V2.3 regression tests,
+  complete backend discovery, compilation, final teaching-comment revalidation,
+  and `git diff --check` are recorded with this milestone's completion.
+- **Unresolved question:** When a live provider is justified, should a deployment
+  adapter share the same credentials and source lifecycle as incident telemetry,
+  or become a separately configured provider behind the same port?

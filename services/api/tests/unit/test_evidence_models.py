@@ -16,12 +16,16 @@ from app.investigations import (
     EvidenceSource,
     FileChangeType,
     Hypothesis,
+    IncidentEvidenceContent,
+    IncidentStatus,
     InvestigationResult,
     JiraIssueEvidenceContent,
     MissingInformation,
     PullRequestEvidenceContent,
     StackFrameEvidenceContent,
+    TelemetryWindowEvidenceContent,
 )
+from app.connectors.models import TelemetryFilter, TelemetrySignal
 
 
 RETRIEVED_AT = datetime(2026, 8, 17, 10, 18, tzinfo=UTC)
@@ -198,8 +202,38 @@ class EvidenceModelTests(unittest.TestCase):
                 provenance=provenance("deployment:deploy-1042"),
                 content=DeploymentEvidenceContent(
                     deployment_reference="deploy-1042",
+                    service="checkout-api",
                     environment="production",
-                    revision="4f3a91c",
+                    commit_sha="a" * 40,
+                    deployed_at=RETRIEVED_AT,
+                ),
+            ),
+            Evidence(
+                evidence_id="evidence:incident",
+                source="incident",
+                kind="incident",
+                provenance=provenance("incident:checkout-500"),
+                content=IncidentEvidenceContent(
+                    incident_reference="incident:checkout-500",
+                    service="checkout-api",
+                    environment="production",
+                    started_at=RETRIEVED_AT,
+                    status=IncidentStatus.ACTIVE,
+                    category="http_5xx",
+                ),
+            ),
+            Evidence(
+                evidence_id="evidence:telemetry",
+                source="telemetry",
+                kind="telemetry_window",
+                provenance=provenance("telemetry:checkout-api:error-events"),
+                content=TelemetryWindowEvidenceContent(
+                    service="checkout-api",
+                    signal=TelemetrySignal.ERROR_EVENTS,
+                    start_time=RETRIEVED_AT - timedelta(minutes=5),
+                    end_time=RETRIEVED_AT,
+                    filters=(TelemetryFilter(key="environment", value="production"),),
+                    event_count=17,
                 ),
             ),
         )
