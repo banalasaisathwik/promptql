@@ -241,6 +241,12 @@ class RuntimeTelemetry:
         allowed_identities = {
             ("github", "fake", "get_pull_request"),
             ("github", "live", "get_pull_request"),
+            ("github", "fake", "get_commit_evidence"),
+            ("github", "live", "get_commit_evidence"),
+            ("github", "fake", "get_pull_request_evidence"),
+            ("github", "live", "get_pull_request_evidence"),
+            ("github", "fake", "get_changed_file_evidence"),
+            ("github", "live", "get_changed_file_evidence"),
             ("jira", "fake", "get_issue"),
             ("jira", "live", "get_issue"),
         }

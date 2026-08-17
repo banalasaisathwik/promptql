@@ -39,3 +39,4 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-018](ADR-018-live-run-dashboard-snapshot-polling.md) | Accepted | Additive 202 live-start endpoint with in-process execution and persisted-snapshot polling |
 | [ADR-019](ADR-019-investigation-domain-contracts.md) | Accepted | Minimal typed investigation facts, explicit hypotheses and unknowns, and deterministic result invariants |
 | [ADR-020](ADR-020-first-class-investigation-evidence.md) | Accepted | Provider-neutral immutable evidence envelope with typed content, provenance, and result-level reference validation |
+| [ADR-021](ADR-021-focused-github-code-evidence-source.md) | Accepted | Focused read-only GitHub code-evidence protocol with bounded normalization, pagination, and diff parsing |

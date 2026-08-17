@@ -1645,3 +1645,39 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** In V2.3, should changed-file evidence identify only a
   pull request, or also require a specific head commit to make repeated PR reads
   distinguishable without introducing evidence versioning prematurely?
+
+### 2026-08-17 - Normalize GitHub code changes behind a focused capability
+
+- **V2 milestone:** V2.3 GitHub Code/Diff Evidence.
+- **Concept:** An anti-corruption layer validates GitHub's provider model and
+  translates only investigation-relevant fields into immutable V2 evidence.
+  Provider capability remains separate from a future planner-visible tool.
+- **Important syntax:** Python `Protocol` expresses structural async capability;
+  private Pydantic response models ignore unrelated provider fields while
+  validating required ones; a compiled regex parses unified-diff hunk headers;
+  injected `Callable[[], datetime]` clocks make retrieval provenance deterministic.
+- **Implementation locations:** `connectors/protocols.py` defines the focused
+  interface; `github_code_http.py` normalizes HTTP data; `github_diff.py` parses
+  bounded hunks; `github_code_fakes.py` supplies deterministic evidence;
+  `investigations/models.py` owns PR/file/hunk domain contracts; ADR-021 records
+  why the V1 connector remains unchanged.
+- **Design decision:** Use three focused read-only operations and dedicated fake/
+  HTTP implementations while reusing GitHub settings, the application-scoped
+  client, sanitized errors, and telemetry. This follows Interface Segregation
+  without creating planner tools or a generic raw-JSON client.
+- **Invariant or failure behavior:** Raw JSON, headers, profiles, emails, URLs,
+  and provider exceptions never cross the adapter. File counts and rename paths
+  agree; hunk lines consume declared old/new ranges; missing patch differs from
+  malformed patch; page/patch bounds raise `GitHubIncompleteResultError` rather
+  than returning partial evidence as complete.
+- **Trade-off:** Explicit response/content models and a small parser require more
+  code than `dict[str, Any]`, but downstream facts/evals receive predictable,
+  bounded structures. The initial 1,000-file local page budget may reject a
+  legitimate very large PR; that is safer than silent truncation and is
+  reversible when measured workloads justify another bound.
+- **Validation evidence:** 67 new/V2 focused tests, 95 combined V1/V2 connector
+  regression tests, and 278 complete backend tests passed; six PostgreSQL tests
+  were environment-guarded. Compilation, comment-pass reruns, and final diff
+  checks are recorded when the milestone closes.
+- **Unresolved question:** Should V2.6 derive file facts from every returned file,
+  or accept an explicit deterministic relevance filter before fact construction?

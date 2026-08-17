@@ -8,9 +8,15 @@ from app.config import (
 )
 from app.connectors.errors import GitHubConfigurationError, JiraConfigurationError
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
+from app.connectors.github_code_fakes import FakeGitHubCodeEvidenceSource
+from app.connectors.github_code_http import HttpGitHubCodeEvidenceSource
 from app.connectors.github_http import HttpGitHubConnector
 from app.connectors.jira_http import HttpJiraConnector
-from app.connectors.protocols import GitHubConnector, JiraConnector
+from app.connectors.protocols import (
+    GitHubCodeEvidenceSource,
+    GitHubConnector,
+    JiraConnector,
+)
 from app.observability import RuntimeTelemetry
 
 
@@ -43,6 +49,20 @@ def create_github_connector(
             "GitHub mode requires an application-scoped HTTP client."
         )
     return HttpGitHubConnector(http_client, telemetry)
+
+
+def create_github_code_evidence_source(
+    settings: GitHubSettings,
+    telemetry: RuntimeTelemetry,
+    http_client: httpx.AsyncClient | None = None,
+) -> GitHubCodeEvidenceSource:
+    if settings.mode is GitHubConnectorMode.FAKE:
+        return FakeGitHubCodeEvidenceSource()
+    if http_client is None:
+        raise GitHubConfigurationError(
+            "GitHub mode requires an application-scoped HTTP client."
+        )
+    return HttpGitHubCodeEvidenceSource(http_client, telemetry)
 
 
 def create_jira_http_client(settings: JiraSettings) -> httpx.AsyncClient:

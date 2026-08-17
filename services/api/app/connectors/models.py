@@ -5,6 +5,17 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 
 
 NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+GitHubRepositoryIdentifier = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+]
+CommitSha = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        pattern=r"^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$",
+    ),
+]
 
 
 JiraIssueKey = Annotated[
@@ -58,6 +69,18 @@ class ConnectorSource(StrEnum):
 class ConnectorRequest(ContractModel):
     repository_owner: NonEmptyString
     repository_name: NonEmptyString
+    pr_number: Annotated[int, Field(strict=True, gt=0)]
+
+
+class GitHubCommitEvidenceRequest(ContractModel):
+    repository_owner: GitHubRepositoryIdentifier
+    repository_name: GitHubRepositoryIdentifier
+    commit_sha: CommitSha
+
+
+class GitHubPullRequestEvidenceRequest(ContractModel):
+    repository_owner: GitHubRepositoryIdentifier
+    repository_name: GitHubRepositoryIdentifier
     pr_number: Annotated[int, Field(strict=True, gt=0)]
 
 

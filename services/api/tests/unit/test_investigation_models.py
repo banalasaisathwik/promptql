@@ -54,6 +54,10 @@ def changed_file_evidence(
             pull_request_number=42,
             path="services/checkout.py",
             change_type=FileChangeType.MODIFIED,
+            additions=4,
+            deletions=2,
+            changes=6,
+            patch_available=True,
         ),
     )
 
