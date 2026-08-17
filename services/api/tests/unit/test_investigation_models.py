@@ -5,7 +5,13 @@ from pydantic import ValidationError
 
 from app.investigations import (
     ChangedFileFact,
+    ChangedFileEvidenceContent,
+    DeploymentEvidenceContent,
     DeploymentFact,
+    Evidence,
+    EvidenceKind,
+    EvidenceProvenance,
+    EvidenceSource,
     FileChangeType,
     Hypothesis,
     HypothesisConfidence,
@@ -16,6 +22,7 @@ from app.investigations import (
     MissingInformationKind,
     RecommendedAction,
     RecommendedActionCode,
+    StackFrameEvidenceContent,
     StackFrameFact,
 )
 
@@ -26,6 +33,65 @@ def changed_file_fact(fact_id: str = "fact:file-change") -> ChangedFileFact:
         evidence_reference_ids=("evidence:github-diff",),
         path="services/checkout.py",
         change_type=FileChangeType.MODIFIED,
+    )
+
+
+def changed_file_evidence(
+    evidence_id: str = "evidence:github-diff",
+) -> Evidence:
+    return Evidence(
+        evidence_id=evidence_id,
+        source=EvidenceSource.GITHUB,
+        kind=EvidenceKind.CHANGED_FILE,
+        provenance=EvidenceProvenance(
+            source_reference="github:acme/checkout:pr:42:file:services/checkout.py",
+            observed_at=None,
+            retrieved_at=datetime(2026, 8, 16, 10, 31, tzinfo=UTC),
+        ),
+        content=ChangedFileEvidenceContent(
+            repository_owner="acme",
+            repository_name="checkout",
+            pull_request_number=42,
+            path="services/checkout.py",
+            change_type=FileChangeType.MODIFIED,
+        ),
+    )
+
+
+def deployment_evidence() -> Evidence:
+    return Evidence(
+        evidence_id="evidence:deployment",
+        source="deployment",
+        kind="deployment",
+        provenance=EvidenceProvenance(
+            source_reference="deployment:deploy-1042",
+            observed_at=datetime(2026, 8, 16, 10, 20, tzinfo=UTC),
+            retrieved_at=datetime(2026, 8, 16, 10, 31, tzinfo=UTC),
+        ),
+        content=DeploymentEvidenceContent(
+            deployment_reference="deploy-1042",
+            environment="production",
+            revision="4f3a91c",
+        ),
+    )
+
+
+def stack_frame_evidence() -> Evidence:
+    return Evidence(
+        evidence_id="evidence:incident-stack",
+        source="incident",
+        kind="stack_frame",
+        provenance=EvidenceProvenance(
+            source_reference="incident:checkout-500:stack:0",
+            observed_at=datetime(2026, 8, 16, 10, 30, tzinfo=UTC),
+            retrieved_at=datetime(2026, 8, 16, 10, 31, tzinfo=UTC),
+        ),
+        content=StackFrameEvidenceContent(
+            service="checkout-api",
+            file_path="services/checkout.py",
+            function_name="create_order",
+            line_number=87,
+        ),
     )
 
 
@@ -130,6 +196,11 @@ class InvestigationModelTests(unittest.TestCase):
 
         parsed = InvestigationResult.model_validate(
             {
+                "evidence": [
+                    changed_file_evidence().model_dump(mode="json"),
+                    deployment_evidence().model_dump(mode="json"),
+                    stack_frame_evidence().model_dump(mode="json"),
+                ],
                 "facts": [fact.model_dump(mode="json") for fact in facts],
                 "hypotheses": [],
                 "missing_information": [],
@@ -179,6 +250,7 @@ class InvestigationModelTests(unittest.TestCase):
 
     def test_hypothesis_with_valid_fact_reference_is_accepted(self) -> None:
         result = InvestigationResult(
+            evidence=(changed_file_evidence(),),
             facts=(changed_file_fact(),),
             hypotheses=(supported_hypothesis(),),
             missing_information=(),
@@ -190,6 +262,7 @@ class InvestigationModelTests(unittest.TestCase):
     def test_missing_hypothesis_fact_reference_is_rejected(self) -> None:
         with self.assertRaises(ValidationError):
             InvestigationResult(
+                evidence=(changed_file_evidence(),),
                 facts=(),
                 hypotheses=(supported_hypothesis(),),
                 missing_information=(),
@@ -225,6 +298,7 @@ class InvestigationModelTests(unittest.TestCase):
 
     def test_valid_result_checks_action_and_missing_information_references(self) -> None:
         result = InvestigationResult(
+            evidence=(changed_file_evidence(),),
             facts=(changed_file_fact(),),
             hypotheses=(supported_hypothesis(),),
             missing_information=(missing_timeline(),),
@@ -245,6 +319,7 @@ class InvestigationModelTests(unittest.TestCase):
     def test_duplicate_entity_identifiers_are_rejected_across_the_result(self) -> None:
         with self.assertRaises(ValidationError):
             InvestigationResult(
+                evidence=(changed_file_evidence(),),
                 facts=(changed_file_fact("shared:id"),),
                 hypotheses=(supported_hypothesis("shared:id", "shared:id"),),
                 missing_information=(),
@@ -254,6 +329,7 @@ class InvestigationModelTests(unittest.TestCase):
     def test_broken_missing_information_and_action_references_are_rejected(self) -> None:
         with self.assertRaises(ValidationError):
             InvestigationResult(
+                evidence=(),
                 facts=(),
                 hypotheses=(),
                 missing_information=(
@@ -268,6 +344,7 @@ class InvestigationModelTests(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             InvestigationResult(
+                evidence=(),
                 facts=(),
                 hypotheses=(),
                 missing_information=(),
@@ -283,6 +360,7 @@ class InvestigationModelTests(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             InvestigationResult(
+                evidence=(),
                 facts=(),
                 hypotheses=(),
                 missing_information=(),
@@ -298,6 +376,7 @@ class InvestigationModelTests(unittest.TestCase):
 
     def test_insufficient_evidence_needs_no_invented_hypothesis(self) -> None:
         result = InvestigationResult(
+            evidence=(),
             facts=(),
             hypotheses=(),
             missing_information=(missing_timeline(),),

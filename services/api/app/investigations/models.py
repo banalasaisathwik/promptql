@@ -2,9 +2,14 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
-from app.connectors.models import ContractModel, NonEmptyString
+from app.connectors.models import (
+    ContractModel,
+    JiraIssueKey,
+    JiraIssueStatus,
+    NonEmptyString,
+)
 
 
 InvestigationIdentifier = Annotated[
@@ -43,6 +48,105 @@ class FileChangeType(StrEnum):
     ADDED = "added"
     MODIFIED = "modified"
     DELETED = "deleted"
+
+
+EvidenceSourceReference = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=512),
+]
+
+
+class EvidenceSource(StrEnum):
+    GITHUB = "github"
+    JIRA = "jira"
+    INCIDENT = "incident"
+    DEPLOYMENT = "deployment"
+
+
+class EvidenceKind(StrEnum):
+    CHANGED_FILE = "changed_file"
+    COMMIT = "commit"
+    JIRA_ISSUE = "jira_issue"
+    STACK_FRAME = "stack_frame"
+    DEPLOYMENT = "deployment"
+
+
+class EvidenceProvenance(ContractModel):
+    source_reference: EvidenceSourceReference
+    observed_at: AwareDatetime | None = None
+    retrieved_at: AwareDatetime
+
+
+class ChangedFileEvidenceContent(ContractModel):
+    content_type: Literal["changed_file"] = "changed_file"
+    repository_owner: NonEmptyString
+    repository_name: NonEmptyString
+    pull_request_number: Annotated[int, Field(strict=True, gt=0)]
+    path: NonEmptyString
+    change_type: FileChangeType
+
+
+class CommitEvidenceContent(ContractModel):
+    content_type: Literal["commit"] = "commit"
+    repository_owner: NonEmptyString
+    repository_name: NonEmptyString
+    commit_sha: NonEmptyString
+
+
+class JiraIssueEvidenceContent(ContractModel):
+    content_type: Literal["jira_issue"] = "jira_issue"
+    issue_key: JiraIssueKey
+    status: JiraIssueStatus
+
+
+class StackFrameEvidenceContent(ContractModel):
+    content_type: Literal["stack_frame"] = "stack_frame"
+    service: NonEmptyString
+    file_path: NonEmptyString
+    function_name: NonEmptyString
+    line_number: Annotated[int, Field(strict=True, gt=0)]
+
+
+class DeploymentEvidenceContent(ContractModel):
+    content_type: Literal["deployment"] = "deployment"
+    deployment_reference: NonEmptyString
+    environment: NonEmptyString
+    revision: NonEmptyString
+
+
+EvidenceContent = Annotated[
+    ChangedFileEvidenceContent
+    | CommitEvidenceContent
+    | JiraIssueEvidenceContent
+    | StackFrameEvidenceContent
+    | DeploymentEvidenceContent,
+    Field(discriminator="content_type"),
+]
+
+
+_EXPECTED_SOURCE_BY_KIND = {
+    EvidenceKind.CHANGED_FILE: EvidenceSource.GITHUB,
+    EvidenceKind.COMMIT: EvidenceSource.GITHUB,
+    EvidenceKind.JIRA_ISSUE: EvidenceSource.JIRA,
+    EvidenceKind.STACK_FRAME: EvidenceSource.INCIDENT,
+    EvidenceKind.DEPLOYMENT: EvidenceSource.DEPLOYMENT,
+}
+
+
+class Evidence(ContractModel):
+    evidence_id: InvestigationIdentifier
+    source: EvidenceSource
+    kind: EvidenceKind
+    provenance: EvidenceProvenance
+    content: EvidenceContent
+
+    @model_validator(mode="after")
+    def validate_source_and_content(self) -> Self:
+        if self.kind.value != self.content.content_type:
+            raise ValueError("evidence kind must match its content type")
+        if _EXPECTED_SOURCE_BY_KIND[self.kind] is not self.source:
+            raise ValueError("evidence source is incompatible with its kind")
+        return self
 
 
 class _EvidenceBackedFact(ContractModel):
@@ -190,6 +294,7 @@ class RecommendedAction(ContractModel):
 
 
 class InvestigationResult(ContractModel):
+    evidence: tuple[Evidence, ...]
     facts: tuple[InvestigationFact, ...]
     hypotheses: tuple[Hypothesis, ...]
     missing_information: tuple[MissingInformation, ...]
@@ -197,6 +302,7 @@ class InvestigationResult(ContractModel):
 
     @model_validator(mode="after")
     def validate_identity_and_references(self) -> Self:
+        evidence_ids = {evidence.evidence_id for evidence in self.evidence}
         fact_ids = {fact.fact_id for fact in self.facts}
         hypothesis_ids = {
             hypothesis.hypothesis_id for hypothesis in self.hypotheses
@@ -207,6 +313,7 @@ class InvestigationResult(ContractModel):
         action_ids = {action.action_id for action in self.recommended_actions}
 
         entity_ids = [
+            *(evidence.evidence_id for evidence in self.evidence),
             *(fact.fact_id for fact in self.facts),
             *(hypothesis.hypothesis_id for hypothesis in self.hypotheses),
             *(item.missing_information_id for item in self.missing_information),
@@ -215,9 +322,15 @@ class InvestigationResult(ContractModel):
         if len(entity_ids) != len(set(entity_ids)):
             raise ValueError("entity identifiers must be unique within a result")
 
+        for fact in self.facts:
+            if not set(fact.evidence_reference_ids) <= evidence_ids:
+                raise ValueError("fact references unknown evidence")
+
         for hypothesis in self.hypotheses:
             if not set(hypothesis.related_fact_ids) <= fact_ids:
                 raise ValueError("hypothesis references an unknown fact")
+            if not set(hypothesis.evidence_reference_ids) <= evidence_ids:
+                raise ValueError("hypothesis references unknown evidence")
 
         for item in self.missing_information:
             if not set(item.related_fact_ids) <= fact_ids:

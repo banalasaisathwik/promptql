@@ -30,6 +30,14 @@ unique entity IDs, resolvable internal references, and an insufficient-evidence
 result that does not invent a fact or hypothesis. It uses no API, database,
 connector, provider, or LLM dependency.
 
+`test_evidence_models.py` proves the V2.2 evidence envelope and provenance
+boundary: bounded identities and sources, discriminated typed content,
+source/kind compatibility, timezone-aware source/retrieval times, clock-skew
+tolerance, immutability, raw-payload rejection, duplicate identity rejection,
+and resolvable fact/hypothesis evidence references. Missing source information
+remains a typed `MissingInformation` value rather than fake evidence. The tests
+make no connector, network, database, provider, or LLM call.
+
 `test_merge_readiness_api.py` proves the additive live-start route commits and
 returns a pending ID before continuation, exposes running and terminal
 snapshots through `GET /v1/runs/{run_id}`, preserves the synchronous route, and

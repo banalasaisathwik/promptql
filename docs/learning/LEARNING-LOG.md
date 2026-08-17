@@ -1612,3 +1612,36 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   compatibility.
 - **Unresolved question:** Which provenance fields must V2.2 evidence expose so
   a fact builder can prove both evidence existence and deterministic derivation?
+
+### 2026-08-17 - Preserve source observations before deriving facts
+
+- **V2 milestone:** V2.2 First-Class Evidence and Provenance Domain Model.
+- **Concept:** Evidence is an immutable normalized source observation; a fact is
+  a deterministic conclusion derived from evidence. Provenance records where an
+  observation came from and distinguishes source-event time from retrieval time.
+- **Important syntax:** Pydantic `AwareDatetime` rejects naive timestamps.
+  `Annotated[Union, Field(discriminator="content_type")]` validates exactly one
+  typed content variant, while an `after` model validator checks envelope kind,
+  logical source, and aggregate cross-references.
+- **Implementation locations:** `investigations/models.py` contains the envelope,
+  provenance, five content variants, and `InvestigationResult` reference checks;
+  `test_evidence_models.py` covers valid and invalid evidence states. ADR-020
+  records the envelope decision and why V1 `EvidenceReference` remains unchanged.
+- **Design decision:** Share provenance in one envelope and keep content as a
+  small discriminated union. This avoids repeated audit fields without accepting
+  an arbitrary `dict[str, Any]` or provider response schema.
+- **Invariant or failure behavior:** Evidence is frozen; IDs are unique;
+  source/kind/content agree; timestamps are timezone-aware; facts and direct
+  hypothesis evidence links resolve within one result; unavailable data creates
+  `MissingInformation`, not evidence with `None` content.
+- **Trade-off:** Adding a content kind requires an explicit model, enum, source
+  rule, and test. This is more work than accepting a dictionary, but it gives
+  deterministic validation, safer serialization, comparable eval inputs, and
+  clearer migrations. Retrieval may appear before observed time by a small
+  amount because strict ordering would mishandle distributed clock skew.
+- **Validation evidence:** Focused V2.1/V2.2 tests, application/test compilation,
+  complete backend unittest discovery, forbidden-pattern review, and
+  `git diff --check` prove the boundary without provider or persistence calls.
+- **Unresolved question:** In V2.3, should changed-file evidence identify only a
+  pull request, or also require a specific head commit to make repeated PR reads
+  distinguishable without introducing evidence versioning prematurely?
