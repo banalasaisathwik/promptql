@@ -1788,3 +1788,40 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Validation evidence:** 33 focused baseline, model, and tool tests passed;
   `python -m compileall -q app tests` passed. Full regression and final comment
   pass remain required.
+
+### 2026-08-18 - Propose typed investigation work without granting execution authority
+
+- **V2 milestone:** V2.7 Typed LLM Planner.
+- **Concept:** Planning is a probabilistic proposal of evidence-gathering work;
+  execution is a later deterministic decision. `PlannerInput` passes compact
+  Facts, missing information, evidence summaries, and a caller-selected tool
+  subset to `TypedLLMPlanner`, which returns a bounded `InvestigationPlan` but
+  never invokes a V2.5 tool or changes V2.6 facts.
+- **Important syntax:** A discriminated Pydantic union represents either
+  `Literal` or `StepOutputRef` argument values; `tuple` fields plus frozen
+  `ContractModel` contracts preserve stable proposal shape. `Protocol` lets the
+  planner depend on `TypedLLMClient` instead of any provider SDK.
+- **Implementation locations:** `investigations/planning/models.py` owns plan
+  contracts; `prompt.py` performs deterministic context compression and tool
+  ordering; `service.py` calls the provider-neutral boundary; and
+  `explanations/models.py` plus existing provider adapters add `TypedLLMRequest`.
+- **Design decision:** Keep control dependencies (`depends_on`) distinct from
+  data dependencies (`StepOutputRef`). Explicit references make later replay,
+  validation, and execution inspectable instead of requiring a runtime to infer
+  which deployment or commit a vague intent meant.
+- **Invariant or failure behavior:** Plans contain one to five steps, stable
+  V2.5 tool IDs, no root-cause/fact/hypothesis fields, and no raw diff content.
+  Provider failures, malformed outer responses, and invalid plan schema produce
+  distinct planner failures. Full DAG/reference/tool-permission validation stays
+  out of V2.7 and belongs to V2.8.
+- **Trade-off:** A small explicit plan model is less expressive than a workflow
+  DSL, but it avoids embedding scripts or hidden executor decisions in LLM
+  output. Multi-step proposals give V2.8 meaningful graph work while a five-step
+  bound limits speculative plans; dynamic replanning remains deferred.
+- **Validation evidence:** Focused planner contracts, prompt construction, fake
+  provider, and failure-boundary tests are in
+  `tests/unit/test_typed_investigation_planner.py`; final full-suite and
+  teaching-comment validation are recorded with milestone completion.
+- **Unresolved question:** V2.8 must decide whether a data reference should
+  always imply an explicit matching control dependency or whether it may add one
+  deterministically during validation.

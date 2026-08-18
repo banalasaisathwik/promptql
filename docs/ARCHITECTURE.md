@@ -1143,14 +1143,34 @@ does not demonstrate that agentic planning improved the system.
 
 # V2.7 — Typed planner
 
-The future planner should receive bounded state such as:
+> **Implemented typed proposal boundary; validation and execution remain deferred**
+
+`TypedLLMPlanner` receives a compact `PlannerInput`: deterministic Facts,
+MissingInformation, provenance-preserving evidence summaries, and an explicit
+allowed subset of the seven V2.5 read-only tools. It sends that state through
+the existing provider-neutral typed LLM adapter boundary and parses only an
+immutable, bounded `InvestigationPlan`.
+
+The planner cannot call an adapter, mutate the V2.6 baseline, create a Fact, or
+return a root-cause/hypothesis field. Tool gating remains outside the planner:
+the caller injects allowed definitions before prompt construction. Each plan has
+one to five `PlanStep`s with stable V2.5 IDs, explicit literals or narrow
+`StepOutputRef`s, optional control dependencies, and concise rationale.
+`depends_on` represents ordering; a reference represents data consumption.
+V2.7 stores both but deliberately does not validate their graph or consistency.
+
+Provider failure, malformed structured response, and plan-schema failure stay
+distinct. The prompt is versioned as `investigation-planner` / `v2.7.1` and
+excludes raw diff lines, provider payloads, credentials, and telemetry query
+syntax. The V2.6 deterministic runbook remains independently callable.
+
+The implemented planner receives bounded state such as:
 
 ```text
 investigation goal
 available tools
 current evidence
 missing information
-execution budget
 ```
 
 and produce a typed candidate plan.
@@ -1158,15 +1178,15 @@ and produce a typed candidate plan.
 Conceptually:
 
 ```text
-LLM
+Facts + MissingInformation + allowed tools
  ↓
-CandidatePlan
+Typed LLM planner
  ↓
 Pydantic schema validation
  ↓
-PlanValidator
+future V2.8 PlanValidator
  ↓
-runtime executor
+future V2.9 runtime executor
 ```
 
 The planner decides:
@@ -1176,6 +1196,11 @@ The planner decides:
 The runtime decides:
 
 > Is this valid and allowed?
+
+V2.8 remains responsible for cycle detection, topological ordering, reference
+target/type checks, dependency/reference consistency, permission semantics,
+budget checks, and redundant-call detection. V2.9 remains responsible for
+execution. Dynamic replanning and hypothesis generation are not implemented.
 
 ---
 

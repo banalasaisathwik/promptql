@@ -29,6 +29,7 @@ from app.explanations.models import (
     LLMStructuredResponse,
     LLMTokenUsage,
     MergeReadinessExplanationInput,
+    TypedLLMRequest,
 )
 
 
@@ -158,3 +159,35 @@ class GroqLLMClient:
                     )
 
         raise LLMProviderError(category) from None
+
+    async def generate_typed(
+        self,
+        request: TypedLLMRequest,
+    ) -> LLMStructuredResponse:
+        # Keep Groq's chat-completions syntax inside its adapter while sharing the
+        # same validated request contract used by other providers.
+        try:
+            response = await self._client.beta.chat.completions.parse(
+                model=self._model,
+                messages=(
+                    {"role": "system", "content": request.system_instructions},
+                    {"role": "user", "content": request.input.model_dump_json()},
+                ),
+                response_format=request.output_model,
+                max_tokens=self._max_output_tokens,
+                timeout=self._request_timeout_seconds,
+            )
+        except OpenAIError:
+            raise LLMProviderError(LLMProviderFailureCategory.UPSTREAM_UNAVAILABLE) from None
+        message = self._first_message(response)
+        parsed_output = getattr(message, "parsed", None)
+        if getattr(message, "refusal", None):
+            raise LLMProviderError(LLMProviderFailureCategory.REFUSAL)
+        if parsed_output is None:
+            raise LLMProviderError(LLMProviderFailureCategory.INVALID_STRUCTURED_RESPONSE)
+        return LLMStructuredResponse(
+            output=parsed_output.model_dump(mode="json")
+            if hasattr(parsed_output, "model_dump")
+            else parsed_output,
+            token_usage=self._token_usage(response),
+        )
