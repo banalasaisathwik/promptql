@@ -1719,3 +1719,47 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** When a live provider is justified, should a deployment
   adapter share the same credentials and source lifecycle as incident telemetry,
   or become a separately configured provider behind the same port?
+
+### 2026-08-17 - Add typed investigation tools without making the registry an executor
+
+- **V2 milestone:** V2.5 Tool Abstraction and Registry.
+- **Concept:** A connector or source is an application/provider capability;
+  a tool is a smaller stable operation boundary designed for safe selection by
+  deterministic code now and a planner later. `ToolRegistry` catalogs what
+  exists. It does not decide what to request, authorize execution, or implement
+  MCP.
+- **Important syntax:** Pydantic `arbitrary_types_allowed` lets an immutable
+  `ToolDefinition` carry input/output model classes while exposing the input
+  model's JSON schema. `model_validator(mode="after")` keeps `ToolResult`
+  outcome, evidence, and failure combinations consistent. A structural async
+  `Protocol` keeps adapters independent from the future executor.
+- **Implementation locations:** `app/tools/models.py` defines stable IDs,
+  typed inputs, definitions, failures, and evidence results; `registry.py`
+  provides deterministic register/get/list behavior; `adapters.py` connects
+  seven tools to existing V2.3/V2.4/Jira capabilities; and
+  `tests/unit/test_tool_registry.py` covers the boundary.
+- **Design decision:** Keep registry metadata separate from handlers. This lets
+  V2.6 deterministic selection and a future LLM planner share exactly the same
+  tool surface while leaving timeouts, permissions, budgets, retries,
+  idempotency, cancellation, and telemetry to a later runtime.
+- **Invariant or failure behavior:** Tool IDs are stable and unique; listings
+  are sorted; input validation is strict and happens before source execution;
+  results contain normalized `Evidence`; invalid arguments, unknown tools,
+  capability unavailability, source failure, and empty observation are not
+  collapsed into one outcome. Provider payloads and generated prose cannot
+  become tool output.
+- **Trade-off:** Seven semantic tools are more deliberate than exposing every
+  provider method or accepting `get_anything(query)`, but they require adapters
+  and explicit schemas. Failure-location remains internal because it is not yet
+  an independent selection action. The registry has no invocation helper, so a
+  later runtime must compose definition lookup and adapter execution explicitly;
+  that is intentional control rather than missing functionality.
+- **Validation evidence:** `tests.unit.test_tool_registry` passed 14 tests;
+  complete backend unittest discovery passed 297 tests with 6 PostgreSQL tests
+  skipped because `TEST_DATABASE_URL` is absent; `.venv\\Scripts\\python.exe
+  -m compileall -q app tests` and `git diff --check` passed after the final
+  teaching-comment pass. Ruff was not run because no Ruff executable is
+  installed in `services/api/.venv`.
+- **Unresolved question:** When V2.6 chooses among tools, should it use one
+  global registry with deterministic allowed-subset construction or separate
+  per-workflow registries? Dynamic evidence-driven gating remains deferred.

@@ -63,6 +63,11 @@ services/api/app/
 │   ├── jira_fixtures.py      # What Jira facts belong to each scenario?
 │   ├── fakes.py              # How are fixtures looked up?
 │   └── errors.py             # How does lookup failure leave this boundary?
+├── tools/
+│   ├── models.py              # What stable typed tool contracts exist?
+│   ├── registry.py             # Which tool definitions are discoverable?
+│   ├── adapters.py             # How do tools call existing capabilities?
+│   └── errors.py               # How are lookup and argument failures typed?
 ├── inspection/
 │   ├── models.py             # What combined application results exist?
 │   └── service.py            # How are GitHub and Jira calls coordinated?
@@ -929,14 +934,14 @@ Implemented versus deferred:
 GitHub provider capability       implemented V2.3
 normalized V2 evidence           implemented V2.2/V2.3
 deterministic fact derivation    future V2.6
-planner-visible tools            future V2.5
+typed tool boundary              implemented V2.5
 commit-to-PR derived fact        deferred until a workflow requires it
 ```
 
-Provider capability is not a planner-visible tool. V2.5 may expose a smaller or
-composed tool only after deterministic authorization and argument validation are
-defined. AST parsing, symbol graphs, repository indexing, embeddings, and LLM
-diff selection remain deferred.
+Provider capability is not automatically a planner-visible tool. V2.5 now
+exposes a smaller composed tool surface after deterministic schema validation;
+AST parsing, symbol graphs, repository indexing, embeddings, and LLM diff
+selection remain deferred.
 
 ---
 
@@ -985,60 +990,99 @@ create a read/query API for investigation evidence, so no live Grafana adapter,
 credentials, query language, or configuration was added in V2.4. A future live
 adapter must validate provider responses and translate them behind this port.
 
-Provider capability remains distinct from V2.5 planner-visible tools. V2.4 does
-not derive deployment timing facts, connect stack frames to diff hunks, plan,
+Provider capability remains distinct from the V2.5 tool boundary. V2.4 does not
+derive deployment timing facts, connect stack frames to diff hunks, plan,
 persist, expose an API, or generate hypotheses.
 
 ---
 
 # V2.5 — Tool abstraction and registry
 
-The future planner must not invoke arbitrary Python functions.
+> **Implemented and validated internal capability boundary**
 
-Investigation capabilities should be exposed through controlled tools.
-
-Conceptually:
+V2.5 adds seven stable, read-only investigation tools over the existing
+provider-neutral capabilities:
 
 ```text
+get_commit          -> GitHubCodeEvidenceSource.get_commit_evidence
+get_pull_request    -> GitHubCodeEvidenceSource.get_pull_request_evidence
+get_diff            -> GitHubCodeEvidenceSource.get_changed_file_evidence
+get_incident        -> IncidentSource.get_incident_evidence
+get_deployments     -> IncidentSource.get_deployment_evidence
+query_telemetry     -> IncidentSource.get_telemetry_window_evidence
+get_jira_issue      -> JiraConnector.get_issue plus Jira Evidence normalization
+```
+
+The boundary is implemented in `services/api/app/tools/`:
+
+```text
+ToolDefinition
+    ├── stable InvestigationToolId
+    ├── concise description
+    ├── typed strict input model/schema
+    ├── typed ToolResult output model
+    └── read_only classification
+
 ToolRegistry
-├── get_incident
-├── get_pull_request
-├── get_commit
-├── get_diff
-├── get_jira_issue
-└── ...
+    ├── register, rejecting duplicate IDs
+    ├── get, raising an explicit unknown-tool error
+    └── list, returning definitions in sorted stable order
 ```
 
-Each tool should eventually have bounded metadata such as:
+`ToolRegistry` stores metadata and discovers capabilities; it does not invoke
+handlers. `adapters.py` keeps execution beside the existing source/connector
+protocols so a future runtime can apply timeouts, permissions, budgets,
+retries, telemetry, idempotency, checkpointing, and cancellation around the
+same adapters. This avoids turning the registry into the V2.9 executor loop.
+
+The request flow is:
 
 ```text
-name
-input schema
-output schema
-permissions
-timeout
-cost/budget category
+typed mapping
+      ↓
+ToolDefinition.validate_arguments
+      ↓ invalid -> InvalidToolArgumentsError before source call
+tool adapter
+      ↓
+existing source/connector capability
+      ↓
+normalized Evidence
+      ↓ provider failure -> sanitized ToolResult.failure
+ToolResult(observed | empty | failed)
 ```
 
-Planner output remains untrusted.
+Tool results contain typed `Evidence`, never generated prose. `ToolResult`
+distinguishes an observed evidence set from an empty observation and from a
+failed source. Capability unavailability and source failure have separate
+machine-readable failure codes. Raw provider payloads, SDK objects, exception
+strings, credentials, and provider query languages do not cross this boundary.
 
-Target execution boundary:
+The seven tools are a capability-oriented surface, not a mechanical mirror of
+provider APIs. `IncidentSource.get_failure_location_evidence` remains an
+internal capability because it is subordinate diagnostic detail that the
+initial baseline can request as part of incident analysis; exposing every
+source method would enlarge selection and authorization surface without a
+current independent tool decision. A later requirement can expose it without
+changing the source protocol.
+
+This registry is PromptQL-internal metadata, not MCP. MCP is a future external
+interoperability adapter and is not a dependency, transport, server, or client
+in V2.5. No LLM provider or native function-calling schema is canonical here.
+V2.6 deterministic selection and a future planner are intended to consume the
+same definitions and adapters:
 
 ```text
-planner proposes tool call
-       ↓
-tool exists?
-       ↓
-arguments valid?
-       ↓
-capability allowed?
-       ↓
-budget available?
-       ↓
-runtime executes
+GitHubCodeEvidenceSource ─┐
+IncidentSource ───────────┼─> tool adapters -> ToolDefinitions -> ToolRegistry
+JiraConnector ────────────┘                                  /             \
+                                              V2.6 deterministic chooser   future planner
+                                                           \             /
+                                                         future executor
 ```
 
-An internal tool registry does not require MCP.
+V2.5 does not implement planning, execution policy, dynamic gating, budgets,
+retries, replanning, MCP, fact derivation, hypothesis generation, or write
+tools.
 
 ---
 
