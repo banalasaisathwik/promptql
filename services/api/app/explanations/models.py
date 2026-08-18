@@ -1,7 +1,8 @@
 from enum import StrEnum
+from dataclasses import dataclass
 from typing import Annotated
 
-from pydantic import Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints
 
 from app.connectors.models import ContractModel
 from app.policy import (
@@ -43,6 +44,18 @@ class LLMTokenUsage(ContractModel):
 class LLMStructuredResponse(ContractModel):
     output: object
     token_usage: LLMTokenUsage | None = None
+
+
+@dataclass(frozen=True)
+class TypedLLMRequest:
+    # PURPOSE: Carry the three provider-independent pieces every structured
+    # generation needs: instructions, validated input, and a Pydantic output shape.
+    # This keeps planning code from importing an SDK or choosing provider syntax.
+    """A provider-neutral structured generation request for a bounded domain task."""
+
+    system_instructions: str
+    input: BaseModel
+    output_model: type[BaseModel]
 
 
 class GeneratedExplanation(ContractModel):

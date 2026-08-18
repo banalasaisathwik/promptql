@@ -17,9 +17,10 @@ from app.explanations.models import (
     LLMProviderName,
     MergeReadinessExplanation,
     MergeReadinessExplanationInput,
+    TypedLLMRequest,
     ValidatedExplanation,
 )
-from app.explanations.protocols import LLMClient
+from app.explanations.protocols import LLMClient, TypedLLMClient
 from app.explanations.openai_client import OpenAILLMClient
 from app.explanations.service import (
     MergeReadinessExplanationService,
@@ -52,6 +53,8 @@ __all__ = [
     "OpenAILLMClient",
     "StrictMergeReadinessExplanationValidator",
     "ValidatedExplanation",
+    "TypedLLMClient",
+    "TypedLLMRequest",
     "build_explanation_input",
     "create_llm_client",
     "render_validated_explanation",

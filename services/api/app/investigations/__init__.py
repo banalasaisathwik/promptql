@@ -45,6 +45,19 @@ from app.investigations.baseline import (
     EvidenceAccumulator,
     ToolInvoker,
 )
+from app.investigations.planning import (
+    InvestigationPlan,
+    InvestigationPlannerError,
+    Literal,
+    PlanArgument,
+    PlanStep,
+    PlannedInvestigation,
+    PlannerFailureCode,
+    PlannerInput,
+    StepOutputRef,
+    TypedLLMPlanner,
+    build_planner_input,
+)
 
 __all__ = [
     "ChangedFileFact",
@@ -90,4 +103,15 @@ __all__ = [
     "EvidenceAccumulator",
     "TelemetryWindowEvidenceContent",
     "ToolInvoker",
+    "InvestigationPlan",
+    "InvestigationPlannerError",
+    "Literal",
+    "PlanArgument",
+    "PlanStep",
+    "PlannedInvestigation",
+    "PlannerFailureCode",
+    "PlannerInput",
+    "StepOutputRef",
+    "TypedLLMPlanner",
+    "build_planner_input",
 ]

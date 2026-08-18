@@ -4,12 +4,16 @@ from app.explanations.models import (
     LLMStructuredResponse,
     LLMTokenUsage,
     MergeReadinessExplanationInput,
+    TypedLLMRequest,
 )
 
 
 class FakeLLMClient:
     provider = LLMProviderName.FAKE
     model = "deterministic-fake-v1"
+
+    def __init__(self, typed_output: object | None = None) -> None:
+        self._typed_output = typed_output
 
     async def generate_structured(
         self,
@@ -51,3 +55,23 @@ class FakeLLMClient:
                 total_tokens=input_token_count + output_token_count,
             ),
         )
+
+    async def generate_typed(
+        self,
+        request: TypedLLMRequest,
+    ) -> LLMStructuredResponse:
+        # A test must opt in to its candidate output. The default failure keeps a
+        # fake from silently inventing a plan that production code never supplied.
+        if self._typed_output is None:
+            from app.explanations.errors import (
+                LLMProviderError,
+                LLMProviderFailureCategory,
+            )
+
+            raise LLMProviderError(
+                LLMProviderFailureCategory.INVALID_STRUCTURED_RESPONSE
+            )
+        output = self._typed_output
+        if hasattr(output, "model_dump"):
+            output = output.model_dump(mode="json")
+        return LLMStructuredResponse(output=output)
