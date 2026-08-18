@@ -1088,8 +1088,27 @@ tools.
 
 # V2.6 — Deterministic investigation baseline
 
-Before introducing probabilistic planning, V2 should establish a fixed
-deterministic investigation workflow.
+> **Implemented internal baseline; no API or UI is exposed yet**
+
+`DeterministicBaseline` is a sequential runbook over the V2.5 tool adapters.
+`ToolInvoker` confirms each adapter definition through the metadata-only
+`ToolRegistry`; it does not make the registry an executor. Successful results
+enter an ordered `EvidenceAccumulator`; failures become bounded
+`MissingInformation` without erasing earlier evidence.
+
+Pure `investigations/fact_derivation/` modules join normalized Evidence into
+provenance-preserving, non-causal relationship facts. Equal timestamps, absent
+patches, deleted hunks, and absent relationships produce no positive fact.
+
+```text
+Evidence -> deterministic Facts -> future probabilistic Hypotheses
+```
+
+Failure-location is a documented subordinate `IncidentSource` lookup because
+V2.5 intentionally exposes no independent failure-location tool. It is always
+requested in the fixed incident sequence, so future planner comparison retains
+the same enrichment. No planner, causal hypothesis, generic inference engine,
+runtime DAG, retry, persistence, API, or UI is implemented.
 
 Conceptually:
 

@@ -1,5 +1,8 @@
 from app.investigations.models import (
     ChangedFileFact,
+    ChangedFileMatchesFailureFileFact,
+    ChangedHunkOverlapsFailureLineFact,
+    CommitAssociatedWithPullRequestFact,
     ChangedFileEvidenceContent,
     CommitEvidenceContent,
     DeploymentEvidenceContent,
@@ -13,6 +16,7 @@ from app.investigations.models import (
     EvidenceProvenance,
     EvidenceSource,
     EvidenceSourceReference,
+    FactSet,
     FileChangeType,
     Hypothesis,
     HypothesisConfidence,
@@ -31,11 +35,22 @@ from app.investigations.models import (
     RecommendedActionCode,
     StackFrameEvidenceContent,
     StackFrameFact,
+    DeploymentPrecededIncidentFact,
+    DeploymentReferencesCommitFact,
     TelemetryWindowEvidenceContent,
+)
+from app.investigations.baseline import (
+    DeterministicBaseline,
+    DuplicateEvidenceIdError,
+    EvidenceAccumulator,
+    ToolInvoker,
 )
 
 __all__ = [
     "ChangedFileFact",
+    "ChangedFileMatchesFailureFileFact",
+    "ChangedHunkOverlapsFailureLineFact",
+    "CommitAssociatedWithPullRequestFact",
     "ChangedFileEvidenceContent",
     "CommitEvidenceContent",
     "DeploymentEvidenceContent",
@@ -49,6 +64,7 @@ __all__ = [
     "EvidenceProvenance",
     "EvidenceSource",
     "EvidenceSourceReference",
+    "FactSet",
     "FileChangeType",
     "Hypothesis",
     "HypothesisConfidence",
@@ -67,5 +83,11 @@ __all__ = [
     "RecommendedActionCode",
     "StackFrameEvidenceContent",
     "StackFrameFact",
+    "DeploymentPrecededIncidentFact",
+    "DeploymentReferencesCommitFact",
+    "DeterministicBaseline",
+    "DuplicateEvidenceIdError",
+    "EvidenceAccumulator",
     "TelemetryWindowEvidenceContent",
+    "ToolInvoker",
 ]

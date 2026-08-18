@@ -1763,3 +1763,28 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** When V2.6 chooses among tools, should it use one
   global registry with deterministic allowed-subset construction or separate
   per-workflow registries? Dynamic evidence-driven gating remains deferred.
+
+### 2026-08-18 - Derive investigation relationships with ordinary deterministic code
+
+- **V2 milestone:** V2.6 Deterministic Baseline and Fact Derivation.
+- **Concept:** Evidence is a normalized observation; a Fact is a machine-readable
+  relationship proven by joining observations. The baseline chooses fixed tool
+  calls; focused derivation modules decide only what follows from collected evidence.
+- **Implementation locations:** `investigations/baseline.py` owns dispatch,
+  accumulation, branches, and partial failures. `fact_derivation/temporal.py`,
+  `deployment.py`, and `code_change.py` own pure predicates. `models.py` adds
+  relationship facts and `test_deterministic_baseline.py` covers the core flow.
+- **Design decision:** The metadata registry stays separate from execution.
+  `ToolInvoker` checks the registered definition before calling the existing
+  V2.5 adapter. Failure location is an always-on subordinate source enrichment,
+  not a dynamically selected hidden capability.
+- **Invariant or failure behavior:** Each positive Fact preserves all evidence
+  IDs used to prove it. Equal timestamps, mismatched paths/SHAs, absent patches,
+  and zero new-line ranges produce no negative Fact. Failed tools become missing
+  information; hypotheses stay empty and no LLM is called.
+- **Trade-off:** Focused modules repeat small typed filters instead of introducing
+  a generic rule engine. That is less abstract but keeps predicates and provenance
+  easy to inspect and test.
+- **Validation evidence:** 33 focused baseline, model, and tool tests passed;
+  `python -m compileall -q app tests` passed. Full regression and final comment
+  pass remain required.
