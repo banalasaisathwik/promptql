@@ -13,6 +13,7 @@ from app.connectors.models import (
     PullRequestState,
     TelemetryFilter,
     TelemetrySignal,
+    TelemetryWindowEvidenceRequest,
 )
 
 
@@ -43,6 +44,11 @@ class InvestigationRequest(ContractModel):
     repository_owner: NonEmptyString
     repository_name: NonEmptyString
     incident_summary: NonEmptyString
+    incident_reference: NonEmptyString | None = None
+    deployment_reference: NonEmptyString | None = None
+    pull_request_number: Annotated[int, Field(strict=True, gt=0)] | None = None
+    jira_issue_key: JiraIssueKey | None = None
+    telemetry_window: TelemetryWindowEvidenceRequest | None = None
     incident_started_at: datetime | None = None
     service: NonEmptyString | None = None
     environment: NonEmptyString | None = None
@@ -333,10 +339,47 @@ class StackFrameFact(_EvidenceBackedFact):
     line_number: Annotated[int, Field(strict=True, gt=0)]
 
 
+class DeploymentPrecededIncidentFact(_EvidenceBackedFact):
+    fact_type: Literal["deployment_preceded_incident"] = "deployment_preceded_incident"
+    deployment_reference: NonEmptyString
+    incident_reference: NonEmptyString
+
+
+class DeploymentReferencesCommitFact(_EvidenceBackedFact):
+    fact_type: Literal["deployment_references_commit"] = "deployment_references_commit"
+    deployment_reference: NonEmptyString
+    commit_sha: CommitSha
+
+
+class CommitAssociatedWithPullRequestFact(_EvidenceBackedFact):
+    fact_type: Literal["commit_associated_with_pull_request"] = "commit_associated_with_pull_request"
+    commit_sha: CommitSha
+    pull_request_number: Annotated[int, Field(strict=True, gt=0)]
+
+
+class ChangedFileMatchesFailureFileFact(_EvidenceBackedFact):
+    fact_type: Literal["changed_file_matches_failure_file"] = "changed_file_matches_failure_file"
+    file_path: NonEmptyString
+
+
+class ChangedHunkOverlapsFailureLineFact(_EvidenceBackedFact):
+    fact_type: Literal["changed_hunk_overlaps_failure_line"] = "changed_hunk_overlaps_failure_line"
+    file_path: NonEmptyString
+    line_number: Annotated[int, Field(strict=True, gt=0)]
+
+
 InvestigationFact = Annotated[
-    ChangedFileFact | DeploymentFact | StackFrameFact,
+    ChangedFileFact
+    | DeploymentFact
+    | StackFrameFact
+    | DeploymentPrecededIncidentFact
+    | DeploymentReferencesCommitFact
+    | CommitAssociatedWithPullRequestFact
+    | ChangedFileMatchesFailureFileFact
+    | ChangedHunkOverlapsFailureLineFact,
     Field(discriminator="fact_type"),
 ]
+FactSet = tuple[InvestigationFact, ...]
 
 
 class HypothesisConfidence(StrEnum):
