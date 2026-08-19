@@ -1851,3 +1851,30 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   avoid arbitrary payload inspection and keep validation predictable.
 - **Unresolved question:** V2.9 must define how observed evidence becomes the
   declared static output fields without leaking provider-specific payloads.
+
+### 2026-08-19 — Interpret a validated investigation DAG within a fixed budget
+
+- **V2 milestones:** V2.9 Agent Execution Loop and V2.10 Minimal Execution Budgets.
+- **Concept and syntax:** `AgentExecutor` in `investigations/execution.py` is an
+  interpreter: `ValidatedPlan` is its checked program, `Literal` and
+  `StepOutputRef` are operands, and `ToolInvoker` is the controlled call boundary.
+  `StrEnum` supplies stable step/block/termination codes; `model_copy(update=...)`
+  advances the `BudgetState` counter.
+- **Implementation and evidence:** Runtime projections read only normalized
+  `Evidence.content` fields declared by V2.8 output contracts, then
+  `ToolDefinition.validate_arguments` creates the destination input before V2.5
+  invocation. `tests/unit/test_agent_execution.py` covers chains, branches,
+  runtime references, typed inputs, full-set derivation, dedupe, partial failure,
+  and budget accounting.
+- **Decision:** Recompute Facts from all accumulated Evidence after a genuine
+  evidence-ID addition. Old deployment evidence plus new incident evidence can
+  form a temporal fact, so newest-only derivation is wrong. Bounded plans make
+  full recomputation simpler than an incremental rule graph.
+- **Invariant and failure behavior:** `failed` means a call was attempted and
+  returned typed failure; `blocked` means it was not invoked due to dependency,
+  output, or budget policy. Independent branches continue. Failed attempts use
+  budget; blocked steps do not; exhaustion preserves collected Evidence/Facts.
+- **Trade-off and unresolved question:** Sequential execution makes ordering and
+  accounting deterministic but leaves branch concurrency for later atomic budget
+  reservation work. Dynamic replanning, retries, and full agent telemetry remain
+  deferred.

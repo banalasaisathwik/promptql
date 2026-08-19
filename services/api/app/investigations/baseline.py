@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from app.connectors.errors import ConnectorUnavailableError, FixtureNotFoundError
 from app.connectors.models import FailureLocationEvidenceRequest
-from app.connectors.protocols import IncidentSource
 from app.investigations import (
     Evidence,
     InvestigationRequest,
@@ -14,6 +16,9 @@ from app.investigations import (
 )
 from app.investigations.fact_derivation import derive_facts
 from app.tools import InvestigationTool, InvestigationToolId, ToolFailureCode, ToolOutcome, ToolRegistry, ToolResult
+
+if TYPE_CHECKING:
+    from app.connectors.protocols import IncidentSource
 
 
 class DuplicateEvidenceIdError(ValueError):
