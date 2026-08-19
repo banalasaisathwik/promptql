@@ -1435,41 +1435,79 @@ and retry, the executor consumes one V2.10 tool-call unit. If none remains for
 a pending retry, it retains the typed failure, marks later pending work as
 `budget_exhausted`, and does not sleep or call the provider.
 
-`ExecutionStepState.attempts` records calls made for the step. No jitter,
+`ExecutionStepState.attempts` records calls made for one logical step. No jitter,
 deadline, retry persistence, retry telemetry, write tools, or idempotency key
-exists yet. Current V2.5 tools are read-only; V2.13 must establish idempotency
-before any side-effecting tool can use this policy.
+exists yet. V2.13 verifies the existing `ToolDefinition.read_only` contract:
+all current V2.5 investigation tools retrieve normalized evidence only. A
+retry is therefore permitted only because the current tool operation is
+read-only as well as because its typed failure is transient.
 
 ---
 
-# Idempotency
+# V2.13: retry-safety and idempotency boundary
 
-Retry-safe execution requires explicit idempotency.
+The executor distinguishes a logical `PlanStep` from each external-call
+attempt. For example, three timeout/success calls for `s3: query_telemetry`
+remain one logical investigation operation. `ToolDefinition.read_only` already
+expresses the only execution-safety metadata required for the current V2 tools:
+all seven registered adapters retrieve normalized evidence and no adapter
+writes, remediates, or changes provider state.
 
-Potential execution identity may include:
+The current retry decision is: typed failure is retryable, the tool definition
+is read-only, attempts remain, and V2.10 budget remains. Repeating a read may
+return a newer observation, but does not duplicate an external effect.
 
-```text
-run_id
-step_id
-attempt
-logical operation ID
-```
+A future side-effecting tool is denied automatic retry by default until it has
+an explicit idempotency or reconciliation contract. If such a logical write
+step becomes retryable, all its attempts must reuse one logical-operation
+identity, potentially derived from `run_id + step_id`; the identity must not
+include the attempt number. Idempotency controls duplicate effects under
+at-least-once delivery; it does not promise a distributed provider call
+physically executes exactly once.
 
-The system should be designed around the reality that distributed work often
-provides:
-
-```text
-at-least-once execution
-```
-
-rather than assuming true exactly-once execution.
-
-Exactly-once *effects* should be achieved through safe state transitions,
-idempotency, and deduplication where required.
+No idempotency key, deduplication store, request-key persistence, provider-side
+deduplication, or write-operation replay exists in V2.
 
 ---
 
-# Crash recovery and durable execution
+# V2.14: crash recovery and checkpoint/resume boundary
+
+V2 investigation execution is process-local and non-resumable. `AgentExecutor`
+returns an in-memory `InvestigationExecutionState`; it does not call a V2 run
+repository or persist its accepted plan, state, outputs, budget, or attempts.
+
+The existing PostgreSQL repository is V1 merge-readiness persistence, not V2
+durable execution. It persists V1 workflow identity and source modes; request,
+GitHub, Jira, result, and sanitized error snapshots; plus ordered V1 step
+names, statuses, timestamps, duration, attempt count, and sanitized errors.
+It can make a V1 `RUNNING` step crash-visible, but it cannot reconstruct or
+resume a V2 agent execution.
+
+A future checkpoint/snapshot-based V2 recovery design would need the
+`ValidatedPlan`, step states, referenceable runtime outputs, accumulated
+Evidence, derived Facts, MissingInformation, tool-call budget usage, attempt
+counts, relevant typed failures, and execution/checkpoint-version metadata.
+
+Checkpointing persists sufficient current state to continue. Event sourcing
+instead persists every transition and rebuilds state by replaying an event
+history. PromptQL's default future direction is checkpoint/snapshot recovery;
+event sourcing is neither implemented nor selected.
+
+The unresolved in-flight window is: budget consumed, tool request sent, process
+crashes, and response never recorded. After restart, a persisted `RUNNING` step
+has an unknown outcome and cannot silently become either `SUCCEEDED` or
+`FAILED`. Re-executing a current read-only operation is comparatively safe, but
+still needs a correct checkpoint and resume policy. Blind replay of a future
+side-effecting operation could duplicate an effect, so it needs idempotency or
+external reconciliation.
+
+The future recovery flow is: process starts, load a non-terminal run, load its
+latest checkpoint, reconstruct execution state, inspect a prior `RUNNING` step
+as unknown, apply recovery policy, then continue the remaining DAG. No
+checkpoint table, serialization, resume endpoint, recovery scan, event log,
+worker ownership, stale-run detection, or budget/retry restoration exists.
+Rerunning an entire `ValidatedPlan` after restart is not crash recovery and is
+deliberately not implemented.
 
 The existing PostgreSQL runtime persists workflow snapshots.
 
@@ -1916,8 +1954,8 @@ V2.9  Agent execution loop
 V2.10 Execution budgets
 V2.11 Failure taxonomy extension
 V2.12 Retry/backoff/jitter
-V2.13 Idempotency
-V2.14 Crash recovery/checkpoint/resume
+V2.13 Retry-safety/idempotency boundary (implemented and verified; no idempotency system)
+V2.14 Durable checkpoint/resume (explicitly postponed; current execution is process-local)
 V2.15 Cancellation
 V2.16 Dynamic replanning
 V2.17 Hypothesis generation
