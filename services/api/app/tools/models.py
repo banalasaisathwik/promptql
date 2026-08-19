@@ -66,6 +66,39 @@ class GetJiraIssueInput(ContractModel):
     issue_key: JiraIssueKey
 
 
+class GetCommitPlanOutput(ContractModel):
+    commit_sha: GitHubCommitEvidenceRequest.model_fields["commit_sha"].rebuild_annotation()
+
+
+class GetDeploymentPlanOutput(ContractModel):
+    deployment_reference: NonEmptyString
+    service: NonEmptyString
+    environment: NonEmptyString
+    commit_sha: GitHubCommitEvidenceRequest.model_fields["commit_sha"].rebuild_annotation()
+
+
+class GetDiffPlanOutput(ContractModel):
+    pr_number: GitHubPullRequestEvidenceRequest.model_fields["pr_number"].rebuild_annotation()
+
+
+class GetIncidentPlanOutput(ContractModel):
+    incident_reference: NonEmptyString
+
+
+class GetJiraIssuePlanOutput(ContractModel):
+    issue_key: JiraIssueKey
+
+
+class GetPullRequestPlanOutput(ContractModel):
+    pr_number: GitHubPullRequestEvidenceRequest.model_fields["pr_number"].rebuild_annotation()
+    base_sha: GitHubCommitEvidenceRequest.model_fields["commit_sha"].rebuild_annotation()
+    head_sha: GitHubCommitEvidenceRequest.model_fields["commit_sha"].rebuild_annotation()
+
+
+class QueryTelemetryPlanOutput(ContractModel):
+    service: NonEmptyString
+
+
 ToolInputModel = (
     type[
         GitHubCommitEvidenceRequest
@@ -89,6 +122,9 @@ class ToolDefinition(ContractModel):
     description: NonEmptyString
     input_model: ToolInputModel
     output_model: type[ToolResult]
+    # PURPOSE: Describe only values a future executor may expose to another plan
+    # step. This static contract does not alter the V2.5 ToolResult runtime shape.
+    plan_output_model: type[ContractModel]
     read_only: bool = True
 
     @property
@@ -108,41 +144,48 @@ TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         description="Retrieve normalized evidence for one Git commit.",
         input_model=GitHubCommitEvidenceRequest,
         output_model=ToolResult,
+        plan_output_model=GetCommitPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_DEPLOYMENTS,
         description="Retrieve normalized evidence for one deployment.",
         input_model=DeploymentEvidenceRequest,
         output_model=ToolResult,
+        plan_output_model=GetDeploymentPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_DIFF,
         description="Retrieve normalized changed-file and diff-hunk evidence for one pull request.",
         input_model=GitHubPullRequestEvidenceRequest,
         output_model=ToolResult,
+        plan_output_model=GetDiffPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_INCIDENT,
         description="Retrieve normalized evidence for one engineering incident.",
         input_model=IncidentEvidenceRequest,
         output_model=ToolResult,
+        plan_output_model=GetIncidentPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_JIRA_ISSUE,
         description="Retrieve normalized evidence for one Jira issue.",
         input_model=GetJiraIssueInput,
         output_model=ToolResult,
+        plan_output_model=GetJiraIssuePlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_PULL_REQUEST,
         description="Retrieve normalized evidence for one GitHub pull request.",
         input_model=GitHubPullRequestEvidenceRequest,
         output_model=ToolResult,
+        plan_output_model=GetPullRequestPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.QUERY_TELEMETRY,
         description="Retrieve bounded telemetry evidence for one service and time interval.",
         input_model=TelemetryWindowEvidenceRequest,
         output_model=ToolResult,
+        plan_output_model=QueryTelemetryPlanOutput,
     ),
 )

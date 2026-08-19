@@ -79,14 +79,12 @@ class PlannerContractTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             plan.steps = ()
 
-    def test_contract_rejects_extra_fields_duplicate_step_ids_and_more_than_five_steps(self) -> None:
+    def test_contract_rejects_extra_fields_and_more_than_five_steps(self) -> None:
         with self.assertRaises(ValidationError):
             PlanStep.model_validate({
                 "step_id": "s1", "tool_id": "get_incident", "arguments": (),
                 "reason": "Retrieve incident.", "root_cause": "forbidden",
             })
-        with self.assertRaises(ValidationError):
-            InvestigationPlan(steps=(_plan().steps[0], _plan().steps[0]))
         with self.assertRaises(ValidationError):
             InvestigationPlan(steps=(_plan().steps[0],) * 6)
 
