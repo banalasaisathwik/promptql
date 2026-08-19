@@ -1952,3 +1952,33 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   it would need plan, step/output/evidence/fact, budget/attempt/failure, and
   version state before correct resume can exist. Event sourcing, checkpoint
   tables, resume workers, and write-tool replay remain deliberately postponed.
+
+### 2026-08-19 - Propose causal hypotheses, then ground them deterministically
+
+- **V2 milestones:** V2.17 structured hypothesis generation and V2.18
+  deterministic evidence-backed hypothesis validation.
+- **Concept and syntax:** `CandidateHypothesis` is a frozen Pydantic contract
+  for an untrusted LLM proposal, while `ValidatedHypothesis` is the separate
+  accepted type. `TypedLLMRequest` carries a versioned instruction string, a
+  minimized `HypothesisGenerationInput`, and an output model through the shared
+  provider-neutral boundary; `model_validate` distinguishes malformed candidate
+  data from a provider request failure.
+- **Implementation and evidence:** `investigations/hypotheses/service.py`
+  generates at most three fact-referencing candidates; `validator.py` accepts a
+  code-change candidate only when its selected Facts establish both a changed
+  file and a matching failure location for the same path. The focused
+  `test_grounded_hypotheses.py` suite covers valid support, unknown and duplicate
+  IDs, entity mismatch, valid-but-irrelevant facts, empty results, raw prose,
+  provider/schema separation, and prompt versioning.
+- **Decision:** ADR-024 retains facts as objective relations and puts causal
+  interpretation in a bounded hypothesis type. The current fact taxonomy can
+  support a generic file-path code-change rule but not dependency/deployment
+  causal rules, so those families are deferred rather than guessed.
+- **Invariant or failure behavior:** A real Fact ID alone is insufficient: it
+  must participate in the required relationship predicate. No accepted
+  hypothesis can contain raw model prose or numeric confidence. Empty candidate
+  or accepted sets express insufficient evidence without inventing a root cause.
+- **Trade-off and unresolved question:** A small taxonomy is predictable and
+  testable but deliberately covers fewer incident stories. V2.19 may render only
+  validated structures with deterministic templates; hard contradiction rules
+  await a future deterministic counter-evidence Fact vocabulary.
