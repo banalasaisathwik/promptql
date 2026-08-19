@@ -1,4 +1,6 @@
-from typing import Protocol
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Protocol
 
 from app.connectors.models import (
     ConnectorRequest,
@@ -12,7 +14,9 @@ from app.connectors.models import (
     JiraIssue,
     TelemetryWindowEvidenceRequest,
 )
-from app.investigations import Evidence
+
+if TYPE_CHECKING:
+    from app.investigations.models import Evidence
 
 
 class GitHubConnector(Protocol):

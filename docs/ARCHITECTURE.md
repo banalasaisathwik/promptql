@@ -1303,6 +1303,20 @@ continue / replan / finish
 
 The runtime, not the model, owns termination.
 
+V2.9 now implements `AgentExecutor` as a deterministic, sequential interpreter
+of one `ValidatedPlan`. It consumes V2.8's topological order, resolves a
+`StepOutputRef` only from normalized Evidence produced by a successful source
+step, constructs the destination tool's typed input, and invokes the existing
+V2.6 `ToolInvoker`. It never calls the planner, selects another tool, mutates
+the accepted plan, or creates Facts outside deterministic derivation.
+
+`failed` means the tool call was attempted and returned a typed failure;
+`blocked` means it was never invoked due to a failed dependency or unavailable
+runtime output. A failed branch blocks its descendants but an independent ready
+branch continues. Each genuinely new Evidence ID causes `derive_facts` to run
+over the complete accumulated Evidence set so cross-observation facts and
+stable fact-ID deduplication remain correct. New facts do not replan.
+
 ---
 
 # Execution budgets
@@ -1322,6 +1336,18 @@ overall deadline
 
 Budget exhaustion must produce an explicit typed outcome rather than an
 unbounded loop.
+
+V2.10 implements one caller-supplied `ExecutionBudget.max_tool_calls` and a
+sequential `BudgetState`. The executor checks and consumes it immediately
+before each invocation. An attempted failed call consumes budget; a blocked
+step does not. Exhaustion blocks every remaining pending step with
+`budget_exhausted`, sets a typed termination reason, and preserves prior
+Evidence, Facts, and failures.
+
+`MAX_PLAN_STEPS` bounds a single generated plan at validation time. The total
+tool-call budget bounds actual execution work, including future execution of
+multiple short plans. Token/cost/deadline/per-tool/distributed budgets, retries,
+recovery, concurrency, and dynamic replanning remain planned.
 
 ---
 

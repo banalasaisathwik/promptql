@@ -45,6 +45,16 @@ from app.investigations.baseline import (
     EvidenceAccumulator,
     ToolInvoker,
 )
+from app.investigations.execution import (
+    AgentExecutor,
+    BudgetState,
+    ExecutionBudget,
+    ExecutionBlockReason,
+    ExecutionStepState,
+    ExecutionStepStatus,
+    ExecutionTerminationReason,
+    InvestigationExecutionState,
+)
 from app.investigations.planning import (
     InvestigationPlan,
     InvestigationPlannerError,
@@ -103,6 +113,14 @@ __all__ = [
     "EvidenceAccumulator",
     "TelemetryWindowEvidenceContent",
     "ToolInvoker",
+    "AgentExecutor",
+    "BudgetState",
+    "ExecutionBudget",
+    "ExecutionBlockReason",
+    "ExecutionStepState",
+    "ExecutionStepStatus",
+    "ExecutionTerminationReason",
+    "InvestigationExecutionState",
     "InvestigationPlan",
     "InvestigationPlannerError",
     "Literal",
