@@ -1902,3 +1902,35 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   but costs up to three calls and three seconds of sequential latency. Jitter,
   retry-after handling, deadlines, durable history, telemetry, and idempotency
   for future write tools remain deferred.
+
+### 2026-08-19 - Separate logical operations from retry attempts and durable recovery
+
+- **V2 milestones:** V2.13 retry-safety/idempotency boundary and V2.14 crash
+  recovery/checkpoint/resume boundary.
+- **Concept and syntax:** `ToolDefinition.read_only` is existing immutable
+  Pydantic metadata, while `ExecutionStepState.attempts` is a counter inside one
+  logical `PlanStep`. The distinction matters because a retry is another call
+  for the same operation, not a new operation. A future idempotency identity
+  should therefore represent the logical step (for example `run_id + step_id`),
+  not its attempt number.
+- **Implementation and evidence:** Inspection of `tools/models.py` and all
+  adapters in `tools/adapters.py` verified seven evidence-retrieval tools and no
+  side effects. `investigations/execution.py` keeps retries in `AgentExecutor`
+  and V2.10 budget consumption immediately before every call. V1 persistence in
+  `database/postgres_run_repository.py` saves merge-readiness run/step snapshots
+  but does not save a V2 `ValidatedPlan` or `InvestigationExecutionState`.
+- **Decision:** Reuse `read_only` rather than add overlapping retry-safety
+  booleans. It is sufficient for the current tool set; a later side-effecting
+  tool must default to no automatic retry until an explicit idempotency or
+  reconciliation design is approved.
+- **Invariant or failure behavior:** A typed transient failure is not alone
+  enough to justify a retry: the operation must also be read-only, attempts and
+  budget must remain, and every call is budgeted. If a process dies after a
+  request is sent but before its result is recorded, the prior `RUNNING` outcome
+  is unknown rather than success or failure.
+- **Trade-off and unresolved question:** Documentation makes the current
+  boundary enforceable to reviewers without building speculative durable
+  infrastructure. Checkpoint/snapshot recovery is the default future direction;
+  it would need plan, step/output/evidence/fact, budget/attempt/failure, and
+  version state before correct resume can exist. Event sourcing, checkpoint
+  tables, resume workers, and write-tool replay remain deliberately postponed.
