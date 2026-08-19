@@ -1573,6 +1573,13 @@ mechanism.
 Cancellation APIs and cancellation propagation are separate implementation
 work.
 
+V2.15 confirms that current process-local execution has no existing
+cooperative cancellation signal. It is therefore postponed rather than adding
+an endpoint, persistence, forced provider abort, rollback, or compensation.
+`cancel requested` would mean no new work should start; `cancelled` would mean
+the runtime actually reached that boundary. Neither means external work was
+rolled back.
+
 ---
 
 # Dynamic replanning
@@ -1603,6 +1610,23 @@ max_replans
 ```
 
 to prevent unbounded loops.
+
+## V2.16 — short-horizon dynamic replanning
+
+`AdaptiveInvestigationRuntime` executes up to three planning rounds. Each
+round is planner -> V2.8 validation -> existing executor, and contains at most
+three steps even though standalone V2.7 plans retain their five-step contract.
+Evidence and Facts accumulate across rounds. At a round boundary the runtime
+compares evidence/fact ID sets; the resulting deltas are a progress signal, not
+an importance score. It never interrupts an active short plan because a Redis,
+Postgres, Kafka, or other observation looks semantically important.
+
+The runtime stops on exhausted global tool-call budget, three rounds, one
+no-progress round, planner failure, or validation failure. The planner receives
+compact evidence, current facts, missing information, action history, remaining
+tool calls, and round position. Facts answer what is known; history answers
+what was tried. The runtime owns legality and bounds; the LLM owns the next
+semantic investigation strategy.
 
 ---
 

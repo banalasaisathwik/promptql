@@ -2,6 +2,7 @@ from collections.abc import Iterable
 
 from app.investigations.models import Evidence, InvestigationRequest, InvestigationResult
 from app.investigations.planning.models import (
+    ActionSummary,
     CompactEvidenceContext,
     PlannerInput,
     PlannerToolDefinition,
@@ -43,6 +44,11 @@ def build_planner_input(
     request: InvestigationRequest,
     result: InvestigationResult,
     allowed_tools: Iterable[ToolDefinition],
+    *,
+    action_history: tuple[ActionSummary, ...] = (),
+    remaining_tool_calls: int = 0,
+    planning_round: int = 1,
+    max_planning_rounds: int = 1,
 ) -> PlannerInput:
     # FLOW: Sort stable domain identifiers -> reduce Evidence to safe summaries ->
     # expose only the caller-approved tool subset. This deterministic boundary
@@ -68,6 +74,10 @@ def build_planner_input(
             )
             for evidence in sorted(result.evidence, key=lambda item: item.evidence_id)
         ),
+        action_history=action_history,
+        remaining_tool_calls=remaining_tool_calls,
+        planning_round=planning_round,
+        max_planning_rounds=max_planning_rounds,
         allowed_tools=tuple(
             _tool_context(definition)
             for definition in sorted(allowed_tools, key=lambda item: item.tool_id)
