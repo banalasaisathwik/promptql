@@ -24,11 +24,21 @@ PlanFieldName = Annotated[
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$", min_length=1, max_length=128
     ),
 ]
+PlanToolIdentifier = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        pattern=r"^[a-z][a-z0-9_]*$",
+        min_length=1,
+        max_length=128,
+    ),
+]
 PlanReason = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
 ]
 LiteralValue = str | int | float | bool | None
+MAX_PLAN_STEPS = 5
 
 
 class PlannerToolInputField(ContractModel):
@@ -84,7 +94,7 @@ class PlanArgument(ContractModel):
 
 class PlanStep(ContractModel):
     step_id: PlanStepIdentifier
-    tool_id: InvestigationToolId
+    tool_id: PlanToolIdentifier
     arguments: tuple[PlanArgument, ...] = Field(default=(), max_length=20)
     depends_on: tuple[PlanStepIdentifier, ...] = Field(default=(), max_length=5)
     reason: PlanReason
@@ -100,16 +110,9 @@ class PlanStep(ContractModel):
 
 
 class InvestigationPlan(ContractModel):
-    # PURPOSE: Represent a proposal only. V2.8 will add graph/semantic checks;
-    # V2.9 will decide whether validated steps are safe to execute.
-    steps: tuple[PlanStep, ...] = Field(min_length=1, max_length=5)
-
-    @model_validator(mode="after")
-    def validate_unique_step_ids(self) -> Self:
-        step_ids = tuple(step.step_id for step in self.steps)
-        if len(step_ids) != len(set(step_ids)):
-            raise ValueError("investigation plans cannot repeat step identifiers")
-        return self
+    # PURPOSE: Represent a schema-valid proposal. V2.8 owns semantic checks such
+    # as duplicate identities and graph legality; V2.9 will decide execution.
+    steps: tuple[PlanStep, ...] = Field(min_length=1, max_length=MAX_PLAN_STEPS)
 
 
 class PlannerFailureCode(StrEnum):

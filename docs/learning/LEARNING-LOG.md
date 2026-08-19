@@ -1825,3 +1825,29 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** V2.8 must decide whether a data reference should
   always imply an explicit matching control dependency or whether it may add one
   deterministically during validation.
+
+### 2026-08-18 — V2.8 deterministic plan validation
+
+- **Concept:** A parsed Pydantic model is syntactically valid, but an executable
+  graph also needs semantic validation. `PlanValidator` treats an LLM proposal
+  like untrusted source code: it validates identity, tool allowlists, DAG edges,
+  output references, and annotations before a future executor can receive it.
+- **Important syntax:** `StrEnum` gives stable failure codes; `model_fields` and
+  `rebuild_annotation()` expose Pydantic field contracts for static checking;
+  Kahn's algorithm uses an in-degree map and heap ordered by original position
+  to produce deterministic topological order.
+- **Implementation and evidence:** `investigations/planning/validation.py`
+  produces `PlanValidationResult`; `tools/models.py` adds metadata-only
+  `plan_output_model` contracts; `test_investigation_plan_validator.py` covers
+  acceptance, failures, type mismatch, atomic rejection, and determinism.
+- **Decision:** ADR-022 selects explicit per-tool static output contracts rather
+  than changing generic V2.5 `ToolResult`. This is enough to validate
+  `s1.commit_sha -> get_commit.commit_sha` while postponing V2.9 projection.
+- **Invariant and failure behavior:** A data reference must have a matching
+  control dependency. Unknown tools, fields, types, and malformed literals
+  become sanitized typed failures; any failure means no `ValidatedPlan`.
+- **Trade-off:** Static contracts are deliberately narrower than JSONPath or a
+  generic expression system. They require later executor projection work, but
+  avoid arbitrary payload inspection and keep validation predictable.
+- **Unresolved question:** V2.9 must define how observed evidence becomes the
+  declared static output fields without leaking provider-specific payloads.

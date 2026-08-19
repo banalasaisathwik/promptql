@@ -1157,7 +1157,7 @@ the caller injects allowed definitions before prompt construction. Each plan has
 one to five `PlanStep`s with stable V2.5 IDs, explicit literals or narrow
 `StepOutputRef`s, optional control dependencies, and concise rationale.
 `depends_on` represents ordering; a reference represents data consumption.
-V2.7 stores both but deliberately does not validate their graph or consistency.
+V2.8 validates their graph and consistency before any future execution.
 
 Provider failure, malformed structured response, and plan-schema failure stay
 distinct. The prompt is versioned as `investigation-planner` / `v2.7.1` and
@@ -1184,7 +1184,7 @@ Typed LLM planner
  ↓
 Pydantic schema validation
  ↓
-future V2.8 PlanValidator
+V2.8 PlanValidator
  ↓
 future V2.9 runtime executor
 ```
@@ -1197,10 +1197,10 @@ The runtime decides:
 
 > Is this valid and allowed?
 
-V2.8 remains responsible for cycle detection, topological ordering, reference
-target/type checks, dependency/reference consistency, permission semantics,
-budget checks, and redundant-call detection. V2.9 remains responsible for
-execution. Dynamic replanning and hypothesis generation are not implemented.
+V2.8 provides cycle detection, deterministic topological ordering, reference
+target/type checks, dependency/reference consistency, and allowlist semantics.
+V2.9 remains responsible for execution. Budgets, dynamic replanning, and
+hypothesis generation are not implemented.
 
 ---
 
@@ -1240,9 +1240,14 @@ ordinary deterministic graph algorithms can determine it.
 
 # V2.8 — Plan validation
 
-Plan validation must remain separate from generation.
+Plan validation is implemented as a pure, deterministic application component
+separate from generation. `PlanValidator` checks the typed proposal against the
+registry and caller-injected allowed set, returning either `ValidatedPlan` or
+sanitized typed failures atomically. Static per-tool output contracts provide
+planner-visible fields for type checking without changing V2.5 `ToolResult` or
+executing a provider capability.
 
-Potential deterministic checks include:
+Implemented checks include:
 
 ```text
 known tool
@@ -1250,7 +1255,6 @@ valid arguments
 valid dependencies
 no cycles
 allowed capability
-budget available
 step count within bound
 ```
 
@@ -1261,6 +1265,11 @@ probabilistic plan generation
 +
 deterministic plan acceptance
 ```
+
+The compiler analogy is intentional: the LLM planner is a program generator,
+the validator is a static checker/type checker, and V2.9 will be the execution
+engine. A legal plan may still be inefficient; plan quality remains an eval
+concern rather than a validator rejection.
 
 ---
 
