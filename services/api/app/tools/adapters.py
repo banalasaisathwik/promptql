@@ -63,15 +63,23 @@ class _EvidenceTool:
             evidence=evidence_items,
         )
 
+    # PURPOSE: Translate provider-specific exceptions into the stable tool
+    # result seen by the investigation runtime.
+    #
+    # FLOW: Recognize the known connector boundary -> retain its safe category
+    # -> replace its detail with a generic message -> return a failed ToolResult.
+    #
+    # WHY: The executor needs category-level semantics for retries, while callers
+    # must not receive raw provider exception text or request details.
     def _failed(self, error: Exception) -> ToolResult:
         if isinstance(error, ConnectorUnavailableError):
             code = ToolFailureCode.CAPABILITY_UNAVAILABLE
             message = "the underlying capability is unavailable"
         elif isinstance(error, (GitHubConnectorError, JiraConnectorError)):
-            code = ToolFailureCode.SOURCE_FAILURE
+            code = ToolFailureCode(error.category.value)
             message = "the provider source failed to return evidence"
         elif isinstance(error, FixtureNotFoundError):
-            code = ToolFailureCode.SOURCE_FAILURE
+            code = ToolFailureCode.NOT_FOUND
             message = "the source did not return evidence for the request"
         else:
             raise error

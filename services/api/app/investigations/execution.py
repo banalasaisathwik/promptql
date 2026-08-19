@@ -1,8 +1,9 @@
-"""Deterministic V2.9 interpreter for an already validated investigation plan."""
+"""Deterministic V2.9-V2.12 interpreter for an accepted investigation plan."""
 
+import asyncio
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from pydantic import Field
 
@@ -38,6 +39,27 @@ class ExecutionBudget(ContractModel):
     max_tool_calls: int = Field(ge=0, le=100)
 
 
+# PURPOSE: Keep the owner-approved attempt cap and delay formula as explicit
+# validated runtime input instead of burying retry numbers in loop control flow.
+#
+# FLOW: After failed attempt 1 it returns 1 second; after failed attempt 2 it
+# returns 2 seconds. The executor calls it only after a typed retryable failure.
+#
+# DESIGN: This pure model is the Python equivalent of a small immutable policy
+# object; it keeps timing testable without coupling it to a provider SDK.
+class RetryPolicy(ContractModel):
+    # V2.12 deliberately caps this initial policy at the owner-confirmed three
+    # total attempts. Later tuning needs a new policy decision and evidence.
+    max_attempts: int = Field(default=3, ge=1, le=3)
+    initial_backoff_seconds: float = Field(default=1.0, gt=0, le=60)
+    backoff_multiplier: float = Field(default=2.0, ge=2, le=2)
+
+    def delay_after_failure(self, completed_attempts: int) -> float:
+        return self.initial_backoff_seconds * (
+            self.backoff_multiplier ** (completed_attempts - 1)
+        )
+
+
 class BudgetState(ContractModel):
     # PURPOSE: Keep mutable execution accounting separate from the caller's
     # immutable budget policy. This is the sequential equivalent of reserving a
@@ -60,6 +82,7 @@ class BudgetState(ContractModel):
 class ExecutionStepState(ContractModel):
     step_id: PlanStepIdentifier
     status: ExecutionStepStatus
+    attempts: int = Field(default=0, ge=0)
     tool_result: ToolResult | None = None
     failure: ToolFailure | None = None
     block_reason: ExecutionBlockReason | None = None
@@ -82,16 +105,23 @@ class AgentExecutor:
     # leaving tool choice and graph legality to the planner and validator.
     #
     # FLOW: Check dependency/output readiness -> validate typed arguments ->
-    # reserve budget -> invoke the existing adapter boundary -> merge evidence ->
-    # recompute deterministic facts. No LLM participates in this loop.
+    # reserve budget -> invoke once -> retry only a typed transient failure ->
+    # merge evidence -> recompute deterministic facts. No LLM participates.
     #
     # DESIGN: Keeping this separate from ToolRegistry preserves the registry as
     # metadata and gives later runtime policies one clear enforcement point.
     """Interpret one accepted plan sequentially without calling a planner."""
 
-    def __init__(self, registry: ToolRegistry, invoker: ToolInvoker) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        invoker: ToolInvoker,
+        *,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self._registry = registry
         self._invoker = invoker
+        self._sleep = sleep
 
     async def execute(
         self,
@@ -99,6 +129,7 @@ class AgentExecutor:
         *,
         budget: ExecutionBudget,
         initial_evidence: tuple[Evidence, ...] = (),
+        retry_policy: RetryPolicy | None = None,
     ) -> InvestigationExecutionState:
         evidence = self._deduplicate_evidence(initial_evidence)
         facts = derive_facts(evidence)
@@ -111,6 +142,7 @@ class AgentExecutor:
         missing_information: list[MissingInformation] = []
         budget_state = BudgetState(max_tool_calls=budget.max_tool_calls)
         termination_reason = ExecutionTerminationReason.COMPLETED
+        resolved_retry_policy = retry_policy or RetryPolicy()
 
         for position, step_id in enumerate(validated_plan.topological_step_ids):
             step = steps_by_id[step_id]
@@ -151,19 +183,29 @@ class AgentExecutor:
             step_states[step_id] = ExecutionStepState(
                 step_id=step_id, status=ExecutionStepStatus.RUNNING
             )
-            # An attempted provider operation consumes one bounded runtime unit,
-            # regardless of whether its normalized ToolResult later reports failure.
-            budget_state = budget_state.consume_attempt()
-            result = await self._invoker.invoke(step.tool_id, typed_input.model_dump())
+            result, attempts, budget_state, retry_budget_exhausted = await self._invoke_with_retries(
+                step.tool_id,
+                typed_input.model_dump(),
+                budget_state,
+                resolved_retry_policy,
+            )
 
             if result.outcome is ToolOutcome.FAILED:
                 step_states[step_id] = ExecutionStepState(
                     step_id=step_id,
                     status=ExecutionStepStatus.FAILED,
+                    attempts=attempts,
                     tool_result=result,
                     failure=result.failure,
                 )
                 missing_information.append(self._missing_source(step_id, result.failure))
+                if retry_budget_exhausted:
+                    termination_reason = ExecutionTerminationReason.BUDGET_EXHAUSTED
+                    self._block_remaining_steps(
+                        step_states,
+                        validated_plan.topological_step_ids[position + 1 :],
+                    )
+                    break
                 continue
 
             merged_evidence = self._merge_evidence(evidence, result.evidence)
@@ -177,6 +219,7 @@ class AgentExecutor:
             step_states[step_id] = ExecutionStepState(
                 step_id=step_id,
                 status=ExecutionStepStatus.SUCCEEDED,
+                attempts=attempts,
                 tool_result=result,
             )
 
@@ -190,6 +233,53 @@ class AgentExecutor:
             budget=budget_state,
             termination_reason=termination_reason,
         )
+
+    # PURPOSE: Execute one already-validated read-only tool step, accounting for
+    # each external call and retrying only failures classified as transient.
+    #
+    # FLOW: Reserve budget -> invoke -> inspect the typed result -> either return
+    # it, stop for exhausted retry budget, or await the next exponential delay.
+    #
+    # WHY: Reserving here, immediately before every call, ensures an SDK or
+    # adapter cannot make a retry that V2.10 failed to count.
+    async def _invoke_with_retries(
+        self,
+        tool_id,
+        arguments: Mapping[str, object],
+        budget_state: BudgetState,
+        retry_policy: RetryPolicy,
+    ) -> tuple[ToolResult, int, BudgetState, bool]:
+        attempts = 0
+        while True:
+            # Reserve before every call, including retries. A provider result is
+            # never allowed to make an unaccounted-for external attempt.
+            budget_state = budget_state.consume_attempt()
+            attempts += 1
+            result = await self._invoker.invoke(tool_id, arguments)
+            failure = result.failure
+            can_retry = (
+                result.outcome is ToolOutcome.FAILED
+                and failure is not None
+                and failure.retryable
+                and attempts < retry_policy.max_attempts
+            )
+            if not can_retry:
+                return result, attempts, budget_state, False
+            if budget_state.remaining_tool_calls == 0:
+                return result, attempts, budget_state, True
+            await self._sleep(retry_policy.delay_after_failure(attempts))
+
+    @staticmethod
+    def _block_remaining_steps(
+        step_states: dict[str, ExecutionStepState],
+        remaining_step_ids: tuple[str, ...],
+    ) -> None:
+        for remaining_step_id in remaining_step_ids:
+            step_states[remaining_step_id] = ExecutionStepState(
+                step_id=remaining_step_id,
+                status=ExecutionStepStatus.BLOCKED,
+                block_reason=ExecutionBlockReason.BUDGET_EXHAUSTED,
+            )
 
     @staticmethod
     def _resolve_arguments(

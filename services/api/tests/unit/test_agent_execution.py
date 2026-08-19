@@ -40,7 +40,19 @@ class RecordingInvoker:
 
     async def invoke(self, tool_id, arguments):
         self.calls.append((tool_id, arguments))
-        return self.results[tool_id]
+        results = self.results[tool_id]
+        return results.pop(0) if isinstance(results, list) else results
+
+
+# This injected async test double records requested delays so backoff tests do
+# not wait one or two real seconds. It plays the same role as a mocked timer in
+# a JavaScript test while leaving production execution on `asyncio.sleep`.
+class RecordingSleeper:
+    def __init__(self):
+        self.delays = []
+
+    async def __call__(self, seconds):
+        self.delays.append(seconds)
 
 
 class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -191,6 +203,86 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.budget.used_tool_calls, 1)
         self.assertEqual(state.step_states[1].status, ExecutionStepStatus.BLOCKED)
         self.assertEqual(state.termination_reason, ExecutionTerminationReason.COMPLETED)
+
+    async def test_retryable_failure_retries_with_exponential_backoff_and_consumes_budget(self):
+        plan = self._validated(
+            PlanStep(step_id="s1", tool_id="get_incident", reason="retrieve", arguments=(PlanArgument(name="incident_reference", value=Literal(value="one")),)),
+        )
+        invoker = RecordingInvoker({
+            InvestigationToolId.GET_INCIDENT: [
+                ToolResult(tool_id=InvestigationToolId.GET_INCIDENT, outcome=ToolOutcome.FAILED, failure=ToolFailure(code=ToolFailureCode.RATE_LIMITED, message="rate limited")),
+                self._observed(InvestigationToolId.GET_INCIDENT, self._incident("incident-1")),
+            ],
+        })
+        sleeper = RecordingSleeper()
+
+        state = await AgentExecutor(self.registry, invoker, sleep=sleeper).execute(
+            plan, budget=ExecutionBudget(max_tool_calls=3)
+        )
+
+        self.assertEqual(len(invoker.calls), 2)
+        self.assertEqual(sleeper.delays, [1.0])
+        self.assertEqual(state.budget.used_tool_calls, 2)
+        self.assertEqual(state.step_states[0].attempts, 2)
+        self.assertEqual(state.step_states[0].status, ExecutionStepStatus.SUCCEEDED)
+
+    async def test_non_retryable_failure_stops_after_one_attempt(self):
+        plan = self._validated(
+            PlanStep(step_id="s1", tool_id="get_incident", reason="retrieve", arguments=(PlanArgument(name="incident_reference", value=Literal(value="one")),)),
+        )
+        invoker = RecordingInvoker({
+            InvestigationToolId.GET_INCIDENT: ToolResult(tool_id=InvestigationToolId.GET_INCIDENT, outcome=ToolOutcome.FAILED, failure=ToolFailure(code=ToolFailureCode.NOT_FOUND, message="not found")),
+        })
+        sleeper = RecordingSleeper()
+
+        state = await AgentExecutor(self.registry, invoker, sleep=sleeper).execute(
+            plan, budget=ExecutionBudget(max_tool_calls=3)
+        )
+
+        self.assertEqual(len(invoker.calls), 1)
+        self.assertEqual(sleeper.delays, [])
+        self.assertEqual(state.budget.used_tool_calls, 1)
+        self.assertEqual(state.step_states[0].attempts, 1)
+        self.assertEqual(state.step_states[0].status, ExecutionStepStatus.FAILED)
+
+    async def test_retry_attempts_stop_after_three_total_calls(self):
+        plan = self._validated(
+            PlanStep(step_id="s1", tool_id="get_incident", reason="retrieve", arguments=(PlanArgument(name="incident_reference", value=Literal(value="one")),)),
+        )
+        retryable_failure = ToolResult(tool_id=InvestigationToolId.GET_INCIDENT, outcome=ToolOutcome.FAILED, failure=ToolFailure(code=ToolFailureCode.TIMEOUT, message="timed out"))
+        invoker = RecordingInvoker({InvestigationToolId.GET_INCIDENT: [retryable_failure] * 3})
+        sleeper = RecordingSleeper()
+
+        state = await AgentExecutor(self.registry, invoker, sleep=sleeper).execute(
+            plan, budget=ExecutionBudget(max_tool_calls=5)
+        )
+
+        self.assertEqual(len(invoker.calls), 3)
+        self.assertEqual(sleeper.delays, [1.0, 2.0])
+        self.assertEqual(state.budget.used_tool_calls, 3)
+        self.assertEqual(state.step_states[0].attempts, 3)
+        self.assertEqual(state.step_states[0].status, ExecutionStepStatus.FAILED)
+
+    async def test_budget_exhaustion_stops_a_pending_retry_and_blocks_later_work(self):
+        plan = self._validated(
+            PlanStep(step_id="s1", tool_id="get_incident", reason="first", arguments=(PlanArgument(name="incident_reference", value=Literal(value="one")),)),
+            PlanStep(step_id="s2", tool_id="get_incident", reason="second", arguments=(PlanArgument(name="incident_reference", value=Literal(value="two")),)),
+        )
+        invoker = RecordingInvoker({
+            InvestigationToolId.GET_INCIDENT: ToolResult(tool_id=InvestigationToolId.GET_INCIDENT, outcome=ToolOutcome.FAILED, failure=ToolFailure(code=ToolFailureCode.UPSTREAM_UNAVAILABLE, message="unavailable")),
+        })
+        sleeper = RecordingSleeper()
+
+        state = await AgentExecutor(self.registry, invoker, sleep=sleeper).execute(
+            plan, budget=ExecutionBudget(max_tool_calls=1)
+        )
+
+        self.assertEqual(len(invoker.calls), 1)
+        self.assertEqual(sleeper.delays, [])
+        self.assertEqual(state.budget.used_tool_calls, 1)
+        self.assertEqual(state.step_states[0].attempts, 1)
+        self.assertEqual(state.step_states[1].block_reason, ExecutionBlockReason.BUDGET_EXHAUSTED)
+        self.assertEqual(state.termination_reason, ExecutionTerminationReason.BUDGET_EXHAUSTED)
 
 
 if __name__ == "__main__":

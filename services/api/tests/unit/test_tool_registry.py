@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 from pydantic import ValidationError
 
-from app.connectors.errors import ConnectorUnavailableError
+from app.connectors.errors import ConnectorUnavailableError, GitHubRateLimitedError
 from app.connectors.fakes import FakeJiraConnector
 from app.connectors.github_code_fakes import (
     FIXTURE_COMMIT_REQUEST,
@@ -31,6 +31,7 @@ from app.tools import (
     InvalidToolArgumentsError,
     QueryTelemetryTool,
     TOOL_DEFINITIONS,
+    ToolFailure,
     ToolFailureCode,
     ToolOutcome,
     ToolRegistry,
@@ -70,6 +71,18 @@ class ToolDefinitionTests(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             ToolResult(tool_id=InvestigationToolId.GET_COMMIT, outcome=ToolOutcome.FAILED)
+
+    def test_every_failure_code_has_a_deterministic_retry_decision(self) -> None:
+        retryable_codes = {
+            ToolFailureCode.RATE_LIMITED,
+            ToolFailureCode.TIMEOUT,
+            ToolFailureCode.UPSTREAM_UNAVAILABLE,
+        }
+
+        for code in ToolFailureCode:
+            with self.subTest(code=code):
+                failure = ToolFailure(code=code, message="sanitized failure")
+                self.assertEqual(failure.retryable, code in retryable_codes)
 
 
 class ToolRegistryTests(unittest.TestCase):
@@ -163,8 +176,21 @@ class ToolAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result.outcome, ToolOutcome.FAILED)
-        self.assertEqual(result.failure.code, ToolFailureCode.SOURCE_FAILURE)
+        self.assertEqual(result.failure.code, ToolFailureCode.NOT_FOUND)
+        self.assertFalse(result.failure.retryable)
         self.assertNotIn("incident:test", result.failure.message)
+
+    async def test_transient_connector_failure_is_retryable(self) -> None:
+        class RateLimitedGitHubSource:
+            async def get_commit_evidence(self, request):
+                raise GitHubRateLimitedError()
+
+        result = await GetCommitTool(RateLimitedGitHubSource()).execute(
+            FIXTURE_COMMIT_REQUEST.model_dump()
+        )
+
+        self.assertEqual(result.failure.code, ToolFailureCode.RATE_LIMITED)
+        self.assertTrue(result.failure.retryable)
 
     async def test_capability_unavailability_is_distinct_from_source_failure(self) -> None:
         class UnavailableSource(FakeIncidentSource):

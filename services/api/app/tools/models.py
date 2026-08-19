@@ -35,12 +35,40 @@ class ToolOutcome(StrEnum):
 
 class ToolFailureCode(StrEnum):
     CAPABILITY_UNAVAILABLE = "capability_unavailable"
+    INVALID_REQUEST = "invalid_request"
+    UNAUTHORIZED = "unauthorized"
+    FORBIDDEN = "forbidden"
+    NOT_FOUND = "not_found"
+    RATE_LIMITED = "rate_limited"
+    TIMEOUT = "timeout"
+    UPSTREAM_UNAVAILABLE = "upstream_unavailable"
+    INVALID_RESPONSE = "invalid_response"
+    INCOMPLETE_RESULT = "incomplete_result"
+    CONFIGURATION_ERROR = "configuration_error"
     SOURCE_FAILURE = "source_failure"
 
 
+# PURPOSE: Carry a sanitized failure across the adapter/runtime boundary.
+#
+# FLOW: The adapter chooses one closed code from a connector error, then the
+# executor reads `retryable` before deciding whether another provider call is
+# permitted. Provider messages never participate in that control decision.
+#
+# DESIGN: This keeps retry policy deterministic and portable across providers,
+# similar to using a discriminated union rather than matching exception strings.
 class ToolFailure(ContractModel):
     code: ToolFailureCode
     message: NonEmptyString
+
+    @property
+    def retryable(self) -> bool:
+        # Runtime retry policy is driven by a closed failure taxonomy, never by
+        # an adapter message or a provider's untrusted response text.
+        return self.code in {
+            ToolFailureCode.RATE_LIMITED,
+            ToolFailureCode.TIMEOUT,
+            ToolFailureCode.UPSTREAM_UNAVAILABLE,
+        }
 
 
 class ToolResult(ContractModel):

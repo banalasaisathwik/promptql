@@ -318,8 +318,8 @@ remains operational telemetry; the dashboard is product/runtime visibility.
 
 ## Not implemented
 
-Crash recovery, cancellation APIs, retries, distributed workers, queues, GitHub
-or Jira OAuth/app authentication, multi-tenant connector credentials,
+Crash recovery, cancellation APIs, distributed workers, queues, GitHub or Jira
+OAuth/app authentication, multi-tenant connector credentials,
 site-specific Jira blocker mapping, tenant isolation, retention, explanation
 persistence, LLM retries/fallback, prompt optimization, hosted eval services,
 LLM-as-a-judge, production-traffic eval collection, dashboards, alerting, and
@@ -1345,9 +1345,9 @@ step does not. Exhaustion blocks every remaining pending step with
 Evidence, Facts, and failures.
 
 `MAX_PLAN_STEPS` bounds a single generated plan at validation time. The total
-tool-call budget bounds actual execution work, including future execution of
-multiple short plans. Token/cost/deadline/per-tool/distributed budgets, retries,
-recovery, concurrency, and dynamic replanning remain planned.
+tool-call budget bounds actual execution work, including retries. Token/cost/
+deadline/per-tool/distributed budgets, recovery, concurrency, and dynamic
+replanning remain planned.
 
 ---
 
@@ -1385,9 +1385,10 @@ system failure
 
 ---
 
-# Retry architecture
+# Further retry architecture
 
-Retries are planned V2 runtime behaviour, not a property of every adapter.
+Beyond the implemented V2.12 slice, retries remain runtime behaviour rather
+than a property of every adapter.
 
 Retry only failures that are plausibly transient.
 
@@ -1415,6 +1416,29 @@ jitter
 
 Provider SDK retry behaviour should remain explicit rather than silently
 competing with runtime retry policy.
+
+---
+
+# V2.11-V2.12: typed failures and bounded retries
+
+`ToolFailureCode` now preserves sanitized connector categories instead of
+collapsing them all into `source_failure`. `ToolFailure.retryable` is a closed,
+deterministic classification: only `rate_limited`, `timeout`, and
+`upstream_unavailable` retry. Authentication, authorization, invalid
+requests/responses, missing resources, incomplete results, configuration,
+unavailable capabilities, and generic `source_failure` are terminal.
+
+Retries remain owned by `AgentExecutor`, not by individual adapters. The
+confirmed initial policy allows at most three total attempts for one step and
+uses one-second then two-second exponential delays. Before every initial call
+and retry, the executor consumes one V2.10 tool-call unit. If none remains for
+a pending retry, it retains the typed failure, marks later pending work as
+`budget_exhausted`, and does not sleep or call the provider.
+
+`ExecutionStepState.attempts` records calls made for the step. No jitter,
+deadline, retry persistence, retry telemetry, write tools, or idempotency key
+exists yet. Current V2.5 tools are read-only; V2.13 must establish idempotency
+before any side-effecting tool can use this policy.
 
 ---
 

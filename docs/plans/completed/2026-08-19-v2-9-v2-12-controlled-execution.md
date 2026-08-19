@@ -1,9 +1,9 @@
-# Execution plan: V2.9 execution loop and V2.10 tool-call budget
+# Execution plan: V2.9-V2.12 controlled investigation execution
 
-- Status: Active
+- Status: Completed
 - Owner: Repository owner
 - Created: 2026-08-19
-- Related milestone: V2.9, V2.10
+- Related milestone: V2.9, V2.10, V2.11, V2.12
 
 ## Objective
 
@@ -39,16 +39,19 @@ the remaining pending work and preserves partial state.
 
 ## Non-goals
 
-- No planner call, dynamic replanning, retries, parallel scheduler, persistence,
+- No planner call, dynamic replanning, jitter, parallel scheduler, persistence,
   checkpoint/resume, cancellation, hypotheses, provider changes, or LLM calls.
 
 ## Acceptance criteria
 
-- [ ] A valid chain and branch execute in deterministic dependency order.
-- [ ] Runtime references become typed tool inputs only after a successful source.
-- [ ] Failures block dependent descendants but preserve independent partial work.
-- [ ] Evidence and full-set fact derivation remain deduplicated.
-- [ ] Budget prevents calls beyond its limit and records typed policy termination.
+- [x] A valid chain and branch execute in deterministic dependency order.
+- [x] Runtime references become typed tool inputs only after a successful source.
+- [x] Failures block dependent descendants but preserve independent partial work.
+- [x] Evidence and full-set fact derivation remain deduplicated.
+- [x] Budget prevents calls beyond its limit and records typed policy termination.
+- [x] Connector failure kind determines whether retry is permitted.
+- [x] Retryable failures make at most three total calls with one-second then
+      two-second exponential delays, and every call consumes V2.10 budget.
 
 ## Invariants
 
@@ -97,6 +100,11 @@ the required teaching-comment pass.
 - [x] 2026-08-19: Implemented V2.9 and passed focused execution tests before
   adding budget behavior.
 - [x] 2026-08-19: Implemented V2.10 and passed focused budget tests.
+- [x] 2026-08-19: Owner confirmed V2.11-V2.12 policy: retry rate limits,
+      timeouts, and upstream unavailability only; at most three total attempts;
+      one-second then two-second delays; charge every attempt to V2.10 budget.
+- [x] 2026-08-19: Implemented typed tool failures and executor retries; focused
+      execution and tool-registry tests passed before the final comment pass.
 
 ## Decisions and discoveries
 
@@ -114,5 +122,10 @@ the required teaching-comment pass.
 
 ## Completion
 
-Record exact commands, results, final diff review, teaching-comment pass, and
-the remaining deferred runtime work before moving this plan to completed.
+2026-08-19: Focused execution and tool-registry tests passed before and after
+the final `code-teacher-comments` pass. `python -m compileall -q app tests`,
+`git -c filter.comment-strip.clean=cat diff --check`, and complete backend
+discovery passed (329 tests, 6 explicit PostgreSQL skips). The final comment
+pass changed only comments in implementation/test source. Jitter, deadlines,
+retry-after handling, durable retry history, retry telemetry, concurrency,
+and write-tool idempotency remain deferred.

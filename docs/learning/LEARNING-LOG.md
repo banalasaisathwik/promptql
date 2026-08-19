@@ -1878,3 +1878,27 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   accounting deterministic but leaves branch concurrency for later atomic budget
   reservation work. Dynamic replanning, retries, and full agent telemetry remain
   deferred.
+
+### 2026-08-19 - Classify transient tool failures before bounded retry
+
+- **V2 milestones:** V2.11 Failure Taxonomy and V2.12 Retry/Backoff.
+- **Concept and syntax:** `ToolFailureCode` carries closed sanitized failure
+  semantics from the connector boundary, while `ToolFailure.retryable` derives
+  a boolean policy decision without trusting a message. `RetryPolicy` uses
+  exponentiation for the one-second then two-second delay. Injecting the async
+  `sleep` callable lets unit tests observe backoff without waiting in real time.
+- **Implementation and evidence:** `tools/adapters.py` maps connector categories
+  to `ToolFailureCode`; `investigations/execution.py` owns retry sequencing,
+  budget reservation, and per-step attempts. Focused tool-registry and execution
+  tests passed using a repository-local uv cache.
+- **Decision:** ADR-023 selects executor-owned retries only for rate limits,
+  timeouts, and upstream unavailability. It caps a step at three total calls and
+  delays one second then two seconds. SDK retries remain single-shot/explicit.
+- **Invariant or failure behavior:** Budget is consumed before every provider
+  call, including each retry. A permanent failure makes one call. If a retry is
+  pending but budget is empty, no delay or call occurs; later pending steps are
+  budget-exhausted.
+- **Trade-off and unresolved question:** Retry can improve transient availability
+  but costs up to three calls and three seconds of sequential latency. Jitter,
+  retry-after handling, deadlines, durable history, telemetry, and idempotency
+  for future write tools remain deferred.

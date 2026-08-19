@@ -54,6 +54,7 @@ from app.investigations.execution import (
     ExecutionStepStatus,
     ExecutionTerminationReason,
     InvestigationExecutionState,
+    RetryPolicy,
 )
 from app.investigations.planning import (
     InvestigationPlan,
@@ -121,6 +122,7 @@ __all__ = [
     "ExecutionStepStatus",
     "ExecutionTerminationReason",
     "InvestigationExecutionState",
+    "RetryPolicy",
     "InvestigationPlan",
     "InvestigationPlannerError",
     "Literal",
