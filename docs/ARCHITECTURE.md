@@ -316,6 +316,40 @@ alongside snapshots when replay, recovery, or high-fan-out updates justify it.
 The dashboard neither queries Grafana nor exposes OTel spans. Grafana/OTel
 remains operational telemetry; the dashboard is product/runtime visibility.
 
+## V2.17-V2.18 grounded hypothesis boundary
+
+The completed V2.16 state can now enter a deliberately narrow proposal and
+grounding flow:
+
+```text
+Evidence -> deterministic fact derivation -> Facts
+        -> typed LLM hypothesis generator -> CandidateHypothesis
+        -> deterministic validator -> ValidatedHypothesis
+        -> V2.19 deterministic renderer (planned)
+```
+
+Facts remain objective, evidence-backed relationships; a hypothesis is an
+uncertain causal interpretation. The generator receives a goal, sorted Facts,
+and deterministic missing-information records, not raw logs, diffs, provider
+payloads, credentials, or execution traces. It uses the existing
+provider-neutral `TypedLLMClient`, a versioned prompt, and a bounded output
+schema. Generated rationale is non-authoritative and cannot become final prose.
+
+`DeterministicHypothesisValidator` accepts the currently supported generic
+code-change family only when selected Facts establish both a changed file and a
+matching failure file/hunk for the same file-path subject. It rejects unknown,
+duplicate, mismatched, or insufficient Fact references in candidate order.
+This is structural and semantic support, not proof of the actual root cause.
+No dependency, Redis, Postgres, Kafka, or provider-specific branch exists. The
+current Fact vocabulary does not justify dependency or deployment causal kinds,
+and V2.19 owns template rendering of accepted structures.
+
+```text
+redis-prod ----
+postgres-prod -+-> future generic dependency validation, once Fact predicates exist
+payments-api --
+```
+
 ## Not implemented
 
 Crash recovery, cancellation APIs, distributed workers, queues, GitHub or Jira
