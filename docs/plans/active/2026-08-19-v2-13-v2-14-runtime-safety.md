@@ -75,3 +75,12 @@ environment-guarded when `TEST_DATABASE_URL` is absent.
   Python compilation, and full backend discovery completed; PostgreSQL tests
   were explicitly skipped because `TEST_DATABASE_URL` is absent.
 - [x] Final documentation diff and local Mermaid learning diagram reviewed.
+
+## Follow-on V2.15-V2.16 progress
+
+- [x] V2.15: postponed as a documented minimal boundary. The process-local
+  executor has no pre-existing cancellation signal, so no endpoint, forced
+  abort, persistence, rollback, or compensation mechanism was introduced.
+- [x] V2.16: added bounded round-boundary replanning. `AdaptiveInvestigationRuntime`
+  reuses planner validation and `AgentExecutor`; it never interrupts a short
+  active plan because a particular evidence item appears important.

@@ -56,6 +56,14 @@ from app.investigations.execution import (
     InvestigationExecutionState,
     RetryPolicy,
 )
+from app.investigations.replanning import (
+    AdaptiveInvestigationRuntime,
+    AdaptiveInvestigationState,
+    ContinuationReason,
+    MAX_NO_PROGRESS_ROUNDS,
+    MAX_PLANNING_ROUNDS,
+    PlanningRound,
+)
 from app.investigations.planning import (
     InvestigationPlan,
     InvestigationPlannerError,
@@ -134,4 +142,10 @@ __all__ = [
     "StepOutputRef",
     "TypedLLMPlanner",
     "build_planner_input",
+    "AdaptiveInvestigationRuntime",
+    "AdaptiveInvestigationState",
+    "ContinuationReason",
+    "MAX_NO_PROGRESS_ROUNDS",
+    "MAX_PLANNING_ROUNDS",
+    "PlanningRound",
 ]

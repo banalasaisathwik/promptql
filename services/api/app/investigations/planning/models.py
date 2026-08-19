@@ -11,7 +11,7 @@ from app.investigations.models import (
     InvestigationIdentifier,
     MissingInformation,
 )
-from app.tools.models import InvestigationToolId
+from app.tools.models import InvestigationToolId, ToolOutcome
 
 
 PlanStepIdentifier = Annotated[
@@ -39,6 +39,9 @@ PlanReason = Annotated[
 ]
 LiteralValue = str | int | float | bool | None
 MAX_PLAN_STEPS = 5
+# Adaptive execution uses a narrower horizon without changing the established
+# V2.7/V2.8 contract for callers that still validate a five-step plan.
+MAX_ADAPTIVE_PLAN_STEPS = 3
 
 
 class PlannerToolInputField(ContractModel):
@@ -60,6 +63,15 @@ class CompactEvidenceContext(ContractModel):
     summary: NonEmptyString
 
 
+class ActionSummary(ContractModel):
+    """Safe, compact record of one completed logical action for replanning."""
+
+    tool_id: InvestigationToolId
+    outcome: ToolOutcome
+    produced_new_evidence: bool
+    produced_new_facts: bool
+
+
 class PlannerInput(ContractModel):
     # PURPOSE: Bound what untrusted model reasoning can see to the state needed
     # for choosing evidence work; it is not an InvestigationResult replacement.
@@ -67,6 +79,10 @@ class PlannerInput(ContractModel):
     facts: FactSet = ()
     missing_information: tuple[MissingInformation, ...] = ()
     evidence: tuple[CompactEvidenceContext, ...] = ()
+    action_history: tuple[ActionSummary, ...] = ()
+    remaining_tool_calls: int = Field(default=0, ge=0)
+    planning_round: int = Field(default=1, ge=1)
+    max_planning_rounds: int = Field(default=1, ge=1)
     allowed_tools: tuple[PlannerToolDefinition, ...] = Field(min_length=1)
 
 

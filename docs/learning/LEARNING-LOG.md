@@ -1,5 +1,23 @@
 # Learning log
 
+## 2026-08-19 — V2.16 bounded replanning
+
+`AdaptiveInvestigationRuntime` in `services/api/app/investigations/replanning.py`
+coordinates short planning rounds without duplicating `AgentExecutor`. A round
+is plan, deterministic validation, then full execution; a retry remains an
+attempt inside one step, not a replan. The runtime passes the remaining global
+tool-call budget into each executor call, so retries and later rounds share the
+same authoritative limit.
+
+The reusable safety pattern is comparing before/after Evidence and Fact ID sets.
+An empty pair is no progress, while a non-empty pair only means state changed:
+it must not become a hard-coded judgment that a particular provider error is
+important. Planner input keeps Facts (what is known) separate from compact
+action history (what was attempted). Focused evidence is in
+`test_adaptive_investigation_runtime.py`; compilation and V2 executor/planner
+tests validate the behavior. V2.15 is postponed because no natural existing
+cancellation signal exists; adding one would create an API/lifecycle boundary.
+
 This log stores concise, reusable engineering lessons supported by repository
 evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 

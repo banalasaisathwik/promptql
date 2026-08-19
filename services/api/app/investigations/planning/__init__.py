@@ -5,6 +5,8 @@ from app.investigations.planning.instructions import (
     PLANNER_SYSTEM_INSTRUCTIONS,
 )
 from app.investigations.planning.models import (
+    ActionSummary,
+    MAX_ADAPTIVE_PLAN_STEPS,
     CompactEvidenceContext,
     InvestigationPlan,
     Literal,
@@ -15,6 +17,8 @@ from app.investigations.planning.models import (
     PlannerFailureCode,
     PlannerInput,
     PlannerMetadata,
+    PlannerToolDefinition,
+    PlannerToolInputField,
     StepOutputRef,
 )
 from app.investigations.planning.prompt import build_planner_input
@@ -28,6 +32,8 @@ from app.investigations.planning.validation import (
 )
 
 __all__ = [
+    "ActionSummary",
+    "MAX_ADAPTIVE_PLAN_STEPS",
     "CompactEvidenceContext",
     "InvestigationPlan",
     "InvestigationPlannerError",
@@ -42,6 +48,8 @@ __all__ = [
     "PlannerFailureCode",
     "PlannerInput",
     "PlannerMetadata",
+    "PlannerToolDefinition",
+    "PlannerToolInputField",
     "PlanValidationFailure",
     "PlanValidationFailureCode",
     "PlanValidationResult",
