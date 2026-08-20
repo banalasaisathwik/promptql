@@ -59,7 +59,7 @@ class HypothesisGeneratorTests(unittest.IsolatedAsyncioTestCase):
         generation_input = build_hypothesis_generation_input(
             InvestigationRequest(
                 repository_owner="octo-org", repository_name="analytics",
-                incident_summary="Investigate checkout failures.",
+                question="Investigate checkout failures.",
             ),
             AdaptiveInvestigationState(
                 rounds=(), evidence=(), facts=_facts(), missing_information=(),

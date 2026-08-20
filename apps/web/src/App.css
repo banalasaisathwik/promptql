@@ -1038,6 +1038,53 @@
   font: inherit;
 }
 
+.investigation-question {
+  color: var(--text-strong, #1f2933) !important;
+  font-size: 1rem !important;
+}
+
+.investigation-question textarea {
+  min-height: 9rem;
+  resize: vertical;
+  font-size: 1.05rem;
+  line-height: 1.55;
+}
+
+.demo-scenario {
+  width: fit-content;
+}
+
+.demo-scenario select {
+  min-width: 16rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--border, #c7d0da);
+  border-radius: 0.45rem;
+  color: inherit;
+  background: #fff;
+  font: inherit;
+}
+
+.investigation-context {
+  padding-top: 1rem;
+  border-top: 1px solid var(--border, #d7dde5);
+}
+
+.investigation-context summary {
+  color: var(--text-strong, #1f2933);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.investigation-context summary small {
+  margin-left: 0.5rem;
+  color: var(--muted-text, #536170);
+  font-weight: 400;
+}
+
+.investigation-context .form-grid {
+  margin-top: 1rem;
+}
+
 .primary-action {
   width: fit-content;
   padding: 0.7rem 1.2rem;

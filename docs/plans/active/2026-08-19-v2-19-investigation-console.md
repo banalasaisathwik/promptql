@@ -25,6 +25,21 @@ and serialized polling path. It presents rounds, step status/attempts,
 Evidence, Facts, missing information, validated hypotheses, budget, and the
 grounded result as separate regions.
 
+## 2026-08-20 question-first console refinement
+
+The creation screen now accepts one required user-owned `question` and uses it
+unchanged as the adaptive planner and hypothesis-generation goal. The previous
+`incident_summary` field was redundant and was removed from the typed contract.
+Repository owner/name remain explicit required GitHub context; incident,
+deployment, service, environment, and PR context remain secondary fields.
+
+The development-only `Checkout 500 after deployment` preset fills the coherent
+fake scenario: question `Why did checkout start returning 500s after the latest
+deployment?`, `octo-org/analytics`, PR `42`, `incident:checkout-500`,
+`deployment:1042`, `checkout-api`, and `production`. It is only an editable UI
+helper; the backend receives an ordinary `InvestigationRequest` and has no
+preset-specific branch.
+
 ## Invariants
 
 - Raw model causal prose never reaches the final result or normal UI.

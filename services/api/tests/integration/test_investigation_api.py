@@ -32,7 +32,7 @@ class InvestigationApiTests(unittest.TestCase):
         return InvestigationRequest(
             repository_owner="octo-org",
             repository_name="analytics",
-            incident_summary="Checkout failures increased.",
+            question="Why did checkout failures increase?",
             incident_reference="incident:checkout-500",
         )
 
@@ -62,6 +62,26 @@ class InvestigationApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["status"], "pending")
         self.assertIsNotNone(self.repository.get(UUID(response.json()["run_id"])))
+
+    def test_checkout_fixture_request_completes_with_persisted_evidence(self) -> None:
+        workflow = InvestigationWorkflowService(self.repository, FakeLLMClient())
+        request = InvestigationRequest(
+            repository_owner="octo-org",
+            repository_name="analytics",
+            question="Why did checkout start returning 500s after the latest deployment?",
+            incident_reference="incident:checkout-500",
+            deployment_reference="deployment:1042",
+            pull_request_number=42,
+            service="checkout-api",
+            environment="production",
+        )
+
+        pending = asyncio.run(workflow.create_persisted_run(request))
+        completed = asyncio.run(workflow.continue_persisted_run(pending))
+
+        self.assertEqual(completed.status, "completed")
+        self.assertIsNotNone(completed.state)
+        self.assertTrue(completed.state.evidence)
 
 
 if __name__ == "__main__":

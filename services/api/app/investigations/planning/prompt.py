@@ -41,14 +41,6 @@ def _tool_context(definition: ToolDefinition) -> PlannerToolDefinition:
 
 
 class ContextBuilder:
-    # PURPOSE: Make the planner's untrusted input a reproducible projection of
-    # current investigation state, rather than a second mutable runtime model.
-    #
-    # DESIGN: Sorting IDs and tool definitions makes equivalent state produce
-    # equivalent Pydantic input, which is useful for deterministic tests and
-    # later replay without introducing LLM summarization or retrieval.
-    """Build the bounded, deterministic state supplied to the planner."""
-
     def build(
         self,
         investigation_goal: str,
@@ -94,13 +86,8 @@ def build_planner_input(
     planning_round: int = 1,
     max_planning_rounds: int = 1,
 ) -> PlannerInput:
-    # FLOW: Sort stable domain identifiers -> reduce Evidence to safe summaries ->
-    # expose only the caller-approved tool subset. This deterministic boundary
-    # makes equivalent state produce equivalent prompt data for review and replay.
-    # The goal remains the user's typed incident summary, not inferred model prose.
-    """Compress normalized investigation state before it crosses the LLM boundary."""
     return ContextBuilder().build(
-        request.incident_summary,
+        request.question,
         result.facts,
         result.missing_information,
         result.evidence,

@@ -548,7 +548,7 @@ function isInvestigationRequest(value: unknown): boolean {
     isRecord(value) &&
     isNonEmptyString(value.repository_owner) &&
     isNonEmptyString(value.repository_name) &&
-    isNonEmptyString(value.incident_summary)
+    isNonEmptyString(value.question)
   )
 }
 

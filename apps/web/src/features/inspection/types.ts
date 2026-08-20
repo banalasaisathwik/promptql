@@ -282,7 +282,7 @@ export interface LiveRunStart {
 export interface InvestigationRequest {
   repository_owner: string
   repository_name: string
-  incident_summary: string
+  question: string
   incident_reference?: string | null
   deployment_reference?: string | null
   pull_request_number?: number | null

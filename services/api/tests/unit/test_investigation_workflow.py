@@ -10,8 +10,6 @@ from app.workflows.investigation import InvestigationWorkflowService
 
 
 class SequentialPlannerClient:
-    """Test-only typed planner client that records each bounded planner input."""
-
     provider = LLMProviderName.FAKE
     model = "sequential-planner-test-double"
 
@@ -75,7 +73,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             InvestigationRequest(
                 repository_owner="octo-org",
                 repository_name="analytics",
-                incident_summary="Checkout failures increased.",
+                question="Why did checkout failures increase?",
                 incident_reference="incident:checkout-500",
                 pull_request_number=42,
             )
@@ -98,7 +96,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         request = InvestigationRequest(
             repository_owner="octo-org",
             repository_name="analytics",
-            incident_summary="Checkout failures increased.",
+            question="Why did checkout failures increase?",
             incident_reference="incident:checkout-500",
             deployment_reference="deployment:1042",
             pull_request_number=42,
@@ -131,7 +129,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             InvestigationRequest(
                 repository_owner="octo-org",
                 repository_name="analytics",
-                incident_summary="Checkout failures increased.",
+                question="Why did checkout failures increase?",
                 incident_reference="incident:checkout-500",
             )
         )
@@ -139,6 +137,10 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         completed = await workflow.continue_persisted_run(pending)
 
         self.assertEqual([item.planning_round for item in planner.inputs], [1, 2])
+        self.assertEqual(
+            planner.inputs[0].investigation_goal,
+            "Why did checkout failures increase?",
+        )
         self.assertEqual(planner.inputs[0].facts, ())
         self.assertEqual(planner.inputs[0].evidence, ())
         self.assertGreater(len(planner.inputs[1].facts), 0)
@@ -164,7 +166,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             InvestigationRequest(
                 repository_owner="octo-org",
                 repository_name="analytics",
-                incident_summary="Checkout failures increased.",
+                question="Why did checkout failures increase?",
                 incident_reference="incident:checkout-500",
             )
         )
@@ -191,7 +193,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             InvestigationRequest(
                 repository_owner="octo-org",
                 repository_name="analytics",
-                incident_summary="Checkout failures increased.",
+                question="Why did checkout failures increase?",
                 incident_reference="incident:checkout-500",
             )
         )
@@ -211,7 +213,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             InvestigationRequest(
                 repository_owner="octo-org",
                 repository_name="analytics",
-                incident_summary="The service is unhealthy.",
+                question="Why is the service unhealthy?",
             )
         )
 

@@ -43,7 +43,9 @@ def _validate_unique_references(
 class InvestigationRequest(ContractModel):
     repository_owner: NonEmptyString
     repository_name: NonEmptyString
-    incident_summary: NonEmptyString
+
+
+    question: NonEmptyString
     incident_reference: NonEmptyString | None = None
     deployment_reference: NonEmptyString | None = None
     pull_request_number: Annotated[int, Field(strict=True, gt=0)] | None = None

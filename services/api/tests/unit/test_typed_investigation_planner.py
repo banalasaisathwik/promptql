@@ -33,12 +33,10 @@ def _result():
 
 
 def _request():
-    # Keep the prompt test grounded in the same typed request boundary the caller
-    # supplies, instead of letting the planner invent its own investigation goal.
     return InvestigationRequest(
         repository_owner="octo-org",
         repository_name="analytics",
-        incident_summary="Investigate checkout failures after deployment.",
+        question="Investigate checkout failures after deployment.",
     )
 
 
@@ -99,14 +97,12 @@ class PlannerPromptTests(unittest.TestCase):
         )
         prompt_json = planner_input.model_dump_json()
         self.assertIn("allowed_tools", prompt_json)
-        self.assertIn(_request().incident_summary, prompt_json)
+        self.assertIn(_request().question, prompt_json)
         self.assertNotIn("lines", prompt_json)
         self.assertNotIn("root_cause", prompt_json)
 
 
 class TypedPlannerTests(unittest.IsolatedAsyncioTestCase):
-    # These tests use injected fake clients to prove the proposal boundary without
-    # credentials, provider SDK calls, or accidentally executing a V2.5 tool.
     async def test_fake_llm_returns_a_typed_multi_step_plan_without_execution(self) -> None:
         proposed = await TypedLLMPlanner(FakeLLMClient(typed_output=_plan())).plan(
             build_planner_input(_request(), _result(), TOOL_DEFINITIONS)

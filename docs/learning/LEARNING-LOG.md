@@ -2066,3 +2066,26 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   adaptive planner remains available as a separate capability. Checkpoint
   recovery, event replay, live provider verification, and dependency-specific
   hypothesis predicates remain deferred.
+
+### 2026-08-20 - Make investigation creation question-first without interpreting the question
+
+- **V2 milestone:** V2.19 investigation console refinement.
+- **Engineering concept and syntax:** `InvestigationRequest.question` is a required `NonEmptyString` that replaces `incident_summary`, because the old field only supplied planner/hypothesis goal prose. The TypeScript builder trims browser-input strings before serializing the matching snake_case API contract; a `<details>` element keeps supporting context available without visually competing with the primary textarea.
+- **Implementation locations:** `investigations/models.py` owns the strict request contract; `planning/prompt.py`, `hypotheses/prompt.py`, and `workflows/investigation.py` pass the exact question to the existing runtime. The React console, builder, API response validator, and dashboard live in `apps/web/src/features/inspection/`.
+- **Decision and invariant:** The application does not classify, extract, or rewrite natural language. `question` is the sole user-owned goal; repository owner/name remain required explicit GitHub context, while incident, deployment, service, environment, and PR values stay optional evidence context. A preset only fills an editable draft and has no backend meaning.
+- **Fixture and failure behavior:** The sole preset uses the coherent fake combination `octo-org/analytics`, PR `42`, `incident:checkout-500`, `deployment:1042`, `checkout-api`, and `production`. An empty question and an invalid PR are rejected in the browser before submission; the normal API error path still reports sanitized backend failure text.
+- **Trade-off and validation:** Requiring repository details preserves the current GitHub tool contract, so the supporting section cannot be completely optional for custom runs. Focused frontend tests and 31 backend model/planner/workflow/API tests passed before the final comment pass; full build, lint, and discovery validation remain part of this task's final verification.
+
+### 2026-08-20 - Fail startup for a stale investigation persistence schema
+
+- **Engineering concept:** Readiness checks must validate the schema features a
+  live write path needs, not only that a table exists. `workflow_runs` gained
+  the nullable JSONB `investigation_state` column in migration `20260819_0004`.
+- **Implementation and decision:** `database/engine.py` now verifies that
+  column during application startup. This preserves the existing rule that an
+  unavailable repository never silently becomes in-memory storage, while moving
+  an otherwise delayed first-save 503 to a clear startup failure.
+- **Invariant and validation:** `test_database_config.py` supplies a small fake
+  SQLAlchemy inspector missing the column and proves `RunPersistenceError` is
+  raised. The real database must still be migrated with Alembic; code cannot
+  safely alter a deployment database as a side effect of application startup.

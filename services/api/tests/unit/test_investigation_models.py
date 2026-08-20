@@ -131,7 +131,7 @@ class InvestigationModelTests(unittest.TestCase):
         request = InvestigationRequest(
             repository_owner="acme",
             repository_name="checkout",
-            incident_summary="Checkout requests started returning HTTP 500.",
+            question="Why did checkout requests start returning HTTP 500?",
             incident_started_at=datetime(2026, 8, 16, 10, 30, tzinfo=UTC),
             service="checkout-api",
             environment="production",
@@ -144,12 +144,12 @@ class InvestigationModelTests(unittest.TestCase):
         required_fields = (
             "repository_owner",
             "repository_name",
-            "incident_summary",
+            "question",
         )
         valid_values = {
             "repository_owner": "acme",
             "repository_name": "checkout",
-            "incident_summary": "Checkout is failing.",
+            "question": "Why is checkout failing?",
         }
 
         for field_name in required_fields:
@@ -164,7 +164,7 @@ class InvestigationModelTests(unittest.TestCase):
                 {
                     "repository_owner": "acme",
                     "repository_name": "checkout",
-                    "incident_summary": "Checkout is failing.",
+                    "question": "Why is checkout failing?",
                     "planner_prompt": "Investigate everything",
                 }
             )
@@ -173,11 +173,11 @@ class InvestigationModelTests(unittest.TestCase):
         request = InvestigationRequest(
             repository_owner="acme",
             repository_name="checkout",
-            incident_summary="Checkout is failing.",
+            question="Why is checkout failing?",
         )
 
         with self.assertRaises(ValidationError):
-            request.incident_summary = "Changed after validation."  # type: ignore[misc]
+            request.question = "Changed after validation."  # type: ignore[misc]
 
     def test_valid_typed_facts_preserve_machine_readable_meaning(self) -> None:
         facts = (

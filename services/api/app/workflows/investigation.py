@@ -1,5 +1,3 @@
-"""User-facing V2 investigation workflow built on the existing run repository."""
-
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -56,17 +54,6 @@ DEFAULT_TOOL_CALL_BUDGET = 10
 
 
 class InvestigationWorkflowService:
-    # PURPOSE: Adapt the V2 executor and hypothesis boundary to the existing
-    # durable run lifecycle used by the V1 live dashboard.
-    #
-    # FLOW: Save pending -> save running/plan snapshots -> execute validated
-    # read-only steps -> validate hypothesis candidates against Facts -> render
-    # the grounded result -> save one terminal snapshot.
-    #
-    # WHY: Keeping persistence and execution orchestration here lets the router
-    # remain an HTTP boundary and keeps the existing polling path authoritative.
-    """Create durable V2 snapshots while reusing the existing polling boundary."""
-
     def __init__(
         self,
         repository: RunRepository,
@@ -103,8 +90,6 @@ class InvestigationWorkflowService:
         return pending
 
     async def continue_persisted_run(self, pending: InvestigationRun) -> InvestigationRun:
-        # The first running save gives a refresh a real lifecycle state; the
-        # later plan save exposes pending tool steps before external calls begin.
         started_at = datetime.now(UTC)
         running = pending.model_copy(
             update={
@@ -126,8 +111,7 @@ class InvestigationWorkflowService:
             ToolInvoker(registry, adapters),
         )
 
-        # These callbacks are invoked only at round boundaries. Keeping saves
-        # here avoids changing AgentExecutor just to expose per-step polling.
+
         async def save_planned_round(state, planned) -> None:
             snapshot = self._snapshot_from_adaptive(state)
             round_number = len(state.rounds) + 1
@@ -157,13 +141,10 @@ class InvestigationWorkflowService:
             )
 
         try:
-            # The planner may propose work, but the existing adaptive runtime
-            # remains the authority for validation, shared budget accounting,
-            # round termination, and accumulated Evidence/Facts.
             adaptive_state = await AdaptiveInvestigationRuntime(
                 TypedLLMPlanner(self._planner_client), PlanValidator(registry), executor
             ).investigate(
-                running.request.incident_summary,
+                running.request.question,
                 registry.list(),
                 budget=ExecutionBudget(max_tool_calls=DEFAULT_TOOL_CALL_BUDGET),
                 on_round_planned=save_planned_round,
@@ -175,14 +156,13 @@ class InvestigationWorkflowService:
                 started_at,
                 RuntimeErrorCode.INVESTIGATION_RUNTIME_FAILURE,
             )
-        # Compatibility boundary: failure-location evidence remains a bounded
-        # post-processing lookup in Pass A, rather than becoming a planner tool.
+
+
         adaptive_state = await self._add_failure_location_to_adaptive_state(
             adaptive_state, running.request
         )
-        # Execution state is converted to a compact API snapshot before any
-        # hypothesis generation, so Facts remain the source of truth for both
-        # observability and final rendering.
+
+
         state = self._snapshot_from_adaptive(adaptive_state)
 
         validated_hypotheses = ()
@@ -216,9 +196,8 @@ class InvestigationWorkflowService:
             update={
                 "validated_hypotheses": validated_hypotheses,
                 "rejected_hypothesis_count": rejected_count,
-                # The snapshot reports the adaptive runtime's actual stopping
-                # condition; the rendered result may separately report that
-                # hypothesis generation was unavailable.
+
+
                 "termination_reason": adaptive_state.continuation_reason.value,
             }
         )

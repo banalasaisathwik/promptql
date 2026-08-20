@@ -15,7 +15,7 @@ const RUN: InvestigationRun = {
   request: {
     repository_owner: 'octo-org',
     repository_name: 'analytics',
-    incident_summary: 'Checkout failed.',
+    question: 'Why did checkout fail?',
   },
   error: null,
   state: {
