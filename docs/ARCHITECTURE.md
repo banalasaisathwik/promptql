@@ -386,10 +386,14 @@ ValidatedHypothesis + validated supporting Facts
   -> InvestigationDashboard
 ```
 
-The current integration uses a bounded static plan to exercise the existing
-validated plan and executor path while the full adaptive planner remains a
-separate runtime capability. No new SSE, WebSocket, event bus, Langfuse, or
-OpenTelemetry replacement is introduced.
+The live workflow uses `AdaptiveInvestigationRuntime` as its primary execution
+path. It obtains each bounded typed plan through the configured LLM client,
+validates it through the existing `PlanValidator`, and executes it through the
+existing `AgentExecutor`. A validated round plan and each completed round are
+persisted through the same snapshot row and polling path; completed prior
+rounds remain visible when the next plan is saved. The older static-plan helper remains only
+as a compatibility baseline, not as the user-facing route. No new SSE,
+WebSocket, event bus, Langfuse, or OpenTelemetry replacement is introduced.
 
 ```text
 redis-prod ----

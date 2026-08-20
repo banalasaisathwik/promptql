@@ -18,6 +18,55 @@ action history (what was attempted). Focused evidence is in
 tests validate the behavior. V2.15 is postponed because no natural existing
 cancellation signal exists; adding one would create an API/lifecycle boundary.
 
+## 2026-08-20 — Live workflow delegates planning rounds to the adaptive runtime
+
+- **Concept:** A workflow is an integration boundary, not a second planner. The
+  live investigation route now delegates planning, validation, shared budget
+  accounting, execution, and round termination to the existing
+  `AdaptiveInvestigationRuntime`.
+- **Important syntax:** The optional `planner_client: TypedLLMClient | None`
+  constructor dependency uses the production LLM client by default but lets a
+  test inject an independent typed planner double. `model_copy(update=...)`
+  derives the final snapshot without mutating validated runtime models.
+- **Implementation location:**
+  `services/api/app/workflows/investigation.py` wires the runtime and maps its
+  final state to `InvestigationRuntimeSnapshot`; the sequential planner in
+  `services/api/tests/unit/test_investigation_workflow.py` records typed
+  `PlannerInput` values across rounds.
+- **Design decision:** Reuse the V2.16 planner, validator, executor, and final
+  snapshot contract rather than duplicate their control flow in the workflow.
+  The static-plan helper stays as a compatibility baseline while Pass B adds
+  truthful intermediate round persistence.
+- **Invariant or failure behavior:** The persisted final snapshot keeps the
+  adaptive runtime's exact continuation reason even if later hypothesis
+  generation is unavailable. Later planner inputs receive accumulated Evidence,
+  Facts, action history, the reduced global budget, and the same allowed tools.
+- **Trade-off and unresolved question:** Final-only persistence keeps this pass
+  narrow and avoids executor callbacks, but polling cannot yet show a planned
+  or in-progress round. That truthful round-level checkpointing is the next
+  milestone.
+- **Validation evidence:**
+  `python -m unittest tests.unit.test_investigation_workflow tests.unit.test_adaptive_investigation_runtime -v`
+  and `python -m unittest discover -s tests`.
+
+## 2026-08-20 â€” Persist only trustworthy adaptive round boundaries
+
+- **Concept:** A polling UI needs durable observations, not optimistic local
+  progress. A validated plan is saved before its external calls, and the
+  accumulated adaptive state is saved after the round completes.
+- **Implementation location:** `replanning.py` emits callbacks only at those
+  existing round boundaries; `investigation.py` maps them to the established
+  snapshot and repository. `planning/prompt.py` supplies the deterministic
+  `ContextBuilder` for every adaptive `PlannerInput`.
+- **Invariant or failure behavior:** Later planned snapshots retain earlier
+  completed rounds. A later planner failure preserves prior Evidence, Facts,
+  and completed rounds with `planner_failure` as the termination reason.
+- **Trade-off and unresolved question:** This is truthful round-level polling,
+  not per-step streaming; per-step checkpoints remain deferred because they
+  would require changing the executor lifecycle.
+- **Validation evidence:** Focused tests cover planned/completed saves,
+  two-round accumulation, and planner-failure preservation.
+
 This log stores concise, reusable engineering lessons supported by repository
 evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 

@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 
-from app.investigations.models import Evidence, InvestigationRequest, InvestigationResult
+from app.investigations.models import Evidence, FactSet, InvestigationRequest, InvestigationResult, MissingInformation
 from app.investigations.planning.models import (
     ActionSummary,
     CompactEvidenceContext,
@@ -40,6 +40,50 @@ def _tool_context(definition: ToolDefinition) -> PlannerToolDefinition:
     )
 
 
+class ContextBuilder:
+    # PURPOSE: Make the planner's untrusted input a reproducible projection of
+    # current investigation state, rather than a second mutable runtime model.
+    #
+    # DESIGN: Sorting IDs and tool definitions makes equivalent state produce
+    # equivalent Pydantic input, which is useful for deterministic tests and
+    # later replay without introducing LLM summarization or retrieval.
+    """Build the bounded, deterministic state supplied to the planner."""
+
+    def build(
+        self,
+        investigation_goal: str,
+        facts: FactSet,
+        missing_information: tuple[MissingInformation, ...],
+        evidence: tuple[Evidence, ...],
+        allowed_tools: Iterable[ToolDefinition],
+        *,
+        action_history: tuple[ActionSummary, ...] = (),
+        remaining_tool_calls: int = 0,
+        planning_round: int = 1,
+        max_planning_rounds: int = 1,
+    ) -> PlannerInput:
+        return PlannerInput(
+            investigation_goal=investigation_goal,
+            facts=tuple(sorted(facts, key=lambda fact: fact.fact_id)),
+            missing_information=tuple(sorted(missing_information, key=lambda item: item.missing_information_id)),
+            evidence=tuple(
+                CompactEvidenceContext(
+                    evidence_id=item.evidence_id,
+                    source=item.source,
+                    kind=item.kind,
+                    source_reference=item.provenance.source_reference,
+                    summary=_evidence_summary(item),
+                )
+                for item in sorted(evidence, key=lambda item: item.evidence_id)
+            ),
+            action_history=action_history,
+            remaining_tool_calls=remaining_tool_calls,
+            planning_round=planning_round,
+            max_planning_rounds=max_planning_rounds,
+            allowed_tools=tuple(_tool_context(definition) for definition in sorted(allowed_tools, key=lambda item: item.tool_id)),
+        )
+
+
 def build_planner_input(
     request: InvestigationRequest,
     result: InvestigationResult,
@@ -55,31 +99,14 @@ def build_planner_input(
     # makes equivalent state produce equivalent prompt data for review and replay.
     # The goal remains the user's typed incident summary, not inferred model prose.
     """Compress normalized investigation state before it crosses the LLM boundary."""
-    return PlannerInput(
-        investigation_goal=request.incident_summary,
-        facts=tuple(sorted(result.facts, key=lambda fact: fact.fact_id)),
-        missing_information=tuple(
-            sorted(
-                result.missing_information,
-                key=lambda item: item.missing_information_id,
-            )
-        ),
-        evidence=tuple(
-            CompactEvidenceContext(
-                evidence_id=evidence.evidence_id,
-                source=evidence.source,
-                kind=evidence.kind,
-                source_reference=evidence.provenance.source_reference,
-                summary=_evidence_summary(evidence),
-            )
-            for evidence in sorted(result.evidence, key=lambda item: item.evidence_id)
-        ),
+    return ContextBuilder().build(
+        request.incident_summary,
+        result.facts,
+        result.missing_information,
+        result.evidence,
+        allowed_tools,
         action_history=action_history,
         remaining_tool_calls=remaining_tool_calls,
         planning_round=planning_round,
         max_planning_rounds=max_planning_rounds,
-        allowed_tools=tuple(
-            _tool_context(definition)
-            for definition in sorted(allowed_tools, key=lambda item: item.tool_id)
-        ),
     )

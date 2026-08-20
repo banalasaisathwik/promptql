@@ -21,7 +21,7 @@ from app.investigations.planning.models import (
     PlannerToolInputField,
     StepOutputRef,
 )
-from app.investigations.planning.prompt import build_planner_input
+from app.investigations.planning.prompt import ContextBuilder, build_planner_input
 from app.investigations.planning.service import TypedLLMPlanner
 from app.investigations.planning.validation import (
     PlanValidationFailure,
@@ -33,6 +33,7 @@ from app.investigations.planning.validation import (
 
 __all__ = [
     "ActionSummary",
+    "ContextBuilder",
     "MAX_ADAPTIVE_PLAN_STEPS",
     "CompactEvidenceContext",
     "InvestigationPlan",

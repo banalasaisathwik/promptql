@@ -1,6 +1,6 @@
 """Bounded, round-boundary orchestration for V2 investigation replanning."""
 
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from enum import StrEnum
 
 from pydantic import Field
@@ -10,10 +10,11 @@ from app.investigations.execution import AgentExecutor, ExecutionBudget, Investi
 from app.investigations.models import Evidence, FactSet, MissingInformation
 from app.investigations.planning import (
     ActionSummary,
-    CompactEvidenceContext,
+    ContextBuilder,
     InvestigationPlannerError,
     MAX_ADAPTIVE_PLAN_STEPS,
     PlanValidator,
+    PlannedInvestigation,
     PlannerInput,
     PlannerToolDefinition,
     PlannerToolInputField,
@@ -66,16 +67,6 @@ def _tool_context(definition: ToolDefinition) -> PlannerToolDefinition:
     )
 
 
-def _evidence_context(evidence: Evidence) -> CompactEvidenceContext:
-    return CompactEvidenceContext(
-        evidence_id=evidence.evidence_id,
-        source=evidence.source,
-        kind=evidence.kind,
-        source_reference=evidence.provenance.source_reference,
-        summary=f"{evidence.content.content_type} evidence",
-    )
-
-
 class AdaptiveInvestigationRuntime:
     # PURPOSE: Coordinate several short, independently validated plans while
     # preserving one investigation's accumulated state and global call limit.
@@ -103,6 +94,8 @@ class AdaptiveInvestigationRuntime:
         budget: ExecutionBudget,
         initial_evidence: tuple[Evidence, ...] = (),
         initial_missing_information: tuple[MissingInformation, ...] = (),
+        on_round_planned: Callable[[AdaptiveInvestigationState, PlannedInvestigation], Awaitable[None]] | None = None,
+        on_round_completed: Callable[[AdaptiveInvestigationState], Awaitable[None]] | None = None,
     ) -> AdaptiveInvestigationState:
         definitions = tuple(sorted(allowed_tools, key=lambda item: item.tool_id))
         evidence = initial_evidence
@@ -116,16 +109,16 @@ class AdaptiveInvestigationRuntime:
         for round_number in range(1, MAX_PLANNING_ROUNDS + 1):
             if remaining == 0:
                 return self._state(rounds, evidence, facts, missing_information, history, remaining, ContinuationReason.TOOL_CALL_BUDGET_EXHAUSTED)
-            planner_input = PlannerInput(
-                investigation_goal=investigation_goal,
-                facts=facts,
-                missing_information=missing_information,
-                evidence=tuple(_evidence_context(item) for item in evidence),
+            planner_input = ContextBuilder().build(
+                investigation_goal,
+                facts,
+                missing_information,
+                evidence,
+                definitions,
                 action_history=tuple(history),
                 remaining_tool_calls=remaining,
                 planning_round=round_number,
                 max_planning_rounds=MAX_PLANNING_ROUNDS,
-                allowed_tools=tuple(_tool_context(item) for item in definitions),
             )
             try:
                 planned = await self._planner.plan(planner_input)
@@ -138,6 +131,11 @@ class AdaptiveInvestigationRuntime:
             validation = self._validator.validate(planned.plan, definitions)
             if not validation.valid:
                 return self._state(rounds, evidence, facts, missing_information, history, remaining, ContinuationReason.PLAN_VALIDATION_FAILURE)
+            if on_round_planned is not None:
+                await on_round_planned(
+                    self._state(rounds, evidence, facts, missing_information, history, remaining, ContinuationReason.COMPLETE),
+                    planned,
+                )
             before_evidence = {item.evidence_id for item in evidence}
             before_facts = {item.fact_id for item in facts}
             # The executor receives only the remaining global allowance. Its
@@ -158,6 +156,10 @@ class AdaptiveInvestigationRuntime:
                     item.evidence_id for item in (step.tool_result.evidence if step.tool_result else ())
                 }
                 history.append(ActionSummary(tool_id=tool_id, outcome=step.tool_result.outcome if step.tool_result else ToolOutcome.FAILED, produced_new_evidence=bool(result_evidence_ids.intersection(evidence_delta)), produced_new_facts=bool(fact_delta and result_evidence_ids)))
+            if on_round_completed is not None:
+                await on_round_completed(
+                    self._state(rounds, evidence, facts, missing_information, history, remaining, ContinuationReason.COMPLETE)
+                )
             # ID deltas mean state changed; they deliberately do not rank the
             # information or introduce a provider/domain-specific signal rule.
             no_progress_rounds = no_progress_rounds + 1 if not evidence_delta and not fact_delta else 0
