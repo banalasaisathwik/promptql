@@ -1,7 +1,7 @@
-import type { PullRequestMergeReadiness } from './types'
+import type { RuntimeRun } from './types'
 
 
-export function isTerminalRun(run: PullRequestMergeReadiness): boolean {
+export function isTerminalRun(run: RuntimeRun): boolean {
   return (
     run.status === 'completed' ||
     run.status === 'failed' ||
@@ -12,12 +12,12 @@ export function isTerminalRun(run: PullRequestMergeReadiness): boolean {
 
 type SnapshotLoader = (
   signal: AbortSignal,
-) => Promise<PullRequestMergeReadiness>
+  ) => Promise<RuntimeRun>
 
 
 interface RunPollingControllerOptions {
   loadSnapshot: SnapshotLoader
-  onSnapshot: (snapshot: PullRequestMergeReadiness) => void
+  onSnapshot: (snapshot: RuntimeRun) => void
   onRefreshError: (message: string) => void
   shouldRetryError?: (error: unknown) => boolean
   intervalMilliseconds?: number
@@ -26,7 +26,7 @@ interface RunPollingControllerOptions {
 
 export class RunPollingController {
   private readonly loadSnapshot: SnapshotLoader
-  private readonly onSnapshot: (snapshot: PullRequestMergeReadiness) => void
+  private readonly onSnapshot: (snapshot: RuntimeRun) => void
   private readonly onRefreshError: (message: string) => void
   private readonly intervalMilliseconds: number
   private readonly shouldRetryError: (error: unknown) => boolean

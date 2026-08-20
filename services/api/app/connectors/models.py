@@ -1,10 +1,21 @@
 from enum import StrEnum
 from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
 NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+GitHubRepositoryIdentifier = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+]
+CommitSha = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        pattern=r"^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$",
+    ),
+]
 
 
 JiraIssueKey = Annotated[
@@ -59,6 +70,73 @@ class ConnectorRequest(ContractModel):
     repository_owner: NonEmptyString
     repository_name: NonEmptyString
     pr_number: Annotated[int, Field(strict=True, gt=0)]
+
+
+class GitHubCommitEvidenceRequest(ContractModel):
+    repository_owner: GitHubRepositoryIdentifier
+    repository_name: GitHubRepositoryIdentifier
+    commit_sha: CommitSha
+
+
+class GitHubPullRequestEvidenceRequest(ContractModel):
+    repository_owner: GitHubRepositoryIdentifier
+    repository_name: GitHubRepositoryIdentifier
+    pr_number: Annotated[int, Field(strict=True, gt=0)]
+
+
+class IncidentEvidenceRequest(ContractModel):
+    incident_reference: NonEmptyString
+
+
+class DeploymentEvidenceRequest(ContractModel):
+    deployment_reference: NonEmptyString
+
+
+class FailureLocationEvidenceRequest(ContractModel):
+    incident_reference: NonEmptyString
+
+
+class TelemetrySignal(StrEnum):
+    ERROR_EVENTS = "error_events"
+    LOG_EVENTS = "log_events"
+    TRACE_ERRORS = "trace_errors"
+
+
+TelemetryFilterKey = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_.-]*$",
+    ),
+]
+TelemetryFilterValue = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=256),
+]
+
+
+class TelemetryFilter(ContractModel):
+    key: TelemetryFilterKey
+    value: TelemetryFilterValue
+
+
+class TelemetryWindowEvidenceRequest(ContractModel):
+    service: NonEmptyString
+    signal: TelemetrySignal
+    start_time: AwareDatetime
+    end_time: AwareDatetime
+    filters: Annotated[tuple[TelemetryFilter, ...], Field(max_length=20)] = ()
+
+    @model_validator(mode="after")
+    def validate_window_and_filters(self) -> Self:
+        if self.start_time >= self.end_time:
+            raise ValueError("telemetry start_time must be before end_time")
+        filter_pairs = {(filter.key, filter.value) for filter in self.filters}
+        if len(filter_pairs) != len(self.filters):
+            raise ValueError("telemetry filters cannot contain duplicate key/value pairs")
+        return self
 
 
 class GitHubUser(ContractModel):

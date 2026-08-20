@@ -20,6 +20,7 @@ from app.config import (
 )
 from app.connectors.errors import FixtureNotFoundError
 from app.connectors.factory import (
+    create_github_code_evidence_source,
     create_github_connector,
     create_github_http_client,
     create_jira_connector,
@@ -47,6 +48,7 @@ from app.runtime import (
     RunRecordInvalidError,
     RunStateConflictError,
 )
+from app.workflows import InvestigationWorkflowService
 
 
 async def fixture_not_found_handler(
@@ -130,6 +132,11 @@ def create_app(
         app_observability.runtime_telemetry,
         github_http_client,
     )
+    github_code_source = create_github_code_evidence_source(
+        resolved_github_settings,
+        app_observability.runtime_telemetry,
+        github_http_client,
+    )
 
     jira_http_client = None
     if resolved_jira_settings.mode is JiraConnectorMode.JIRA:
@@ -191,6 +198,8 @@ def create_app(
     application.state.github_connector = github_connector
     application.state.jira_connector = jira_connector
     application.state.merge_readiness_explanation_service = explanation_service
+    application.state.investigation_llm_client = selected_llm_client
+    application.state.github_code_source = github_code_source
     application.state.live_run_task_registry = live_run_task_registry
     application.include_router(connector_router)
     application.add_exception_handler(

@@ -37,3 +37,9 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-016](ADR-016-durable-run-source-provenance.md) | Accepted | Persist bounded GitHub, Jira, and explanation source provenance and render typed failed runs |
 | [ADR-017](ADR-017-groq-openai-compatible-explanation-adapter.md) | Accepted | Add explicit Groq identity through the fixed OpenAI-compatible endpoint with unchanged deterministic validation |
 | [ADR-018](ADR-018-live-run-dashboard-snapshot-polling.md) | Accepted | Additive 202 live-start endpoint with in-process execution and persisted-snapshot polling |
+| [ADR-019](ADR-019-investigation-domain-contracts.md) | Accepted | Minimal typed investigation facts, explicit hypotheses and unknowns, and deterministic result invariants |
+| [ADR-020](ADR-020-first-class-investigation-evidence.md) | Accepted | Provider-neutral immutable evidence envelope with typed content, provenance, and result-level reference validation |
+| [ADR-021](ADR-021-focused-github-code-evidence-source.md) | Accepted | Focused read-only GitHub code-evidence protocol with bounded normalization, pagination, and diff parsing |
+| [ADR-023](ADR-023-bounded-tool-retry-policy.md) | Accepted | Typed transient failure classification and executor-owned bounded retries charged to the shared tool-call budget |
+| [ADR-024](ADR-024-grounded-hypothesis-proposals.md) | Accepted | Bounded LLM hypothesis proposals with deterministic Fact-relationship validation |
+| [ADR-025](ADR-025-investigation-console-snapshot-integration.md) | Accepted | Investigation console uses the existing persisted run snapshot and polling mechanism |

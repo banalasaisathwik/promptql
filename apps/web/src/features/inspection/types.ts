@@ -278,3 +278,120 @@ export interface LiveRunStart {
   run_id: string
   status: 'pending'
 }
+
+export interface InvestigationRequest {
+  repository_owner: string
+  repository_name: string
+  incident_summary: string
+  incident_reference?: string | null
+  deployment_reference?: string | null
+  pull_request_number?: number | null
+  jira_issue_key?: string | null
+  service?: string | null
+  environment?: string | null
+}
+
+export interface InvestigationEvidence {
+  evidence_id: string
+  source: string
+  kind: string
+  provenance: {
+    source_reference: string
+    observed_at: string | null
+    retrieved_at: string
+  }
+  content: Record<string, unknown>
+}
+
+export interface InvestigationFact {
+  fact_id: string
+  fact_type: string
+  evidence_reference_ids: string[]
+  [key: string]: unknown
+}
+
+export interface InvestigationMissingInformation {
+  missing_information_id: string
+  kind: string
+  detail: string | null
+  related_fact_ids: string[]
+  related_hypothesis_ids: string[]
+}
+
+export type InvestigationStepStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'blocked'
+
+export interface InvestigationStepSnapshot {
+  step_id: string
+  tool_id: string
+  status: InvestigationStepStatus
+  attempts: number
+  failure_code: string | null
+  failure_message: string | null
+  block_reason: string | null
+}
+
+export interface InvestigationPlanningRound {
+  round_number: number
+  plan_id: string
+  plan_validation_status: string
+  steps: InvestigationStepSnapshot[]
+  evidence_delta_ids: string[]
+  fact_delta_ids: string[]
+  completed: boolean
+}
+
+export interface ValidatedHypothesis {
+  hypothesis_id: string
+  kind: string
+  subject: string
+  supporting_fact_ids: string[]
+}
+
+export interface GroundedHypothesis extends ValidatedHypothesis {
+  statement: string
+}
+
+export interface GroundedInvestigationResult {
+  termination_reason: string
+  summary: string
+  supported_hypotheses: GroundedHypothesis[]
+  key_fact_ids: string[]
+  missing_information: InvestigationMissingInformation[]
+}
+
+export interface InvestigationRuntimeState {
+  rounds: InvestigationPlanningRound[]
+  evidence: InvestigationEvidence[]
+  facts: InvestigationFact[]
+  missing_information: InvestigationMissingInformation[]
+  validated_hypotheses: ValidatedHypothesis[]
+  rejected_hypothesis_count: number
+  max_tool_calls: number
+  used_tool_calls: number
+  remaining_tool_calls: number
+  termination_reason: string | null
+}
+
+export interface InvestigationRuntimeError {
+  code: string
+  message: string
+}
+
+interface InvestigationRunBase {
+  run_id: string
+  workflow_name: 'investigation'
+  workflow_version: string
+  status: RuntimeStatus
+  started_at: string | null
+  completed_at: string | null
+  steps: []
+  request: InvestigationRequest
+}
+
+export interface InvestigationRun extends InvestigationRunBase {
+  error: InvestigationRuntimeError | null
+  state: InvestigationRuntimeState | null
+  result: GroundedInvestigationResult | null
+}
+
+export type RuntimeRun = PullRequestMergeReadiness | InvestigationRun

@@ -1,5 +1,72 @@
 # Learning log
 
+## 2026-08-19 — V2.16 bounded replanning
+
+`AdaptiveInvestigationRuntime` in `services/api/app/investigations/replanning.py`
+coordinates short planning rounds without duplicating `AgentExecutor`. A round
+is plan, deterministic validation, then full execution; a retry remains an
+attempt inside one step, not a replan. The runtime passes the remaining global
+tool-call budget into each executor call, so retries and later rounds share the
+same authoritative limit.
+
+The reusable safety pattern is comparing before/after Evidence and Fact ID sets.
+An empty pair is no progress, while a non-empty pair only means state changed:
+it must not become a hard-coded judgment that a particular provider error is
+important. Planner input keeps Facts (what is known) separate from compact
+action history (what was attempted). Focused evidence is in
+`test_adaptive_investigation_runtime.py`; compilation and V2 executor/planner
+tests validate the behavior. V2.15 is postponed because no natural existing
+cancellation signal exists; adding one would create an API/lifecycle boundary.
+
+## 2026-08-20 — Live workflow delegates planning rounds to the adaptive runtime
+
+- **Concept:** A workflow is an integration boundary, not a second planner. The
+  live investigation route now delegates planning, validation, shared budget
+  accounting, execution, and round termination to the existing
+  `AdaptiveInvestigationRuntime`.
+- **Important syntax:** The optional `planner_client: TypedLLMClient | None`
+  constructor dependency uses the production LLM client by default but lets a
+  test inject an independent typed planner double. `model_copy(update=...)`
+  derives the final snapshot without mutating validated runtime models.
+- **Implementation location:**
+  `services/api/app/workflows/investigation.py` wires the runtime and maps its
+  final state to `InvestigationRuntimeSnapshot`; the sequential planner in
+  `services/api/tests/unit/test_investigation_workflow.py` records typed
+  `PlannerInput` values across rounds.
+- **Design decision:** Reuse the V2.16 planner, validator, executor, and final
+  snapshot contract rather than duplicate their control flow in the workflow.
+  The static-plan helper stays as a compatibility baseline while Pass B adds
+  truthful intermediate round persistence.
+- **Invariant or failure behavior:** The persisted final snapshot keeps the
+  adaptive runtime's exact continuation reason even if later hypothesis
+  generation is unavailable. Later planner inputs receive accumulated Evidence,
+  Facts, action history, the reduced global budget, and the same allowed tools.
+- **Trade-off and unresolved question:** Final-only persistence keeps this pass
+  narrow and avoids executor callbacks, but polling cannot yet show a planned
+  or in-progress round. That truthful round-level checkpointing is the next
+  milestone.
+- **Validation evidence:**
+  `python -m unittest tests.unit.test_investigation_workflow tests.unit.test_adaptive_investigation_runtime -v`
+  and `python -m unittest discover -s tests`.
+
+## 2026-08-20 â€” Persist only trustworthy adaptive round boundaries
+
+- **Concept:** A polling UI needs durable observations, not optimistic local
+  progress. A validated plan is saved before its external calls, and the
+  accumulated adaptive state is saved after the round completes.
+- **Implementation location:** `replanning.py` emits callbacks only at those
+  existing round boundaries; `investigation.py` maps them to the established
+  snapshot and repository. `planning/prompt.py` supplies the deterministic
+  `ContextBuilder` for every adaptive `PlannerInput`.
+- **Invariant or failure behavior:** Later planned snapshots retain earlier
+  completed rounds. A later planner failure preserves prior Evidence, Facts,
+  and completed rounds with `planner_failure` as the termination reason.
+- **Trade-off and unresolved question:** This is truthful round-level polling,
+  not per-step streaming; per-step checkpoints remain deferred because they
+  would require changing the executor lifecycle.
+- **Validation evidence:** Focused tests cover planned/completed saves,
+  two-round accumulation, and planner-failure preservation.
+
 This log stores concise, reusable engineering lessons supported by repository
 evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 
@@ -1579,3 +1646,423 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** When V2 needs history, replay, crash recovery, or
   many live viewers, what durable `RunEvent` shape and SSE cursor contract can
   extend snapshots without exposing private model reasoning?
+
+### 2026-08-16 - Model investigation facts separately from hypotheses
+
+- **V2 milestone:** V2.1 Investigation Domain Model.
+- **Concept:** A domain contract encodes meaning and valid relationships, not
+  transport, storage, or runtime lifecycle. Typed facts are deterministically
+  supported findings; hypotheses remain candidate explanations whose grounding
+  does not prove objective correctness.
+- **Important syntax:** `Annotated[..., Field(discriminator="fact_type")]`
+  makes Pydantic select one fact schema from a union using a stable literal tag.
+  `StrEnum` restricts codes while preserving JSON strings, and
+  `@model_validator(mode="after")` validates relationships across already parsed
+  immutable values.
+- **Implementation locations:** `investigations/models.py` defines requests,
+  three fact variants, hypotheses, unknowns, actions, and result invariants;
+  `test_investigation_models.py` proves valid and invalid construction. ADR-019
+  records why runtime, evidence, and LLM integration remain separate.
+- **Design decision:** Use a small discriminated fact union and an extensible
+  constrained hypothesis code. This preserves machine-readable fact semantics
+  without pretending the project already knows a universal root-cause taxonomy.
+- **Invariant or failure behavior:** Every fact cites a future evidence ID;
+  entity IDs are unique; internal references resolve; grounded or contradicted
+  hypotheses cite facts/evidence; and insufficient evidence can produce explicit
+  unknowns without an invented hypothesis.
+- **Trade-off:** Adding a fact kind requires an explicit union change and tests,
+  but consumers never need to parse prose to discover which fields are valid.
+  Evidence existence cannot be validated until V2.2 owns evidence records.
+- **Validation evidence:** `.venv\Scripts\python.exe -m unittest
+  tests.unit.test_investigation_models -v`, complete backend discovery,
+  `compileall`, and `git diff --check` validate the domain boundary and V1
+  compatibility.
+- **Unresolved question:** Which provenance fields must V2.2 evidence expose so
+  a fact builder can prove both evidence existence and deterministic derivation?
+
+### 2026-08-17 - Preserve source observations before deriving facts
+
+- **V2 milestone:** V2.2 First-Class Evidence and Provenance Domain Model.
+- **Concept:** Evidence is an immutable normalized source observation; a fact is
+  a deterministic conclusion derived from evidence. Provenance records where an
+  observation came from and distinguishes source-event time from retrieval time.
+- **Important syntax:** Pydantic `AwareDatetime` rejects naive timestamps.
+  `Annotated[Union, Field(discriminator="content_type")]` validates exactly one
+  typed content variant, while an `after` model validator checks envelope kind,
+  logical source, and aggregate cross-references.
+- **Implementation locations:** `investigations/models.py` contains the envelope,
+  provenance, five content variants, and `InvestigationResult` reference checks;
+  `test_evidence_models.py` covers valid and invalid evidence states. ADR-020
+  records the envelope decision and why V1 `EvidenceReference` remains unchanged.
+- **Design decision:** Share provenance in one envelope and keep content as a
+  small discriminated union. This avoids repeated audit fields without accepting
+  an arbitrary `dict[str, Any]` or provider response schema.
+- **Invariant or failure behavior:** Evidence is frozen; IDs are unique;
+  source/kind/content agree; timestamps are timezone-aware; facts and direct
+  hypothesis evidence links resolve within one result; unavailable data creates
+  `MissingInformation`, not evidence with `None` content.
+- **Trade-off:** Adding a content kind requires an explicit model, enum, source
+  rule, and test. This is more work than accepting a dictionary, but it gives
+  deterministic validation, safer serialization, comparable eval inputs, and
+  clearer migrations. Retrieval may appear before observed time by a small
+  amount because strict ordering would mishandle distributed clock skew.
+- **Validation evidence:** Focused V2.1/V2.2 tests, application/test compilation,
+  complete backend unittest discovery, forbidden-pattern review, and
+  `git diff --check` prove the boundary without provider or persistence calls.
+- **Unresolved question:** In V2.3, should changed-file evidence identify only a
+  pull request, or also require a specific head commit to make repeated PR reads
+  distinguishable without introducing evidence versioning prematurely?
+
+### 2026-08-17 - Normalize GitHub code changes behind a focused capability
+
+- **V2 milestone:** V2.3 GitHub Code/Diff Evidence.
+- **Concept:** An anti-corruption layer validates GitHub's provider model and
+  translates only investigation-relevant fields into immutable V2 evidence.
+  Provider capability remains separate from a future planner-visible tool.
+- **Important syntax:** Python `Protocol` expresses structural async capability;
+  private Pydantic response models ignore unrelated provider fields while
+  validating required ones; a compiled regex parses unified-diff hunk headers;
+  injected `Callable[[], datetime]` clocks make retrieval provenance deterministic.
+- **Implementation locations:** `connectors/protocols.py` defines the focused
+  interface; `github_code_http.py` normalizes HTTP data; `github_diff.py` parses
+  bounded hunks; `github_code_fakes.py` supplies deterministic evidence;
+  `investigations/models.py` owns PR/file/hunk domain contracts; ADR-021 records
+  why the V1 connector remains unchanged.
+- **Design decision:** Use three focused read-only operations and dedicated fake/
+  HTTP implementations while reusing GitHub settings, the application-scoped
+  client, sanitized errors, and telemetry. This follows Interface Segregation
+  without creating planner tools or a generic raw-JSON client.
+- **Invariant or failure behavior:** Raw JSON, headers, profiles, emails, URLs,
+  and provider exceptions never cross the adapter. File counts and rename paths
+  agree; hunk lines consume declared old/new ranges; missing patch differs from
+  malformed patch; page/patch bounds raise `GitHubIncompleteResultError` rather
+  than returning partial evidence as complete.
+- **Trade-off:** Explicit response/content models and a small parser require more
+  code than `dict[str, Any]`, but downstream facts/evals receive predictable,
+  bounded structures. The initial 1,000-file local page budget may reject a
+  legitimate very large PR; that is safer than silent truncation and is
+  reversible when measured workloads justify another bound.
+- **Validation evidence:** 67 new/V2 focused tests, 95 combined V1/V2 connector
+  regression tests, and 278 complete backend tests passed; six PostgreSQL tests
+  were environment-guarded. Compilation, comment-pass reruns, and final diff
+  checks are recorded when the milestone closes.
+- **Unresolved question:** Should V2.6 derive file facts from every returned file,
+  or accept an explicit deterministic relevance filter before fact construction?
+
+### 2026-08-17 - Separate operational evidence from observability export
+
+- **V2 milestone:** V2.4 IncidentSource and normalized operational evidence.
+- **Concept:** A provider-neutral port translates incident-provider observations
+  into immutable evidence without making Grafana, Sentry, Datadog, PromQL, or
+  LogQL part of the investigation domain. Operational telemetry export is not
+  the same capability as querying provider data for an investigation.
+- **Important syntax:** `Protocol` describes the four asynchronous source
+  capabilities structurally; Pydantic `AwareDatetime` and `model_validator`
+  enforce timezone-aware ordered telemetry windows and source-specific content
+  invariants; frozen tuple filters make fixture requests stable dictionary keys.
+- **Implementation locations:** `connectors/models.py` owns bounded provider-
+  neutral requests; `connectors/protocols.py` defines `IncidentSource`;
+  `connectors/incident_fakes.py` supplies deterministic fixtures; and
+  `investigations/models.py` adds incident, deployment, stack/error, and
+  telemetry-window content to the shared V2.2 envelope.
+- **Design decision:** Use four semantic operations instead of one bundled
+  incident lookup. Incident metadata, deployment data, failure locations, and
+  telemetry windows can be independently unavailable and later workflows can
+  request only the evidence they need. The initial implementation is fake-only
+  because existing OTLP/Grafana setup exports telemetry but does not provide a
+  safe configured query boundary.
+- **Invariant or failure behavior:** Provider-specific JSON/query text and raw
+  stacks cannot enter the discriminated content union. Unavailable fixture data
+  raises `FixtureNotFoundError`; it is never represented as invented empty
+  evidence. Observed timestamps remain distinct from retrieval timestamps, and
+  clock skew is not treated as invalid evidence.
+- **Trade-off:** Multiple typed methods and models are more explicit than a
+  generic `query()` function, but they make authorization, testing, future tool
+  design, and provider adaptation safer. Deferring a live adapter postpones
+  real-provider validation, but avoids inventing credentials and query semantics.
+- **Validation evidence:** Focused incident/evidence/V2.3 regression tests,
+  complete backend discovery, compilation, final teaching-comment revalidation,
+  and `git diff --check` are recorded with this milestone's completion.
+- **Unresolved question:** When a live provider is justified, should a deployment
+  adapter share the same credentials and source lifecycle as incident telemetry,
+  or become a separately configured provider behind the same port?
+
+### 2026-08-17 - Add typed investigation tools without making the registry an executor
+
+- **V2 milestone:** V2.5 Tool Abstraction and Registry.
+- **Concept:** A connector or source is an application/provider capability;
+  a tool is a smaller stable operation boundary designed for safe selection by
+  deterministic code now and a planner later. `ToolRegistry` catalogs what
+  exists. It does not decide what to request, authorize execution, or implement
+  MCP.
+- **Important syntax:** Pydantic `arbitrary_types_allowed` lets an immutable
+  `ToolDefinition` carry input/output model classes while exposing the input
+  model's JSON schema. `model_validator(mode="after")` keeps `ToolResult`
+  outcome, evidence, and failure combinations consistent. A structural async
+  `Protocol` keeps adapters independent from the future executor.
+- **Implementation locations:** `app/tools/models.py` defines stable IDs,
+  typed inputs, definitions, failures, and evidence results; `registry.py`
+  provides deterministic register/get/list behavior; `adapters.py` connects
+  seven tools to existing V2.3/V2.4/Jira capabilities; and
+  `tests/unit/test_tool_registry.py` covers the boundary.
+- **Design decision:** Keep registry metadata separate from handlers. This lets
+  V2.6 deterministic selection and a future LLM planner share exactly the same
+  tool surface while leaving timeouts, permissions, budgets, retries,
+  idempotency, cancellation, and telemetry to a later runtime.
+- **Invariant or failure behavior:** Tool IDs are stable and unique; listings
+  are sorted; input validation is strict and happens before source execution;
+  results contain normalized `Evidence`; invalid arguments, unknown tools,
+  capability unavailability, source failure, and empty observation are not
+  collapsed into one outcome. Provider payloads and generated prose cannot
+  become tool output.
+- **Trade-off:** Seven semantic tools are more deliberate than exposing every
+  provider method or accepting `get_anything(query)`, but they require adapters
+  and explicit schemas. Failure-location remains internal because it is not yet
+  an independent selection action. The registry has no invocation helper, so a
+  later runtime must compose definition lookup and adapter execution explicitly;
+  that is intentional control rather than missing functionality.
+- **Validation evidence:** `tests.unit.test_tool_registry` passed 14 tests;
+  complete backend unittest discovery passed 297 tests with 6 PostgreSQL tests
+  skipped because `TEST_DATABASE_URL` is absent; `.venv\\Scripts\\python.exe
+  -m compileall -q app tests` and `git diff --check` passed after the final
+  teaching-comment pass. Ruff was not run because no Ruff executable is
+  installed in `services/api/.venv`.
+- **Unresolved question:** When V2.6 chooses among tools, should it use one
+  global registry with deterministic allowed-subset construction or separate
+  per-workflow registries? Dynamic evidence-driven gating remains deferred.
+
+### 2026-08-18 - Derive investigation relationships with ordinary deterministic code
+
+- **V2 milestone:** V2.6 Deterministic Baseline and Fact Derivation.
+- **Concept:** Evidence is a normalized observation; a Fact is a machine-readable
+  relationship proven by joining observations. The baseline chooses fixed tool
+  calls; focused derivation modules decide only what follows from collected evidence.
+- **Implementation locations:** `investigations/baseline.py` owns dispatch,
+  accumulation, branches, and partial failures. `fact_derivation/temporal.py`,
+  `deployment.py`, and `code_change.py` own pure predicates. `models.py` adds
+  relationship facts and `test_deterministic_baseline.py` covers the core flow.
+- **Design decision:** The metadata registry stays separate from execution.
+  `ToolInvoker` checks the registered definition before calling the existing
+  V2.5 adapter. Failure location is an always-on subordinate source enrichment,
+  not a dynamically selected hidden capability.
+- **Invariant or failure behavior:** Each positive Fact preserves all evidence
+  IDs used to prove it. Equal timestamps, mismatched paths/SHAs, absent patches,
+  and zero new-line ranges produce no negative Fact. Failed tools become missing
+  information; hypotheses stay empty and no LLM is called.
+- **Trade-off:** Focused modules repeat small typed filters instead of introducing
+  a generic rule engine. That is less abstract but keeps predicates and provenance
+  easy to inspect and test.
+- **Validation evidence:** 33 focused baseline, model, and tool tests passed;
+  `python -m compileall -q app tests` passed. Full regression and final comment
+  pass remain required.
+
+### 2026-08-18 - Propose typed investigation work without granting execution authority
+
+- **V2 milestone:** V2.7 Typed LLM Planner.
+- **Concept:** Planning is a probabilistic proposal of evidence-gathering work;
+  execution is a later deterministic decision. `PlannerInput` passes compact
+  Facts, missing information, evidence summaries, and a caller-selected tool
+  subset to `TypedLLMPlanner`, which returns a bounded `InvestigationPlan` but
+  never invokes a V2.5 tool or changes V2.6 facts.
+- **Important syntax:** A discriminated Pydantic union represents either
+  `Literal` or `StepOutputRef` argument values; `tuple` fields plus frozen
+  `ContractModel` contracts preserve stable proposal shape. `Protocol` lets the
+  planner depend on `TypedLLMClient` instead of any provider SDK.
+- **Implementation locations:** `investigations/planning/models.py` owns plan
+  contracts; `prompt.py` performs deterministic context compression and tool
+  ordering; `service.py` calls the provider-neutral boundary; and
+  `explanations/models.py` plus existing provider adapters add `TypedLLMRequest`.
+- **Design decision:** Keep control dependencies (`depends_on`) distinct from
+  data dependencies (`StepOutputRef`). Explicit references make later replay,
+  validation, and execution inspectable instead of requiring a runtime to infer
+  which deployment or commit a vague intent meant.
+- **Invariant or failure behavior:** Plans contain one to five steps, stable
+  V2.5 tool IDs, no root-cause/fact/hypothesis fields, and no raw diff content.
+  Provider failures, malformed outer responses, and invalid plan schema produce
+  distinct planner failures. Full DAG/reference/tool-permission validation stays
+  out of V2.7 and belongs to V2.8.
+- **Trade-off:** A small explicit plan model is less expressive than a workflow
+  DSL, but it avoids embedding scripts or hidden executor decisions in LLM
+  output. Multi-step proposals give V2.8 meaningful graph work while a five-step
+  bound limits speculative plans; dynamic replanning remains deferred.
+- **Validation evidence:** Focused planner contracts, prompt construction, fake
+  provider, and failure-boundary tests are in
+  `tests/unit/test_typed_investigation_planner.py`; final full-suite and
+  teaching-comment validation are recorded with milestone completion.
+- **Unresolved question:** V2.8 must decide whether a data reference should
+  always imply an explicit matching control dependency or whether it may add one
+  deterministically during validation.
+
+### 2026-08-18 — V2.8 deterministic plan validation
+
+- **Concept:** A parsed Pydantic model is syntactically valid, but an executable
+  graph also needs semantic validation. `PlanValidator` treats an LLM proposal
+  like untrusted source code: it validates identity, tool allowlists, DAG edges,
+  output references, and annotations before a future executor can receive it.
+- **Important syntax:** `StrEnum` gives stable failure codes; `model_fields` and
+  `rebuild_annotation()` expose Pydantic field contracts for static checking;
+  Kahn's algorithm uses an in-degree map and heap ordered by original position
+  to produce deterministic topological order.
+- **Implementation and evidence:** `investigations/planning/validation.py`
+  produces `PlanValidationResult`; `tools/models.py` adds metadata-only
+  `plan_output_model` contracts; `test_investigation_plan_validator.py` covers
+  acceptance, failures, type mismatch, atomic rejection, and determinism.
+- **Decision:** ADR-022 selects explicit per-tool static output contracts rather
+  than changing generic V2.5 `ToolResult`. This is enough to validate
+  `s1.commit_sha -> get_commit.commit_sha` while postponing V2.9 projection.
+- **Invariant and failure behavior:** A data reference must have a matching
+  control dependency. Unknown tools, fields, types, and malformed literals
+  become sanitized typed failures; any failure means no `ValidatedPlan`.
+- **Trade-off:** Static contracts are deliberately narrower than JSONPath or a
+  generic expression system. They require later executor projection work, but
+  avoid arbitrary payload inspection and keep validation predictable.
+- **Unresolved question:** V2.9 must define how observed evidence becomes the
+  declared static output fields without leaking provider-specific payloads.
+
+### 2026-08-19 — Interpret a validated investigation DAG within a fixed budget
+
+- **V2 milestones:** V2.9 Agent Execution Loop and V2.10 Minimal Execution Budgets.
+- **Concept and syntax:** `AgentExecutor` in `investigations/execution.py` is an
+  interpreter: `ValidatedPlan` is its checked program, `Literal` and
+  `StepOutputRef` are operands, and `ToolInvoker` is the controlled call boundary.
+  `StrEnum` supplies stable step/block/termination codes; `model_copy(update=...)`
+  advances the `BudgetState` counter.
+- **Implementation and evidence:** Runtime projections read only normalized
+  `Evidence.content` fields declared by V2.8 output contracts, then
+  `ToolDefinition.validate_arguments` creates the destination input before V2.5
+  invocation. `tests/unit/test_agent_execution.py` covers chains, branches,
+  runtime references, typed inputs, full-set derivation, dedupe, partial failure,
+  and budget accounting.
+- **Decision:** Recompute Facts from all accumulated Evidence after a genuine
+  evidence-ID addition. Old deployment evidence plus new incident evidence can
+  form a temporal fact, so newest-only derivation is wrong. Bounded plans make
+  full recomputation simpler than an incremental rule graph.
+- **Invariant and failure behavior:** `failed` means a call was attempted and
+  returned typed failure; `blocked` means it was not invoked due to dependency,
+  output, or budget policy. Independent branches continue. Failed attempts use
+  budget; blocked steps do not; exhaustion preserves collected Evidence/Facts.
+- **Trade-off and unresolved question:** Sequential execution makes ordering and
+  accounting deterministic but leaves branch concurrency for later atomic budget
+  reservation work. Dynamic replanning, retries, and full agent telemetry remain
+  deferred.
+
+### 2026-08-19 - Classify transient tool failures before bounded retry
+
+- **V2 milestones:** V2.11 Failure Taxonomy and V2.12 Retry/Backoff.
+- **Concept and syntax:** `ToolFailureCode` carries closed sanitized failure
+  semantics from the connector boundary, while `ToolFailure.retryable` derives
+  a boolean policy decision without trusting a message. `RetryPolicy` uses
+  exponentiation for the one-second then two-second delay. Injecting the async
+  `sleep` callable lets unit tests observe backoff without waiting in real time.
+- **Implementation and evidence:** `tools/adapters.py` maps connector categories
+  to `ToolFailureCode`; `investigations/execution.py` owns retry sequencing,
+  budget reservation, and per-step attempts. Focused tool-registry and execution
+  tests passed using a repository-local uv cache.
+- **Decision:** ADR-023 selects executor-owned retries only for rate limits,
+  timeouts, and upstream unavailability. It caps a step at three total calls and
+  delays one second then two seconds. SDK retries remain single-shot/explicit.
+- **Invariant or failure behavior:** Budget is consumed before every provider
+  call, including each retry. A permanent failure makes one call. If a retry is
+  pending but budget is empty, no delay or call occurs; later pending steps are
+  budget-exhausted.
+- **Trade-off and unresolved question:** Retry can improve transient availability
+  but costs up to three calls and three seconds of sequential latency. Jitter,
+  retry-after handling, deadlines, durable history, telemetry, and idempotency
+  for future write tools remain deferred.
+
+### 2026-08-19 - Separate logical operations from retry attempts and durable recovery
+
+- **V2 milestones:** V2.13 retry-safety/idempotency boundary and V2.14 crash
+  recovery/checkpoint/resume boundary.
+- **Concept and syntax:** `ToolDefinition.read_only` is existing immutable
+  Pydantic metadata, while `ExecutionStepState.attempts` is a counter inside one
+  logical `PlanStep`. The distinction matters because a retry is another call
+  for the same operation, not a new operation. A future idempotency identity
+  should therefore represent the logical step (for example `run_id + step_id`),
+  not its attempt number.
+- **Implementation and evidence:** Inspection of `tools/models.py` and all
+  adapters in `tools/adapters.py` verified seven evidence-retrieval tools and no
+  side effects. `investigations/execution.py` keeps retries in `AgentExecutor`
+  and V2.10 budget consumption immediately before every call. V1 persistence in
+  `database/postgres_run_repository.py` saves merge-readiness run/step snapshots
+  but does not save a V2 `ValidatedPlan` or `InvestigationExecutionState`.
+- **Decision:** Reuse `read_only` rather than add overlapping retry-safety
+  booleans. It is sufficient for the current tool set; a later side-effecting
+  tool must default to no automatic retry until an explicit idempotency or
+  reconciliation design is approved.
+- **Invariant or failure behavior:** A typed transient failure is not alone
+  enough to justify a retry: the operation must also be read-only, attempts and
+  budget must remain, and every call is budgeted. If a process dies after a
+  request is sent but before its result is recorded, the prior `RUNNING` outcome
+  is unknown rather than success or failure.
+- **Trade-off and unresolved question:** Documentation makes the current
+  boundary enforceable to reviewers without building speculative durable
+  infrastructure. Checkpoint/snapshot recovery is the default future direction;
+  it would need plan, step/output/evidence/fact, budget/attempt/failure, and
+  version state before correct resume can exist. Event sourcing, checkpoint
+  tables, resume workers, and write-tool replay remain deliberately postponed.
+
+### 2026-08-19 - Propose causal hypotheses, then ground them deterministically
+
+- **V2 milestones:** V2.17 structured hypothesis generation and V2.18
+  deterministic evidence-backed hypothesis validation.
+- **Concept and syntax:** `CandidateHypothesis` is a frozen Pydantic contract
+  for an untrusted LLM proposal, while `ValidatedHypothesis` is the separate
+  accepted type. `TypedLLMRequest` carries a versioned instruction string, a
+  minimized `HypothesisGenerationInput`, and an output model through the shared
+  provider-neutral boundary; `model_validate` distinguishes malformed candidate
+  data from a provider request failure.
+- **Implementation and evidence:** `investigations/hypotheses/service.py`
+  generates at most three fact-referencing candidates; `validator.py` accepts a
+  code-change candidate only when its selected Facts establish both a changed
+  file and a matching failure location for the same path. The focused
+  `test_grounded_hypotheses.py` suite covers valid support, unknown and duplicate
+  IDs, entity mismatch, valid-but-irrelevant facts, empty results, raw prose,
+  provider/schema separation, and prompt versioning.
+- **Decision:** ADR-024 retains facts as objective relations and puts causal
+  interpretation in a bounded hypothesis type. The current fact taxonomy can
+  support a generic file-path code-change rule but not dependency/deployment
+  causal rules, so those families are deferred rather than guessed.
+- **Invariant or failure behavior:** A real Fact ID alone is insufficient: it
+  must participate in the required relationship predicate. No accepted
+  hypothesis can contain raw model prose or numeric confidence. Empty candidate
+  or accepted sets express insufficient evidence without inventing a root cause.
+- **Trade-off and unresolved question:** A small taxonomy is predictable and
+  testable but deliberately covers fewer incident stories. V2.19 may render only
+  validated structures with deterministic templates; hard contradiction rules
+  await a future deterministic counter-evidence Fact vocabulary.
+
+### 2026-08-19 - Render grounded investigations through the existing live snapshot path
+
+- **Engineering concept:** A frontend investigation console is a projection of
+  backend runtime/domain state, not a second reasoning engine. The existing
+  `LiveRunTaskRegistry`, `RunRepository`, `GET /v1/runs/{run_id}`, and React
+  polling controller now carry a typed `InvestigationRun` alongside the V1
+  merge-readiness run.
+- **Syntax and implementation:** `InvestigationRuntimeSnapshot` is a validated
+  Pydantic aggregate for rounds, tool states, Evidence, Facts, budget, and
+  termination. `render_grounded_result()` accepts `ValidatedHypothesis`, looks
+  up each supporting Fact ID, and returns `GroundedInvestigationResult`; this
+  is runtime validation rather than a TypeScript-only interface guarantee.
+- **Decision:** ADR-025 extends the existing persisted run resource with a
+  nullable `investigation_state` JSON column instead of introducing another
+  streaming system or process-local UI state. This preserves refreshability and
+  V1 compatibility while keeping the new state compact.
+- **Invariant and failure behavior:** A candidate cannot cross the renderer
+  boundary, an unknown Fact ID raises a grounding error, and no accepted
+  hypothesis produces no-causal-conclusion wording. `derive_facts()` now also
+  materializes a `ChangedFileFact` for every normalized changed-file Evidence;
+  the validator can therefore require both that atomic fact and a separate
+  failure-location relationship. Budget, provider, no-progress, planning-limit,
+  and plan-validation endings use distinct deterministic summaries, while a
+  true runtime failure remains a failed snapshot with a sanitized error.
+- **Validation evidence:** `tests/unit/test_grounded_hypotheses.py`,
+  `tests/unit/test_investigation_workflow.py`, and
+  `tests/integration/test_investigation_api.py` cover the backend boundary;
+  the frontend investigation parser, form, dashboard, polling, lint, and
+  production build cover the user-visible projection.
+- **Trade-off and unresolved question:** The current API integration uses a
+  bounded static plan to exercise the existing validated executor while the
+  adaptive planner remains available as a separate capability. Checkpoint
+  recovery, event replay, live provider verification, and dependency-specific
+  hypothesis predicates remain deferred.

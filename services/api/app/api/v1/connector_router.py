@@ -11,9 +11,11 @@ from app.api.v1.models import (
     ExplanationApiError,
     LiveRunStartResponse,
     MergeReadinessResponse,
+    InvestigationResponse,
     RuntimePersistenceApiError,
 )
 from app.connectors.models import ConnectorRequest
+from app.investigations.models import InvestigationRequest
 from app.connectors.protocols import GitHubConnector, JiraConnector
 from app.database import PostgresRunRepository
 from app.explanations import (
@@ -44,7 +46,7 @@ from app.runtime import (
     RunSources,
     LiveRunTaskRegistry,
 )
-from app.workflows import MergeReadinessWorkflowService
+from app.workflows import InvestigationWorkflowService, MergeReadinessWorkflowService
 
 router = APIRouter(prefix="/v1", tags=["pull-request-inspections"])
 
@@ -105,6 +107,18 @@ def get_merge_readiness_workflow(
         explanation_provider=ExplanationSource(
             explanation_service.provider.value
         ),
+    )
+
+
+def get_investigation_workflow(
+    request: Request,
+    run_repository: Annotated[RunRepository, Depends(get_run_repository)],
+) -> InvestigationWorkflowService:
+    return InvestigationWorkflowService(
+        run_repository,
+        request.app.state.investigation_llm_client,
+        github_code_source=request.app.state.github_code_source,
+        jira_connector=request.app.state.jira_connector,
     )
 
 
@@ -215,6 +229,28 @@ async def start_live_merge_readiness_run(
     return LiveRunStartResponse(run_id=pending_run.run_id, status=pending_run.status)
 
 
+@router.post(
+    "/investigations",
+    status_code=202,
+    response_model=LiveRunStartResponse,
+    responses={503: {"model": RuntimePersistenceApiError}},
+)
+async def start_investigation(
+    request: InvestigationRequest,
+    workflow: Annotated[
+        InvestigationWorkflowService,
+        Depends(get_investigation_workflow),
+    ],
+    task_registry: Annotated[
+        LiveRunTaskRegistry,
+        Depends(get_live_run_task_registry),
+    ],
+) -> LiveRunStartResponse:
+    pending_run = await workflow.create_persisted_run(request)
+    task_registry.start(_continue_investigation(workflow, pending_run))
+    return LiveRunStartResponse(run_id=pending_run.run_id, status=pending_run.status)
+
+
 async def _continue_live_run(
     workflow: MergeReadinessWorkflowService,
     pending_run: MergeReadinessRun,
@@ -225,9 +261,19 @@ async def _continue_live_run(
         return
 
 
+async def _continue_investigation(
+    workflow: InvestigationWorkflowService,
+    pending_run,
+) -> None:
+    try:
+        await workflow.continue_persisted_run(pending_run)
+    except Exception:
+        return
+
+
 @router.get(
     "/runs/{run_id}",
-    response_model=MergeReadinessResponse,
+    response_model=MergeReadinessResponse | InvestigationResponse,
     responses={
         404: {"model": ApiError},
         500: {"model": ApiError},
@@ -241,7 +287,10 @@ async def get_runtime_run(
         MergeReadinessExplanationService,
         Depends(get_merge_readiness_explanation_service),
     ],
-) -> MergeReadinessResponse | JSONResponse:
+) -> MergeReadinessResponse | InvestigationResponse | JSONResponse:
+    # The endpoint returns the persisted current snapshot. Selecting the typed
+    # response variant from the backend-owned workflow name keeps V1 and V2
+    # clients on one polling resource without client-side semantic inference.
     stored_run = run_repository.get(run_id)
     if stored_run is None:
         error = ApiError(
@@ -249,4 +298,6 @@ async def get_runtime_run(
             message="No runtime run exists for this ID.",
         )
         return JSONResponse(status_code=404, content=error.model_dump(mode="json"))
+    if stored_run.workflow_name == "investigation":
+        return InvestigationResponse.model_validate(stored_run.model_dump())
     return await build_merge_readiness_response(stored_run, explanation_service)

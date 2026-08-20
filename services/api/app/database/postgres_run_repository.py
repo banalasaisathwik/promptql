@@ -7,6 +7,8 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.connectors.models import ConnectorRequest, GitHubPullRequest, JiraIssue
+from app.investigations.hypotheses import GroundedInvestigationResult
+from app.investigations.models import InvestigationRequest
 from app.database.models import WorkflowRunRow, WorkflowStepRow
 from app.policy.models import MergeReadinessResult
 from app.runtime.errors import (
@@ -22,6 +24,8 @@ from app.runtime.models import (
     RuntimeStep,
     StepStatus,
 )
+from app.runtime.investigation_models import InvestigationRun, InvestigationRuntimeSnapshot
+from app.runtime.repository import RuntimeRun
 from app.runtime.state import ALLOWED_RUN_TRANSITIONS, ALLOWED_STEP_TRANSITIONS
 
 
@@ -31,7 +35,24 @@ def _json_value(model) -> dict[str, Any] | None:
     return model.model_dump(mode="json")
 
 
-def _run_values(run: MergeReadinessRun) -> dict[str, Any]:
+def _run_values(run: RuntimeRun) -> dict[str, Any]:
+    if isinstance(run, InvestigationRun):
+        return {
+            "workflow_name": run.workflow_name,
+            "workflow_version": run.workflow_version,
+            "github_source": None,
+            "jira_source": None,
+            "explanation_source": None,
+            "status": run.status.value,
+            "started_at": run.started_at,
+            "completed_at": run.completed_at,
+            "request_payload": _json_value(run.request),
+            "github_facts": None,
+            "jira_facts": None,
+            "result": _json_value(run.result),
+            "investigation_state": _json_value(run.state),
+            "runtime_error": _json_value(run.error),
+        }
     sources = run.sources
     return {
         "workflow_name": run.workflow_name,
@@ -48,6 +69,7 @@ def _run_values(run: MergeReadinessRun) -> dict[str, Any]:
         "github_facts": _json_value(run.github),
         "jira_facts": _json_value(run.jira),
         "result": _json_value(run.result),
+        "investigation_state": None,
         "runtime_error": _json_value(run.error),
     }
 
@@ -93,7 +115,7 @@ class PostgresRunRepository:
 
         self._confirmed_run_ids: set[UUID] = set()
 
-    def save(self, run: MergeReadinessRun) -> None:
+    def save(self, run: RuntimeRun) -> None:
         try:
             with self._session_factory.begin() as session:
                 stored_run = session.get(WorkflowRunRow, run.run_id)
@@ -118,7 +140,7 @@ class PostgresRunRepository:
                 self._confirmed_run_id(run.run_id),
             ) from None
 
-    def get(self, run_id: UUID) -> MergeReadinessRun | None:
+    def get(self, run_id: UUID) -> RuntimeRun | None:
         try:
             with self._session_factory() as session:
                 stored_run = session.get(WorkflowRunRow, run_id)
@@ -150,7 +172,9 @@ class PostgresRunRepository:
         self,
         stored_run: WorkflowRunRow,
         stored_steps: tuple[WorkflowStepRow, ...],
-    ) -> MergeReadinessRun:
+    ) -> RuntimeRun:
+        if stored_run.workflow_name == "investigation":
+            return self._read_investigation_run(stored_run)
         runtime_error = None
         if stored_run.runtime_error is not None:
             runtime_error = RuntimeErrorInfo.model_validate(stored_run.runtime_error)
@@ -206,13 +230,40 @@ class PostgresRunRepository:
             jira=jira_facts,
         )
 
+    @staticmethod
+    def _read_investigation_run(stored_run: WorkflowRunRow) -> InvestigationRun:
+        return InvestigationRun(
+            run_id=stored_run.run_id,
+            workflow_name=stored_run.workflow_name,
+            workflow_version=stored_run.workflow_version,
+            status=stored_run.status,
+            started_at=stored_run.started_at,
+            completed_at=stored_run.completed_at,
+            error=(
+                RuntimeErrorInfo.model_validate(stored_run.runtime_error)
+                if stored_run.runtime_error is not None
+                else None
+            ),
+            request=InvestigationRequest.model_validate(stored_run.request_payload),
+            state=(
+                InvestigationRuntimeSnapshot.model_validate(stored_run.investigation_state)
+                if stored_run.investigation_state is not None
+                else None
+            ),
+            result=(
+                GroundedInvestigationResult.model_validate(stored_run.result)
+                if stored_run.result is not None
+                else None
+            ),
+        )
+
     def _confirmed_run_id(self, run_id: UUID) -> UUID | None:
         return run_id if run_id in self._confirmed_run_ids else None
 
     def _insert_pending_run(
         self,
         session: Session,
-        run: MergeReadinessRun,
+        run: RuntimeRun,
     ) -> None:
         if run.status.value != "pending" or run.steps:
             raise RunStateConflictError(
@@ -224,7 +275,7 @@ class PostgresRunRepository:
         self,
         session: Session,
         stored_run: WorkflowRunRow,
-        run: MergeReadinessRun,
+        run: RuntimeRun,
     ) -> None:
         self._validate_run_identity(stored_run, run)
         stored_status = stored_run.status
@@ -264,7 +315,14 @@ class PostgresRunRepository:
                 run.run_id,
             )
 
-    def _save_steps(self, session: Session, run: MergeReadinessRun) -> None:
+    def _save_steps(self, session: Session, run: RuntimeRun) -> None:
+        if isinstance(run, InvestigationRun):
+            if run.steps:
+                raise RunStateConflictError(
+                    "Investigation steps are stored in the typed investigation snapshot.",
+                    run.run_id,
+                )
+            return
         stored_steps = tuple(
             session.scalars(
                 select(WorkflowStepRow)
@@ -341,14 +399,26 @@ class PostgresRunRepository:
             "github_facts": stored_run.github_facts,
             "jira_facts": stored_run.jira_facts,
             "result": stored_run.result,
+            "investigation_state": stored_run.investigation_state,
             "runtime_error": stored_run.runtime_error,
         }
 
     @staticmethod
     def _validate_run_identity(
         stored_run: WorkflowRunRow,
-        run: MergeReadinessRun,
+        run: RuntimeRun,
     ) -> None:
+        if isinstance(run, InvestigationRun):
+            if (
+                stored_run.workflow_name != run.workflow_name
+                or stored_run.workflow_version != run.workflow_version
+                or stored_run.request_payload != _json_value(run.request)
+            ):
+                raise RunStateConflictError(
+                    "A durable run's identity cannot be changed.",
+                    run.run_id,
+                )
+            return
         if (
             stored_run.workflow_name != run.workflow_name
             or stored_run.workflow_version != run.workflow_version

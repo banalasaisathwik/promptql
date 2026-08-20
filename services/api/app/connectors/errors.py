@@ -1,13 +1,9 @@
-pass
-
 from enum import StrEnum
 
 from app.connectors.models import ConnectorRequest
 
 
 class ConnectorErrorCategory(StrEnum):
-    pass
-
     INVALID_REQUEST = "invalid_request"
     UNAUTHORIZED = "unauthorized"
     FORBIDDEN = "forbidden"
@@ -16,18 +12,14 @@ class ConnectorErrorCategory(StrEnum):
     TIMEOUT = "timeout"
     UPSTREAM_UNAVAILABLE = "upstream_unavailable"
     INVALID_RESPONSE = "invalid_response"
+    INCOMPLETE_RESULT = "incomplete_result"
     CONFIGURATION_ERROR = "configuration_error"
-
-
-
 
 
 GitHubErrorCategory = ConnectorErrorCategory
 
 
 class GitHubConnectorError(RuntimeError):
-    pass
-
     category: GitHubErrorCategory
 
     def __init__(self, category: GitHubErrorCategory, message: str) -> None:
@@ -91,6 +83,14 @@ class GitHubInvalidResponseError(GitHubConnectorError):
         )
 
 
+class GitHubIncompleteResultError(GitHubConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            GitHubErrorCategory.INCOMPLETE_RESULT,
+            "GitHub could not provide a complete bounded result.",
+        )
+
+
 class GitHubConfigurationError(GitHubConnectorError):
     def __init__(
         self,
@@ -100,8 +100,6 @@ class GitHubConfigurationError(GitHubConnectorError):
 
 
 class JiraConnectorError(RuntimeError):
-    pass
-
     category: ConnectorErrorCategory
 
     def __init__(self, category: ConnectorErrorCategory, message: str) -> None:
@@ -135,8 +133,6 @@ class JiraForbiddenError(JiraConnectorError):
 
 class JiraIssueUnavailableError(JiraConnectorError):
     def __init__(self) -> None:
-
-
         super().__init__(
             ConnectorErrorCategory.NOT_FOUND,
             "The Jira issue is unavailable or was not found.",
@@ -185,23 +181,17 @@ class JiraConfigurationError(JiraConnectorError):
 
 
 class ConnectorUnavailableError(RuntimeError):
-    pass
-
     def __init__(self, connector_name: str) -> None:
         self.connector_name = connector_name
         super().__init__(f"{connector_name} connector is unavailable")
 
 
 class FixtureNotFoundError(LookupError):
-    pass
-
     def __init__(
         self,
         connector_name: str,
         request: ConnectorRequest | None = None,
     ) -> None:
-
-
         self.connector_name = connector_name
         self.request = request
         message = f"{connector_name} fixture not found"

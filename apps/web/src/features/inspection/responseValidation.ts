@@ -20,6 +20,16 @@ import type {
   PendingAction,
   PolicyFinding,
   PullRequestMergeReadiness,
+  InvestigationRun,
+  InvestigationEvidence,
+  InvestigationFact,
+  InvestigationMissingInformation,
+  InvestigationPlanningRound,
+  InvestigationRuntimeState,
+  InvestigationStepSnapshot,
+  GroundedInvestigationResult,
+  ValidatedHypothesis,
+  RuntimeRun,
   RequiredCheck,
   RuntimeErrorInfo,
   RuntimeStep,
@@ -530,4 +540,204 @@ export function parseLiveRunStart(value: unknown): {
     throw new ConnectorApiError('The live-run start response is malformed.')
   }
   return { run_id: value.run_id, status: value.status }
+}
+
+
+function isInvestigationRequest(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.repository_owner) &&
+    isNonEmptyString(value.repository_name) &&
+    isNonEmptyString(value.incident_summary)
+  )
+}
+
+
+function isInvestigationEvidence(value: unknown): value is InvestigationEvidence {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.evidence_id) &&
+    isNonEmptyString(value.source) &&
+    isNonEmptyString(value.kind) &&
+    isRecord(value.provenance) &&
+    isNonEmptyString(value.provenance.source_reference) &&
+    isTimestamp(value.provenance.retrieved_at) &&
+    isRecord(value.content)
+  )
+}
+
+
+function isInvestigationFact(value: unknown): value is InvestigationFact {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.fact_id) &&
+    isNonEmptyString(value.fact_type) &&
+    Array.isArray(value.evidence_reference_ids) &&
+    value.evidence_reference_ids.every(isNonEmptyString)
+  )
+}
+
+
+function isMissingInformation(value: unknown): value is InvestigationMissingInformation {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.missing_information_id) &&
+    isNonEmptyString(value.kind) &&
+    (value.detail === null || isNonEmptyString(value.detail)) &&
+    Array.isArray(value.related_fact_ids) &&
+    value.related_fact_ids.every(isNonEmptyString) &&
+    Array.isArray(value.related_hypothesis_ids) &&
+    value.related_hypothesis_ids.every(isNonEmptyString)
+  )
+}
+
+
+function isInvestigationStep(value: unknown): value is InvestigationStepSnapshot {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.step_id) &&
+    isNonEmptyString(value.tool_id) &&
+    isOneOf(value.status, ['pending', 'running', 'succeeded', 'failed', 'blocked']) &&
+    Number.isSafeInteger(value.attempts) &&
+    Number(value.attempts) >= 0 &&
+    (value.failure_code === null || isNonEmptyString(value.failure_code)) &&
+    (value.failure_message === null || isNonEmptyString(value.failure_message)) &&
+    (value.block_reason === null || isNonEmptyString(value.block_reason))
+  )
+}
+
+
+function isInvestigationRound(value: unknown): value is InvestigationPlanningRound {
+  return (
+    isRecord(value) &&
+    Number.isSafeInteger(value.round_number) &&
+    Number(value.round_number) > 0 &&
+    isNonEmptyString(value.plan_id) &&
+    isNonEmptyString(value.plan_validation_status) &&
+    Array.isArray(value.steps) &&
+    value.steps.every(isInvestigationStep) &&
+    Array.isArray(value.evidence_delta_ids) &&
+    value.evidence_delta_ids.every(isNonEmptyString) &&
+    Array.isArray(value.fact_delta_ids) &&
+    value.fact_delta_ids.every(isNonEmptyString) &&
+    typeof value.completed === 'boolean'
+  )
+}
+
+
+function isValidatedHypothesis(value: unknown): value is ValidatedHypothesis {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.hypothesis_id) &&
+    isNonEmptyString(value.kind) &&
+    isNonEmptyString(value.subject) &&
+    Array.isArray(value.supporting_fact_ids) &&
+    value.supporting_fact_ids.every(isNonEmptyString)
+  )
+}
+
+
+function isGroundedHypothesis(
+  value: unknown,
+): value is ValidatedHypothesis & { statement: string } {
+  return isRecord(value) && isValidatedHypothesis(value) && isNonEmptyString(value.statement)
+}
+
+
+function isGroundedResult(value: unknown): value is GroundedInvestigationResult {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.termination_reason) &&
+    isNonEmptyString(value.summary) &&
+    Array.isArray(value.supported_hypotheses) &&
+    value.supported_hypotheses.every(
+      isGroundedHypothesis,
+    ) &&
+    Array.isArray(value.key_fact_ids) &&
+    value.key_fact_ids.every(isNonEmptyString) &&
+    Array.isArray(value.missing_information) &&
+    value.missing_information.every(isMissingInformation)
+  )
+}
+
+
+function isInvestigationState(value: unknown): value is InvestigationRuntimeState {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.rounds) &&
+    value.rounds.every(isInvestigationRound) &&
+    Array.isArray(value.evidence) &&
+    value.evidence.every(isInvestigationEvidence) &&
+    Array.isArray(value.facts) &&
+    value.facts.every(isInvestigationFact) &&
+    Array.isArray(value.missing_information) &&
+    value.missing_information.every(isMissingInformation) &&
+    Array.isArray(value.validated_hypotheses) &&
+    value.validated_hypotheses.every(isValidatedHypothesis) &&
+    Number.isSafeInteger(value.rejected_hypothesis_count) &&
+    Number(value.rejected_hypothesis_count) >= 0 &&
+    Number.isSafeInteger(value.max_tool_calls) &&
+    Number(value.max_tool_calls) >= 0 &&
+    Number.isSafeInteger(value.used_tool_calls) &&
+    Number(value.used_tool_calls) >= 0 &&
+    Number.isSafeInteger(value.remaining_tool_calls) &&
+    Number(value.remaining_tool_calls) >= 0 &&
+    (value.termination_reason === null || isNonEmptyString(value.termination_reason))
+  )
+}
+
+
+export function parseInvestigationRun(value: unknown): InvestigationRun {
+  if (
+    !isRecord(value) ||
+    value.workflow_name !== 'investigation' ||
+    !isNonEmptyString(value.run_id) ||
+    !isNonEmptyString(value.workflow_version) ||
+    !isOneOf(value.status, RUNTIME_STATUSES) ||
+    !(value.started_at === null || isTimestamp(value.started_at)) ||
+    !(value.completed_at === null || isTimestamp(value.completed_at)) ||
+    !Array.isArray(value.steps) ||
+    value.steps.length !== 0 ||
+    !isInvestigationRequest(value.request) ||
+    !(value.error === null || isRecord(value.error)) ||
+    !(value.state === null || isInvestigationState(value.state)) ||
+    !(value.result === null || isGroundedResult(value.result))
+  ) {
+    throw new ConnectorApiError('The investigation response is malformed.')
+  }
+
+  if (value.status === 'completed' &&
+      (value.error !== null || !isInvestigationState(value.state) || !isGroundedResult(value.result))) {
+    throw new ConnectorApiError('The investigation response is malformed.')
+  }
+  if ((value.status === 'pending' || value.status === 'running') &&
+      (value.error !== null || value.result !== null)) {
+    throw new ConnectorApiError('The investigation response is malformed.')
+  }
+  if (value.status === 'failed' &&
+      (!isRecord(value.error) || !isNonEmptyString(value.error.code) || !isNonEmptyString(value.error.message) || value.result !== null)) {
+    throw new ConnectorApiError('The investigation response is malformed.')
+  }
+
+  return {
+    run_id: value.run_id,
+    workflow_name: 'investigation',
+    workflow_version: value.workflow_version,
+    status: value.status,
+    started_at: value.started_at as string | null,
+    completed_at: value.completed_at as string | null,
+    steps: [],
+    request: value.request as InvestigationRun['request'],
+    error: value.error as InvestigationRun['error'],
+    state: value.state as InvestigationRun['state'],
+    result: value.result as InvestigationRun['result'],
+  }
+}
+
+
+export function parseRuntimeRun(value: unknown): RuntimeRun {
+  if (isRecord(value) && value.workflow_name === 'investigation') {
+    return parseInvestigationRun(value)
+  }
+  return parseMergeReadiness(value)
 }

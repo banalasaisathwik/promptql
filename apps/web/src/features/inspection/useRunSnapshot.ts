@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
-import { fetchMergeReadinessRun } from './api'
+import { fetchRuntimeRun } from './api'
 import { ConnectorApiError } from './apiError'
 import { RunPollingController } from './runPolling'
-import type { PullRequestMergeReadiness } from './types'
+import type { RuntimeRun } from './types'
 
 
 export function useRunSnapshot(runId: string) {
-  const [snapshot, setSnapshot] = useState<PullRequestMergeReadiness | null>(null)
+  const [snapshot, setSnapshot] = useState<RuntimeRun | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshError, setRefreshError] = useState<string | null>(null)
 
@@ -15,7 +15,7 @@ export function useRunSnapshot(runId: string) {
     setLoading(true)
     setRefreshError(null)
     const polling = new RunPollingController({
-      loadSnapshot: (signal) => fetchMergeReadinessRun(runId, signal),
+      loadSnapshot: (signal) => fetchRuntimeRun(runId, signal),
       onSnapshot: (nextSnapshot) => {
         setSnapshot(nextSnapshot)
         setLoading(false)

@@ -29,6 +29,7 @@ from app.explanations.models import (
     LLMStructuredResponse,
     LLMTokenUsage,
     MergeReadinessExplanationInput,
+    TypedLLMRequest,
 )
 
 
@@ -86,6 +87,34 @@ class OpenAILLMClient:
             )
         except (AttributeError, TypeError, ValidationError):
             return None
+
+    @staticmethod
+    def _error_category(error: OpenAIError) -> LLMProviderFailureCategory:
+        if isinstance(error, AuthenticationError):
+            return LLMProviderFailureCategory.AUTHENTICATION
+        if isinstance(error, PermissionDeniedError):
+            return LLMProviderFailureCategory.PERMISSION
+        if isinstance(error, RateLimitError):
+            return LLMProviderFailureCategory.RATE_LIMIT
+        if isinstance(error, APITimeoutError):
+            return LLMProviderFailureCategory.TIMEOUT
+        if isinstance(error, APIConnectionError):
+            return LLMProviderFailureCategory.CONNECTION
+        if isinstance(error, (BadRequestError, UnprocessableEntityError)):
+            return LLMProviderFailureCategory.INVALID_REQUEST
+        if isinstance(error, ContentFilterFinishReasonError):
+            return LLMProviderFailureCategory.REFUSAL
+        if isinstance(error, (LengthFinishReasonError, APIResponseValidationError)):
+            return LLMProviderFailureCategory.INVALID_STRUCTURED_RESPONSE
+        if isinstance(error, InternalServerError):
+            return LLMProviderFailureCategory.UPSTREAM_UNAVAILABLE
+        if isinstance(error, APIStatusError):
+            return (
+                LLMProviderFailureCategory.UPSTREAM_UNAVAILABLE
+                if error.status_code >= 500
+                else LLMProviderFailureCategory.INVALID_REQUEST
+            )
+        return LLMProviderFailureCategory.UPSTREAM_UNAVAILABLE
 
     async def generate_structured(
         self,
@@ -152,3 +181,37 @@ class OpenAILLMClient:
 
 
         raise LLMProviderError(category) from None
+
+    async def generate_typed(
+        self,
+        request: TypedLLMRequest,
+    ) -> LLMStructuredResponse:
+        # This adapter translates the provider-neutral request at the SDK edge;
+        # domain callers never need OpenAI response-format names or response objects.
+        try:
+            response = await self._client.responses.parse(
+                model=self._model,
+                instructions=request.system_instructions,
+                input=request.input.model_dump_json(),
+                text_format=request.output_model,
+                store=False,
+                max_output_tokens=self._max_output_tokens,
+                timeout=self._request_timeout_seconds,
+            )
+        except OpenAIError as error:
+            raise LLMProviderError(self._error_category(error)) from None
+
+        parsed_output = getattr(response, "output_parsed", None)
+        if parsed_output is None:
+            category = (
+                LLMProviderFailureCategory.REFUSAL
+                if self._contains_refusal(response)
+                else LLMProviderFailureCategory.INVALID_STRUCTURED_RESPONSE
+            )
+            raise LLMProviderError(category)
+        return LLMStructuredResponse(
+            output=parsed_output.model_dump(mode="json")
+            if hasattr(parsed_output, "model_dump")
+            else parsed_output,
+            token_usage=self._token_usage(response),
+        )

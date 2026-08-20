@@ -63,6 +63,11 @@ services/api/app/
 │   ├── jira_fixtures.py      # What Jira facts belong to each scenario?
 │   ├── fakes.py              # How are fixtures looked up?
 │   └── errors.py             # How does lookup failure leave this boundary?
+├── tools/
+│   ├── models.py              # What stable typed tool contracts exist?
+│   ├── registry.py             # Which tool definitions are discoverable?
+│   ├── adapters.py             # How do tools call existing capabilities?
+│   └── errors.py               # How are lookup and argument failures typed?
 ├── inspection/
 │   ├── models.py             # What combined application results exist?
 │   └── service.py            # How are GitHub and Jira calls coordinated?
@@ -311,10 +316,95 @@ alongside snapshots when replay, recovery, or high-fan-out updates justify it.
 The dashboard neither queries Grafana nor exposes OTel spans. Grafana/OTel
 remains operational telemetry; the dashboard is product/runtime visibility.
 
+## V2.17-V2.18 grounded hypothesis boundary
+
+The completed V2.16 state can now enter a deliberately narrow proposal and
+grounding flow:
+
+```text
+Evidence -> deterministic fact derivation -> Facts
+        -> typed LLM hypothesis generator -> CandidateHypothesis
+        -> deterministic validator -> ValidatedHypothesis
+        -> V2.19 deterministic renderer -> grounded API/UI result
+```
+
+Facts remain objective, evidence-backed relationships; a hypothesis is an
+uncertain causal interpretation. The generator receives a goal, sorted Facts,
+and deterministic missing-information records, not raw logs, diffs, provider
+payloads, credentials, or execution traces. It uses the existing
+provider-neutral `TypedLLMClient`, a versioned prompt, and a bounded output
+schema. Generated rationale is non-authoritative and cannot become final prose.
+
+`DeterministicHypothesisValidator` accepts the currently supported generic
+code-change family only when selected Facts establish both a changed file and a
+matching failure file/hunk for the same file-path subject. It rejects unknown,
+duplicate, mismatched, or insufficient Fact references in candidate order.
+This is structural and semantic support, not proof of the actual root cause.
+No dependency, Redis, Postgres, Kafka, or provider-specific branch exists. The
+current Fact vocabulary does not justify dependency or deployment causal kinds,
+and V2.19 owns template rendering of accepted structures. The renderer accepts
+only `ValidatedHypothesis` values, resolves every supporting Fact ID, and emits
+`GroundedInvestigationResult` using fixed templates. It never receives the
+candidate rationale or raw provider prose.
+
+Changed-file Evidence now produces an atomic `ChangedFileFact`; the existing
+matching-file and changed-hunk Facts remain separate deterministic
+relationships. The code-change validator requires both kinds of support for the
+same path, so a rendered contributing-factor statement remains traceable to
+the observed file and its failure-location link. Renderer summaries also keep
+budget exhaustion, no progress, planning limits, provider unavailability, and
+plan-validation failure semantically distinct from a failed runtime snapshot.
+
+## V2.19 investigation console integration
+
+The user-facing V2 path now reuses the existing persisted snapshot mechanism:
+
+```text
+structured InvestigationRequest
+  -> POST /v1/investigations
+  -> PostgreSQL pending InvestigationRun
+  -> existing LiveRunTaskRegistry
+  -> typed investigation runtime snapshot
+  -> GET /v1/runs/{run_id} polling
+  -> React InvestigationDashboard
+```
+
+`InvestigationRun.state` contains compact planning rounds, normalized Evidence,
+derived Facts, MissingInformation, validated hypotheses, tool-call budget
+accounting, and a termination reason. The nullable `investigation_state` JSON
+column extends the existing workflow-run row; V1 merge-readiness rows continue
+to use their existing typed request/result and step table. The UI selects the
+run variant from the validated `workflow_name` and does not reconstruct events
+or derive domain semantics.
+
+The final boundary is:
+
+```text
+ValidatedHypothesis + validated supporting Facts
+  -> render_grounded_result()
+  -> GroundedInvestigationResult
+  -> InvestigationDashboard
+```
+
+The live workflow uses `AdaptiveInvestigationRuntime` as its primary execution
+path. It obtains each bounded typed plan through the configured LLM client,
+validates it through the existing `PlanValidator`, and executes it through the
+existing `AgentExecutor`. A validated round plan and each completed round are
+persisted through the same snapshot row and polling path; completed prior
+rounds remain visible when the next plan is saved. The older static-plan helper remains only
+as a compatibility baseline, not as the user-facing route. No new SSE,
+WebSocket, event bus, Langfuse, or OpenTelemetry replacement is introduced.
+
+```text
+redis-prod ----
+postgres-prod -+-> future generic dependency validation, once Fact predicates exist
+payments-api --
+```
+
 ## Not implemented
 
-Crash recovery, cancellation APIs, retries, distributed workers, queues, GitHub
-or Jira OAuth/app authentication, multi-tenant connector credentials,
+Crash recovery, cancellation APIs, distributed workers, queues, GitHub or Jira
+OAuth/app authentication, multi-tenant connector credentials,
 site-specific Jira blocker mapping, tenant isolation, retention, explanation
 persistence, LLM retries/fallback, prompt optimization, hosted eval services,
 LLM-as-a-judge, production-traffic eval collection, dashboards, alerting, and
@@ -409,3 +499,1688 @@ invalid-key response and normalizes it to the existing `authentication`
 category. `MergeReadinessExplanationService` emits one safe
 `llm.explanation.failed` event containing only the bounded provider and failure
 category; the public response remains the generic `provider_failure` contract.
+# V2 target architecture
+
+> **Status: planned / incrementally implemented.**
+>
+> The sections above describe the architecture currently implemented in the
+> repository. This section describes the intended V2 direction.
+>
+> A V2 component must not be treated as implemented merely because it appears in
+> this target architecture. The active plan and current source code remain the
+> source of truth for implementation status.
+
+## V2 architectural objective
+
+V1 answers a mostly closed deterministic question:
+
+> Is this pull request ready to merge?
+
+V2 introduces a more open-ended engineering problem:
+
+> Why did this engineering incident happen?
+
+The architectural change is therefore not simply:
+
+```text
+more connectors
+```
+
+It is the transition from:
+
+```text
+fixed evidence collection
+        ↓
+deterministic policy
+        ↓
+optional LLM explanation
+```
+
+to a controlled investigation system capable of:
+
+```text
+goal
+↓
+evidence collection
+↓
+planning
+↓
+validated tool execution
+↓
+additional evidence
+↓
+hypothesis generation
+↓
+claim grounding
+↓
+explicit uncertainty
+```
+
+The core V2 rule is:
+
+> Probabilistic components may propose. Deterministic runtime code controls
+> validation, execution, persistence, budgets, permissions, and exposure.
+
+---
+
+## V1 baseline carried into V2
+
+V2 must extend, not unnecessarily replace, the following existing V1
+boundaries:
+
+```text
+ContractModel
+├── frozen Pydantic contracts
+└── extra fields forbidden
+
+runtime/
+├── RunStatus
+├── StepStatus
+├── RuntimeStep
+├── RuntimeErrorInfo
+├── state transition validation
+└── RunRepository
+
+database/
+├── PostgreSQL persistence
+├── SQLAlchemy
+└── Alembic
+
+connectors/
+├── provider-neutral protocols
+├── normalized GitHub facts
+└── normalized Jira facts
+
+explanations/
+├── LLMClient
+├── provider adapters
+├── structured output parsing
+├── deterministic semantic validation
+└── deterministic rendering
+
+evals/
+├── development datasets
+├── holdout datasets
+├── repeated sampling
+├── provider reliability
+├── candidate quality
+└── baseline/release thresholds
+
+observability/
+├── OpenTelemetry traces
+├── OpenTelemetry metrics
+├── structured logs
+└── Grafana Cloud export
+```
+
+V2 should create new abstractions only where the investigation use case exposes a
+real missing concept.
+
+---
+
+# Investigation bounded context
+
+V2 introduces an investigation-specific domain boundary.
+
+Implemented V2.1 module:
+
+```text
+services/api/app/
+└── investigations/
+    ├── __init__.py
+    └── models.py
+```
+
+Only files required by implemented milestones should exist.
+
+Do not create empty planner, tool, evidence, or runtime modules merely to match
+this target diagram.
+
+The V2.1 investigation domain represents:
+
+```text
+InvestigationRequest
+
+InvestigationResult
+├── ChangedFileFact | DeploymentFact | StackFrameFact
+├── Hypothesis
+├── MissingInformation
+└── RecommendedAction
+```
+
+`InvestigationFact` is a discriminated union. Its `fact_type` selects a
+fact-specific schema, while every fact carries a stable `fact_id` and one or
+more `evidence_reference_ids`. V2.2 makes those references resolvable against
+the first-class evidence owned by the same `InvestigationResult`.
+
+`InvestigationResult` deterministically rejects duplicate entity IDs and broken
+references among facts, hypotheses, missing-information items, and recommended
+actions. It can also represent insufficient evidence with no facts or
+hypotheses, provided unknowns are stated explicitly. Categorical hypothesis
+confidence communicates strength without pretending to be a calibrated
+probability. Grounding status describes support from current information, not
+objective root-cause correctness.
+
+The investigation result is domain state.
+
+It does not own generic runtime lifecycle information such as:
+
+```text
+run ID
+run status
+step timing
+runtime failure
+retry attempt
+checkpoint
+```
+
+Those remain runtime concerns.
+
+A future relationship may therefore resemble:
+
+```text
+InvestigationRun
+├── shared runtime lifecycle
+└── InvestigationResult
+```
+
+but V2 must not prematurely introduce a generic `InvestigationRun` merely to
+mirror `MergeReadinessRun`.
+
+The second real workflow should first reveal which runtime abstractions are
+actually common.
+
+---
+
+# Fact, evidence, claim, and hypothesis boundaries
+
+V2 must maintain explicit semantic boundaries between the information it
+collects and the conclusions it produces.
+
+## Observation
+
+An observation is a result returned from an external operation.
+
+Example:
+
+```text
+GitHub API response
+```
+
+or:
+
+```text
+telemetry query response
+```
+
+Raw provider observations must be validated and normalized at their adapter
+boundary.
+
+---
+
+## Evidence
+
+Evidence is normalized, provenance-preserving information that can be used by
+an investigation.
+
+Conceptually:
+
+```text
+Evidence
+├── evidence_id
+├── source
+├── kind
+├── observed_at
+├── retrieved_at
+├── payload
+└── provenance
+```
+
+V2.2 implements this first-class evidence model in
+`services/api/app/investigations/models.py`. The domain stores only normalized,
+typed content and never a raw provider response.
+
+---
+
+## Fact
+
+A fact is a machine-readable conclusion that can be deterministically
+established from evidence.
+
+Prefer strongly typed facts.
+
+Example:
+
+```text
+ChangedFileFact
+├── path = "checkout.py"
+└── change_type = modified
+```
+
+rather than making the authoritative representation only:
+
+```text
+"checkout.py changed"
+```
+
+Human-readable descriptions may supplement typed structure.
+
+---
+
+## Hypothesis
+
+A hypothesis is a plausible explanation supported by one or more facts or
+evidence items.
+
+Example:
+
+```text
+Facts:
+- checkout.py changed
+- failing stack frame points to checkout.py
+- errors began after deployment
+
+Hypothesis:
+- the checkout.py change likely introduced the incident
+```
+
+A hypothesis must never automatically become a fact.
+
+---
+
+## Groundedness versus correctness
+
+The system must distinguish:
+
+```text
+supported by available evidence
+```
+
+from:
+
+```text
+objectively proven true
+```
+
+A future deterministic validator may classify a hypothesis as:
+
+```text
+supported
+weakly_supported
+contradicted
+unsupported
+unknown
+```
+
+This is a grounding judgment.
+
+It is not automatically ground-truth correctness.
+
+Correct root cause may instead come from:
+
+- a known offline golden case
+- engineer confirmation
+- later operational evidence
+- successful remediation
+
+---
+
+# V2.1 — Investigation Domain Model
+
+> **Implemented and validated domain milestone**
+
+V2.1 defines the typed vocabulary required to express an investigation in
+`services/api/app/investigations/models.py`.
+
+Implemented concepts are:
+
+```text
+InvestigationRequest
+
+typed investigation facts
+
+Hypothesis
+
+HypothesisConfidence
+
+MissingInformation
+
+RecommendedAction
+
+InvestigationResult
+```
+
+V2.1 does **not** implement:
+
+```text
+planner
+tools
+evidence retrieval
+evidence persistence
+runtime integration
+replanning
+LLM hypothesis generation
+claim validation
+queues/workers
+```
+
+V2.1 reuses existing contract conventions:
+
+```text
+ContractModel
+NonEmptyString
+StrEnum
+extra="forbid"
+frozen=True
+Pydantic validation
+stable machine-readable codes
+```
+
+No `InvestigationStatus`, `InvestigationRun`, API DTO, database mapping, or
+runtime integration was introduced. Existing runtime status semantics remain
+unchanged; a later real investigation workflow must expose the common runtime
+shape before V1 is generalized.
+
+---
+
+# V2.2 — First-class evidence
+
+> **Implemented and validated domain milestone**
+
+V2.2 adds an immutable, provider-neutral `Evidence` envelope with:
+
+```text
+Evidence
+├── evidence_id
+├── source: github | jira | incident | deployment
+├── kind
+├── provenance
+│   ├── source_reference
+│   ├── observed_at?
+│   └── retrieved_at
+└── content: discriminated typed union
+```
+
+The initial normalized content variants are:
+
+```text
+ChangedFileEvidenceContent
+CommitEvidenceContent
+JiraIssueEvidenceContent
+StackFrameEvidenceContent
+DeploymentEvidenceContent
+```
+
+`observed_at` is optional because a source may not expose event time;
+`retrieved_at` is required. Both reject naive datetimes. V2.2 deliberately does
+not require retrieval time to follow source time because distributed clocks can
+skew by small amounts.
+
+`InvestigationResult` owns the evidence collection. It rejects duplicate
+evidence identities and any fact or hypothesis evidence reference that does not
+resolve in that collection. Missing data remains `MissingInformation`; the
+system does not manufacture evidence with a null value.
+
+Implemented domain relationship and deferred collection boundary:
+
+```text
+external provider [future V2.3+]
+       ↓
+adapter validation [future V2.3+]
+       ↓
+normalized observation
+       ↓
+Evidence [implemented V2.2]
+       ↓
+typed Fact [implemented V2.1]
+       ↓
+Hypothesis [candidate model implemented V2.1; generation deferred]
+```
+
+Evidence now allows the domain to answer:
+
+```text
+Where did this information come from?
+When was it observed?
+When did PromptQL retrieve it?
+Which conclusion depends on it?
+```
+
+Implemented logical evidence sources are:
+
+```text
+github
+jira
+incident
+deployment
+```
+
+Provider-specific response schemas remain behind future adapters. No collection,
+persistence, runtime, API, frontend, or LLM behavior is part of V2.2.
+
+---
+
+# V2.3 — GitHub code evidence
+
+> **Implemented and validated provider capability**
+
+V1 continues to consume only `GitHubConnector.get_pull_request()` metadata
+required for merge readiness. V2.3 adds a separate, focused
+`GitHubCodeEvidenceSource` protocol with three read-only operations:
+
+```text
+get_commit_evidence
+get_pull_request_evidence
+get_changed_file_evidence
+```
+
+The concrete fake and HTTP implementations return immutable V2.2 `Evidence`.
+The HTTP flow is:
+
+```text
+GitHub REST JSON
+       ↓
+private strict response models
+       ↓
+HttpGitHubCodeEvidenceSource
+       ↓
+status/count/timestamp normalization
+       ↓
+bounded unified-diff parser
+       ↓
+Evidence: commit | pull_request | changed_file | diff_hunk
+```
+
+Normalized commit evidence carries the SHA, bounded message, optional Git
+author timestamp, and parent SHAs. It excludes author profiles and email.
+Pull-request evidence carries title/state, base/head SHAs, and an optional merge
+commit SHA without claiming which merge strategy introduced deployed code.
+
+Changed-file evidence normalizes GitHub `added`, `modified`, `removed`, and
+`renamed` statuses into domain values, validates additions/deletions/changes,
+and records whether patch text was available. Present patches become one or more
+typed hunk evidence items with old/new ranges and bounded context/addition/
+deletion lines. Missing patch text creates no fake hunk.
+
+The files endpoint is fetched in provider order at 100 records per page with a
+10-page local maximum. An empty complete response returns no evidence. Reaching
+the bound raises `GitHubIncompleteResultError`; malformed JSON/schema/status or
+patch syntax raises `GitHubInvalidResponseError`. Existing sanitized 401, 403,
+404, 429, timeout/network, and upstream failure categories remain distinct.
+
+The capability reuses `GitHubSettings`, the application-scoped authenticated
+HTTP client, and bounded connector telemetry. Repository identities, SHAs, PR
+numbers, paths, response bodies, and patch content are never telemetry labels.
+No live GitHub call is part of automated validation.
+
+Implemented versus deferred:
+
+```text
+GitHub provider capability       implemented V2.3
+normalized V2 evidence           implemented V2.2/V2.3
+deterministic fact derivation    future V2.6
+typed tool boundary              implemented V2.5
+commit-to-PR derived fact        deferred until a workflow requires it
+```
+
+Provider capability is not automatically a planner-visible tool. V2.5 now
+exposes a smaller composed tool surface after deterministic schema validation;
+AST parsing, symbol graphs, repository indexing, embeddings, and LLM diff
+selection remain deferred.
+
+---
+
+# V2.4 — IncidentSource boundary
+
+> **Implemented and validated provider capability**
+
+`IncidentSource` is a provider-neutral operational-evidence port with four
+read-only, validated operations:
+
+```text
+get_incident_evidence
+get_deployment_evidence
+get_failure_location_evidence
+get_telemetry_window_evidence
+```
+
+Each operation returns one immutable V2.2 `Evidence` envelope. Incident
+metadata records an identifier, optional service/environment/event time, and
+optional bounded status/category. Deployment evidence records service,
+environment, full commit SHA, and deployment time. Failure-location evidence
+can preserve an error category and whatever normalized location fields are
+actually available; it does not retain raw stack dumps. Telemetry-window
+evidence preserves a typed service/signal/time-window/filter request shape and
+an observed event count, never raw PromQL, LogQL, or provider query text.
+
+The current implementation is `FakeIncidentSource`, whose fixed fixtures make
+offline behavior deterministic without credentials. A lookup with no fixture
+raises `FixtureNotFoundError`; it never fabricates an empty `Evidence` record.
+This maintains the distinction between unavailable evidence and a source that
+observed zero matching events.
+
+```text
+deterministic fixture
+       ↓
+FakeIncidentSource
+       ↓
+IncidentSource protocol
+       ↓
+Evidence: incident | deployment | stack_frame | telemetry_window
+```
+
+Grafana Cloud remains the configured OpenTelemetry export destination for
+application operational telemetry. Exporting traces/metrics to Grafana does not
+create a read/query API for investigation evidence, so no live Grafana adapter,
+credentials, query language, or configuration was added in V2.4. A future live
+adapter must validate provider responses and translate them behind this port.
+
+Provider capability remains distinct from the V2.5 tool boundary. V2.4 does not
+derive deployment timing facts, connect stack frames to diff hunks, plan,
+persist, expose an API, or generate hypotheses.
+
+---
+
+# V2.5 — Tool abstraction and registry
+
+> **Implemented and validated internal capability boundary**
+
+V2.5 adds seven stable, read-only investigation tools over the existing
+provider-neutral capabilities:
+
+```text
+get_commit          -> GitHubCodeEvidenceSource.get_commit_evidence
+get_pull_request    -> GitHubCodeEvidenceSource.get_pull_request_evidence
+get_diff            -> GitHubCodeEvidenceSource.get_changed_file_evidence
+get_incident        -> IncidentSource.get_incident_evidence
+get_deployments     -> IncidentSource.get_deployment_evidence
+query_telemetry     -> IncidentSource.get_telemetry_window_evidence
+get_jira_issue      -> JiraConnector.get_issue plus Jira Evidence normalization
+```
+
+The boundary is implemented in `services/api/app/tools/`:
+
+```text
+ToolDefinition
+    ├── stable InvestigationToolId
+    ├── concise description
+    ├── typed strict input model/schema
+    ├── typed ToolResult output model
+    └── read_only classification
+
+ToolRegistry
+    ├── register, rejecting duplicate IDs
+    ├── get, raising an explicit unknown-tool error
+    └── list, returning definitions in sorted stable order
+```
+
+`ToolRegistry` stores metadata and discovers capabilities; it does not invoke
+handlers. `adapters.py` keeps execution beside the existing source/connector
+protocols so a future runtime can apply timeouts, permissions, budgets,
+retries, telemetry, idempotency, checkpointing, and cancellation around the
+same adapters. This avoids turning the registry into the V2.9 executor loop.
+
+The request flow is:
+
+```text
+typed mapping
+      ↓
+ToolDefinition.validate_arguments
+      ↓ invalid -> InvalidToolArgumentsError before source call
+tool adapter
+      ↓
+existing source/connector capability
+      ↓
+normalized Evidence
+      ↓ provider failure -> sanitized ToolResult.failure
+ToolResult(observed | empty | failed)
+```
+
+Tool results contain typed `Evidence`, never generated prose. `ToolResult`
+distinguishes an observed evidence set from an empty observation and from a
+failed source. Capability unavailability and source failure have separate
+machine-readable failure codes. Raw provider payloads, SDK objects, exception
+strings, credentials, and provider query languages do not cross this boundary.
+
+The seven tools are a capability-oriented surface, not a mechanical mirror of
+provider APIs. `IncidentSource.get_failure_location_evidence` remains an
+internal capability because it is subordinate diagnostic detail that the
+initial baseline can request as part of incident analysis; exposing every
+source method would enlarge selection and authorization surface without a
+current independent tool decision. A later requirement can expose it without
+changing the source protocol.
+
+This registry is PromptQL-internal metadata, not MCP. MCP is a future external
+interoperability adapter and is not a dependency, transport, server, or client
+in V2.5. No LLM provider or native function-calling schema is canonical here.
+V2.6 deterministic selection and a future planner are intended to consume the
+same definitions and adapters:
+
+```text
+GitHubCodeEvidenceSource ─┐
+IncidentSource ───────────┼─> tool adapters -> ToolDefinitions -> ToolRegistry
+JiraConnector ────────────┘                                  /             \
+                                              V2.6 deterministic chooser   future planner
+                                                           \             /
+                                                         future executor
+```
+
+V2.5 does not implement planning, execution policy, dynamic gating, budgets,
+retries, replanning, MCP, fact derivation, hypothesis generation, or write
+tools.
+
+---
+
+# V2.6 — Deterministic investigation baseline
+
+> **Implemented internal baseline; no API or UI is exposed yet**
+
+`DeterministicBaseline` is a sequential runbook over the V2.5 tool adapters.
+`ToolInvoker` confirms each adapter definition through the metadata-only
+`ToolRegistry`; it does not make the registry an executor. Successful results
+enter an ordered `EvidenceAccumulator`; failures become bounded
+`MissingInformation` without erasing earlier evidence.
+
+Pure `investigations/fact_derivation/` modules join normalized Evidence into
+provenance-preserving, non-causal relationship facts. Equal timestamps, absent
+patches, deleted hunks, and absent relationships produce no positive fact.
+
+```text
+Evidence -> deterministic Facts -> future probabilistic Hypotheses
+```
+
+Failure-location is a documented subordinate `IncidentSource` lookup because
+V2.5 intentionally exposes no independent failure-location tool. It is always
+requested in the fixed incident sequence, so future planner comparison retains
+the same enrichment. No planner, causal hypothesis, generic inference engine,
+runtime DAG, retry, persistence, API, or UI is implemented.
+
+Conceptually:
+
+```text
+incident
+↓
+fetch incident evidence
+↓
+identify deployment
+↓
+identify related commit
+↓
+fetch PR/diff
+↓
+fetch Jira context
+↓
+assemble evidence
+```
+
+This workflow establishes a baseline against which a future planner can be
+evaluated.
+
+Without this baseline:
+
+```text
+agent produced an answer
+```
+
+does not demonstrate that agentic planning improved the system.
+
+---
+
+# V2.7 — Typed planner
+
+> **Implemented typed proposal boundary; validation and execution remain deferred**
+
+`TypedLLMPlanner` receives a compact `PlannerInput`: deterministic Facts,
+MissingInformation, provenance-preserving evidence summaries, and an explicit
+allowed subset of the seven V2.5 read-only tools. It sends that state through
+the existing provider-neutral typed LLM adapter boundary and parses only an
+immutable, bounded `InvestigationPlan`.
+
+The planner cannot call an adapter, mutate the V2.6 baseline, create a Fact, or
+return a root-cause/hypothesis field. Tool gating remains outside the planner:
+the caller injects allowed definitions before prompt construction. Each plan has
+one to five `PlanStep`s with stable V2.5 IDs, explicit literals or narrow
+`StepOutputRef`s, optional control dependencies, and concise rationale.
+`depends_on` represents ordering; a reference represents data consumption.
+V2.8 validates their graph and consistency before any future execution.
+
+Provider failure, malformed structured response, and plan-schema failure stay
+distinct. The prompt is versioned as `investigation-planner` / `v2.7.1` and
+excludes raw diff lines, provider payloads, credentials, and telemetry query
+syntax. The V2.6 deterministic runbook remains independently callable.
+
+The implemented planner receives bounded state such as:
+
+```text
+investigation goal
+available tools
+current evidence
+missing information
+```
+
+and produce a typed candidate plan.
+
+Conceptually:
+
+```text
+Facts + MissingInformation + allowed tools
+ ↓
+Typed LLM planner
+ ↓
+Pydantic schema validation
+ ↓
+V2.8 PlanValidator
+ ↓
+future V2.9 runtime executor
+```
+
+The planner decides:
+
+> What should we try?
+
+The runtime decides:
+
+> Is this valid and allowed?
+
+V2.8 provides cycle detection, deterministic topological ordering, reference
+target/type checks, dependency/reference consistency, and allowlist semantics.
+V2.9 remains responsible for execution. Budgets, dynamic replanning, and
+hypothesis generation are not implemented.
+
+---
+
+# Plan representation
+
+A future plan may be represented as a dependency graph.
+
+Example:
+
+```text
+             get incident
+                 │
+        ┌────────┴────────┐
+        ▼                 ▼
+   get deployment     get Jira
+        │
+        ▼
+    get commit
+        │
+        ▼
+     get diff
+```
+
+Relevant concepts include:
+
+```text
+DAG
+dependencies
+cycle detection
+topological ordering
+```
+
+Do not use an LLM to decide whether a plan contains an illegal cycle when
+ordinary deterministic graph algorithms can determine it.
+
+---
+
+# V2.8 — Plan validation
+
+Plan validation is implemented as a pure, deterministic application component
+separate from generation. `PlanValidator` checks the typed proposal against the
+registry and caller-injected allowed set, returning either `ValidatedPlan` or
+sanitized typed failures atomically. Static per-tool output contracts provide
+planner-visible fields for type checking without changing V2.5 `ToolResult` or
+executing a provider capability.
+
+Implemented checks include:
+
+```text
+known tool
+valid arguments
+valid dependencies
+no cycles
+allowed capability
+step count within bound
+```
+
+Target:
+
+```text
+probabilistic plan generation
++
+deterministic plan acceptance
+```
+
+The compiler analogy is intentional: the LLM planner is a program generator,
+the validator is a static checker/type checker, and V2.9 will be the execution
+engine. A legal plan may still be inefficient; plan quality remains an eval
+concern rather than a validator rejection.
+
+---
+
+# V2.9 — Investigation execution loop
+
+The target V2 runtime evolves from:
+
+```text
+step 1
+step 2
+step 3
+```
+
+toward:
+
+```text
+current state
+↓
+plan
+↓
+validate
+↓
+execute allowed tool
+↓
+record result/evidence
+↓
+update state
+↓
+continue / replan / finish
+```
+
+The runtime, not the model, owns termination.
+
+V2.9 now implements `AgentExecutor` as a deterministic, sequential interpreter
+of one `ValidatedPlan`. It consumes V2.8's topological order, resolves a
+`StepOutputRef` only from normalized Evidence produced by a successful source
+step, constructs the destination tool's typed input, and invokes the existing
+V2.6 `ToolInvoker`. It never calls the planner, selects another tool, mutates
+the accepted plan, or creates Facts outside deterministic derivation.
+
+`failed` means the tool call was attempted and returned a typed failure;
+`blocked` means it was never invoked due to a failed dependency or unavailable
+runtime output. A failed branch blocks its descendants but an independent ready
+branch continues. Each genuinely new Evidence ID causes `derive_facts` to run
+over the complete accumulated Evidence set so cross-observation facts and
+stable fact-ID deduplication remain correct. New facts do not replan.
+
+---
+
+# Execution budgets
+
+Autonomous investigation must be bounded.
+
+Future budgets may include:
+
+```text
+max steps
+max tool calls
+max model calls
+max replans
+token budget
+overall deadline
+```
+
+Budget exhaustion must produce an explicit typed outcome rather than an
+unbounded loop.
+
+V2.10 implements one caller-supplied `ExecutionBudget.max_tool_calls` and a
+sequential `BudgetState`. The executor checks and consumes it immediately
+before each invocation. An attempted failed call consumes budget; a blocked
+step does not. Exhaustion blocks every remaining pending step with
+`budget_exhausted`, sets a typed termination reason, and preserves prior
+Evidence, Facts, and failures.
+
+`MAX_PLAN_STEPS` bounds a single generated plan at validation time. The total
+tool-call budget bounds actual execution work, including retries. Token/cost/
+deadline/per-tool/distributed budgets, recovery, concurrency, and dynamic
+replanning remain planned.
+
+---
+
+# Failure architecture
+
+V2 should extend the existing failure taxonomy rather than collapsing all
+failures into one exception type.
+
+Relevant categories may eventually include:
+
+```text
+provider failure
+connector failure
+tool failure
+planner/schema failure
+plan validation failure
+claim validation failure
+budget exhaustion
+deadline exceeded
+cancellation
+runtime/persistence failure
+```
+
+Also preserve the distinction:
+
+```text
+missing evidence
+```
+
+is not automatically:
+
+```text
+system failure
+```
+
+---
+
+# Further retry architecture
+
+Beyond the implemented V2.12 slice, retries remain runtime behaviour rather
+than a property of every adapter.
+
+Retry only failures that are plausibly transient.
+
+Examples:
+
+```text
+429 rate limit       → potentially retry
+503 unavailable      → potentially retry
+network timeout      → potentially retry
+
+401 unauthorized     → do not blindly retry
+403 forbidden        → do not blindly retry
+invalid schema       → do not blindly retry
+policy rejection     → do not blindly retry
+```
+
+Future retry control should use:
+
+```text
+attempt limit
+deadline
+exponential backoff
+jitter
+```
+
+Provider SDK retry behaviour should remain explicit rather than silently
+competing with runtime retry policy.
+
+---
+
+# V2.11-V2.12: typed failures and bounded retries
+
+`ToolFailureCode` now preserves sanitized connector categories instead of
+collapsing them all into `source_failure`. `ToolFailure.retryable` is a closed,
+deterministic classification: only `rate_limited`, `timeout`, and
+`upstream_unavailable` retry. Authentication, authorization, invalid
+requests/responses, missing resources, incomplete results, configuration,
+unavailable capabilities, and generic `source_failure` are terminal.
+
+Retries remain owned by `AgentExecutor`, not by individual adapters. The
+confirmed initial policy allows at most three total attempts for one step and
+uses one-second then two-second exponential delays. Before every initial call
+and retry, the executor consumes one V2.10 tool-call unit. If none remains for
+a pending retry, it retains the typed failure, marks later pending work as
+`budget_exhausted`, and does not sleep or call the provider.
+
+`ExecutionStepState.attempts` records calls made for one logical step. No jitter,
+deadline, retry persistence, retry telemetry, write tools, or idempotency key
+exists yet. V2.13 verifies the existing `ToolDefinition.read_only` contract:
+all current V2.5 investigation tools retrieve normalized evidence only. A
+retry is therefore permitted only because the current tool operation is
+read-only as well as because its typed failure is transient.
+
+---
+
+# V2.13: retry-safety and idempotency boundary
+
+The executor distinguishes a logical `PlanStep` from each external-call
+attempt. For example, three timeout/success calls for `s3: query_telemetry`
+remain one logical investigation operation. `ToolDefinition.read_only` already
+expresses the only execution-safety metadata required for the current V2 tools:
+all seven registered adapters retrieve normalized evidence and no adapter
+writes, remediates, or changes provider state.
+
+The current retry decision is: typed failure is retryable, the tool definition
+is read-only, attempts remain, and V2.10 budget remains. Repeating a read may
+return a newer observation, but does not duplicate an external effect.
+
+A future side-effecting tool is denied automatic retry by default until it has
+an explicit idempotency or reconciliation contract. If such a logical write
+step becomes retryable, all its attempts must reuse one logical-operation
+identity, potentially derived from `run_id + step_id`; the identity must not
+include the attempt number. Idempotency controls duplicate effects under
+at-least-once delivery; it does not promise a distributed provider call
+physically executes exactly once.
+
+No idempotency key, deduplication store, request-key persistence, provider-side
+deduplication, or write-operation replay exists in V2.
+
+---
+
+# V2.14: crash recovery and checkpoint/resume boundary
+
+V2 investigation execution is process-local and non-resumable. `AgentExecutor`
+returns an in-memory `InvestigationExecutionState`; it does not call a V2 run
+repository or persist its accepted plan, state, outputs, budget, or attempts.
+
+The existing PostgreSQL repository is V1 merge-readiness persistence, not V2
+durable execution. It persists V1 workflow identity and source modes; request,
+GitHub, Jira, result, and sanitized error snapshots; plus ordered V1 step
+names, statuses, timestamps, duration, attempt count, and sanitized errors.
+It can make a V1 `RUNNING` step crash-visible, but it cannot reconstruct or
+resume a V2 agent execution.
+
+A future checkpoint/snapshot-based V2 recovery design would need the
+`ValidatedPlan`, step states, referenceable runtime outputs, accumulated
+Evidence, derived Facts, MissingInformation, tool-call budget usage, attempt
+counts, relevant typed failures, and execution/checkpoint-version metadata.
+
+Checkpointing persists sufficient current state to continue. Event sourcing
+instead persists every transition and rebuilds state by replaying an event
+history. PromptQL's default future direction is checkpoint/snapshot recovery;
+event sourcing is neither implemented nor selected.
+
+The unresolved in-flight window is: budget consumed, tool request sent, process
+crashes, and response never recorded. After restart, a persisted `RUNNING` step
+has an unknown outcome and cannot silently become either `SUCCEEDED` or
+`FAILED`. Re-executing a current read-only operation is comparatively safe, but
+still needs a correct checkpoint and resume policy. Blind replay of a future
+side-effecting operation could duplicate an effect, so it needs idempotency or
+external reconciliation.
+
+The future recovery flow is: process starts, load a non-terminal run, load its
+latest checkpoint, reconstruct execution state, inspect a prior `RUNNING` step
+as unknown, apply recovery policy, then continue the remaining DAG. No
+checkpoint table, serialization, resume endpoint, recovery scan, event log,
+worker ownership, stale-run detection, or budget/retry restoration exists.
+Rerunning an entire `ValidatedPlan` after restart is not crash recovery and is
+deliberately not implemented.
+
+The existing PostgreSQL runtime persists workflow snapshots.
+
+That gives V1:
+
+```text
+durable state
+```
+
+It does not yet provide:
+
+```text
+durable execution
+```
+
+A future V2 recovery path may need to handle:
+
+```text
+step 1 completed
+step 2 completed
+step 3 running
+
+PROCESS CRASHES
+```
+
+and later:
+
+```text
+load persisted run
+↓
+identify stranded execution
+↓
+reconcile state
+↓
+determine safe replay/resume
+↓
+continue
+```
+
+Checkpointing, crash consistency, reconciliation, and safe replay belong to this
+later milestone.
+
+---
+
+# Cancellation
+
+Runtime cancellation should eventually have explicit lifecycle semantics.
+
+For example:
+
+```text
+pending
+running
+cancelling
+cancelled
+completed
+failed
+```
+
+Existing `CANCELLED` state support does not itself constitute a cancellation
+mechanism.
+
+Cancellation APIs and cancellation propagation are separate implementation
+work.
+
+V2.15 confirms that current process-local execution has no existing
+cooperative cancellation signal. It is therefore postponed rather than adding
+an endpoint, persistence, forced provider abort, rollback, or compensation.
+`cancel requested` would mean no new work should start; `cancelled` would mean
+the runtime actually reached that boundary. Neither means external work was
+rolled back.
+
+---
+
+# Dynamic replanning
+
+When expected evidence is unavailable, the runtime should be able to preserve
+the observation and optionally ask the planner for another bounded plan.
+
+Conceptually:
+
+```text
+planned evidence unavailable
+↓
+structured missing-information result
+↓
+planner receives updated state
+↓
+candidate replan
+↓
+deterministic validation
+↓
+execute
+```
+
+Replanning must have deterministic limits such as:
+
+```text
+max_replans
+```
+
+to prevent unbounded loops.
+
+## V2.16 — short-horizon dynamic replanning
+
+`AdaptiveInvestigationRuntime` executes up to three planning rounds. Each
+round is planner -> V2.8 validation -> existing executor, and contains at most
+three steps even though standalone V2.7 plans retain their five-step contract.
+Evidence and Facts accumulate across rounds. At a round boundary the runtime
+compares evidence/fact ID sets; the resulting deltas are a progress signal, not
+an importance score. It never interrupts an active short plan because a Redis,
+Postgres, Kafka, or other observation looks semantically important.
+
+The runtime stops on exhausted global tool-call budget, three rounds, one
+no-progress round, planner failure, or validation failure. The planner receives
+compact evidence, current facts, missing information, action history, remaining
+tool calls, and round position. Facts answer what is known; history answers
+what was tried. The runtime owns legality and bounds; the LLM owns the next
+semantic investigation strategy.
+
+---
+
+# Hypothesis generation
+
+Once sufficient evidence is collected, a future probabilistic component may
+generate candidate hypotheses.
+
+Input:
+
+```text
+typed facts
+evidence references
+missing information
+```
+
+Output:
+
+```text
+candidate hypotheses
+```
+
+Hypotheses should reference supporting evidence/facts explicitly.
+
+They remain candidates until validated.
+
+---
+
+# Evidence-backed claim validation
+
+The V1 explanation validator checks model-generated reason/action codes against
+the authoritative deterministic merge-readiness result.
+
+V2 should evolve this principle.
+
+Future validation may classify hypotheses as:
+
+```text
+supported
+weakly_supported
+contradicted
+unsupported
+unknown
+```
+
+The validator should check claims against structured evidence where
+deterministic checks are possible.
+
+An LLM judge may supplement evaluation later but must not silently become the
+sole authority for correctness.
+
+---
+
+# Grounded rendering
+
+Validated structured state should remain the authoritative representation.
+
+Target:
+
+```text
+candidate hypothesis
+↓
+validation
+↓
+approved structured claim
+↓
+deterministic or tightly controlled rendering
+↓
+user-facing result
+```
+
+Do not validate a claim and then casually send it through an unconstrained LLM
+that can introduce new unsupported assertions.
+
+---
+
+# V2 evaluation architecture
+
+Reuse the current eval harness rather than creating a second framework.
+
+V2 should eventually add component-level evaluation for:
+
+```text
+planner validity
+tool selection
+tool arguments
+evidence retrieval
+hypothesis quality
+grounding
+abstention
+final result
+```
+
+Target failure attribution:
+
+```text
+wrong final result
+├── bad plan
+├── wrong tool
+├── incorrect arguments
+├── missing evidence
+├── connector/provider failure
+├── reasoning failure
+└── validator failure
+```
+
+Keep these denominators separate:
+
+```text
+provider success
+candidate availability
+schema validity
+grounding quality
+ground-truth correctness
+```
+
+Do not reduce them to one ambiguous "accuracy" metric.
+
+---
+
+# V2 observability architecture
+
+Extend the current OpenTelemetry hierarchy.
+
+A future investigation trace may resemble:
+
+```text
+HTTP request
+└── investigation
+    ├── baseline/planner
+    ├── plan validation
+    ├── tool.github.*
+    ├── tool.jira.*
+    ├── tool.incident.*
+    ├── replan
+    ├── hypothesis.generate
+    └── hypothesis.validate
+```
+
+Potential bounded metrics include:
+
+```text
+investigation duration
+tool calls per run
+model calls per run
+replan count
+retry count
+budget exhaustion
+unsupported claim count
+token usage
+```
+
+Do not use high-cardinality user-controlled values as metric labels.
+
+---
+
+# Replay
+
+A later V2 capability should allow safe evidence snapshots to be reused for
+offline comparison.
+
+Conceptually:
+
+```text
+recorded investigation evidence
+↓
+new prompt/model/runtime logic
+↓
+replay
+↓
+compare results
+```
+
+Replay is useful for:
+
+```text
+prompt regression
+model comparison
+planner comparison
+validator changes
+```
+
+without relying on mutable live external systems for every experiment.
+
+---
+
+# Queue/worker boundary
+
+Queues and workers are not an initial V2 requirement.
+
+Keep synchronous/in-process execution until investigation duration or load
+demonstrates that request-lifetime execution is unsuitable.
+
+A later asynchronous architecture may become:
+
+```text
+POST /investigations
+↓
+create durable run
+↓
+enqueue work
+↓
+worker
+↓
+investigation runtime
+```
+
+with an initial API response such as:
+
+```text
+202 Accepted
+run_id
+```
+
+Do not introduce Kafka, RabbitMQ, Redis, Celery, SQS, or Temporal without a
+specific requirement and design decision.
+
+---
+
+# V2 runtime visibility
+
+The existing polling dashboard remains useful during early V2 development.
+
+It currently consumes snapshots:
+
+```text
+GET /v1/runs/{run_id}
+```
+
+Future dynamic investigation may justify first-class execution events.
+
+Potential later direction:
+
+```text
+Run snapshot
+= what is true now
+
+Run events
+= how the run reached that state
+```
+
+Future endpoints may conceptually become:
+
+```text
+GET /runs/{id}
+GET /runs/{id}/events
+GET /runs/{id}/stream
+```
+
+with SSE appropriate for one-way server-to-browser live updates.
+
+This is planned, not currently implemented unless the repository later shows
+otherwise.
+
+---
+
+# Security boundary for agentic execution
+
+All external provider content is untrusted data.
+
+This includes:
+
+```text
+GitHub descriptions/comments
+Jira descriptions/comments
+logs
+stack traces
+runbooks
+code comments
+telemetry content
+```
+
+External text must not gain instruction authority merely because it appears in
+model context.
+
+Target authority hierarchy:
+
+```text
+runtime/system policy
+        >
+validated capabilities
+        >
+planner request
+        >
+external evidence
+```
+
+Tool permission and tool selection are separate concerns.
+
+A model requesting an operation does not authorize that operation.
+
+Read and write capabilities must remain explicitly distinct.
+
+Early V2 should remain read-oriented.
+
+---
+
+# V2 target dependency structure
+
+The intended architectural dependency direction is:
+
+```text
+External providers
+      │
+      ▼
+Adapters / connectors
+      │
+      ▼
+Normalized evidence
+      │
+      ▼
+Investigation domain
+      │
+      ▼
+Planner / validator / runtime orchestration
+      │
+      ▼
+Validated InvestigationResult
+      │
+      ▼
+API
+      │
+      ▼
+Frontend
+```
+
+The domain should not import infrastructure-specific clients.
+
+Provider adapters may depend inward on domain/protocol contracts.
+
+High-level investigation policy must not depend on raw provider schemas.
+
+---
+
+# V2 implementation sequence
+
+The current target milestone order is:
+
+```text
+V2.1  Investigation Domain Model
+V2.2  Evidence Model
+V2.3  GitHub code/diff evidence
+V2.4  IncidentSource abstraction
+V2.5  Tool abstraction and registry
+V2.6  Deterministic investigation baseline
+V2.7  Typed planner
+V2.8  Plan validator
+V2.9  Agent execution loop
+V2.10 Execution budgets
+V2.11 Failure taxonomy extension
+V2.12 Retry/backoff/jitter
+V2.13 Retry-safety/idempotency boundary (implemented and verified; no idempotency system)
+V2.14 Durable checkpoint/resume (explicitly postponed; current execution is process-local)
+V2.15 Cancellation
+V2.16 Dynamic replanning
+V2.17 Hypothesis generation
+V2.18 Claim/evidence validation
+V2.19 Grounded rendering and initial investigation console (implemented offline)
+V2.20 Component/trajectory evals
+V2.21 Agent-level OTel/Grafana
+V2.22 Replay
+V2.23 Queue/workers if justified
+V2.24 Investigation UI/timeline (initial console implemented with V2.19)
+V2.25 Live verification/release gates
+```
+
+The active implementation plan determines which one is currently being built.
+
+Do not infer implementation merely from this roadmap.
+
+---
+
+# Explicit V2 non-goals
+
+Unless a later milestone establishes a concrete requirement, early V2 does not
+include:
+
+```text
+company-wide RAG
+vector database
+BM25
+embeddings
+reranking
+knowledge-graph database
+Slack connector
+multi-agent swarm
+write/remediation tools
+business SQL analytics
+general model router
+multi-model fallback mesh
+MCP marketplace
+full multi-tenancy
+enterprise OAuth platform
+Kubernetes
+Kafka
+sharding
+```
+
+These may be useful later.
+
+They are not prerequisites for building a reliable incident-investigation
+runtime.
+
+---
+
+# V2 architecture invariants
+
+Future implementation should preserve these invariants:
+
+1. External data is validated at provider boundaries.
+2. Evidence retains provenance.
+3. Facts and hypotheses are distinct types.
+4. Missing evidence is represented explicitly.
+5. LLM output remains untrusted until validated.
+6. The planner cannot bypass the runtime.
+7. Tool execution requires deterministic validation.
+8. Runtime execution is bounded.
+9. Persistent state is not confused with crash recovery.
+10. Retryable and permanent failures remain distinct.
+11. Retries must not create uncontrolled duplicate effects.
+12. Model/provider/prompt identity remains observable without leaking secrets.
+13. Evaluation distinguishes reliability, schema validity, grounding, and
+    correctness.
+14. User-visible claims must not exceed their supporting evidence.
+15. Existing V1 behaviour must not regress merely to make V2 abstractions more
+    generic.
+
+---
+
+# V2.1 implementation boundary
+
+At the start of V2, only V2.1 should become implemented.
+
+Its intended dependency shape is:
+
+```text
+services/api/app/investigations/models.py
+        │
+        ├── uses existing ContractModel conventions
+        ├── defines investigation-domain vocabulary
+        └── contains no provider/runtime execution
+```
+
+V2.1 should not create dependencies on:
+
+```text
+GitHub HTTP clients
+Jira HTTP clients
+LLM clients
+OpenTelemetry
+SQLAlchemy
+FastAPI
+planner code
+tool execution
+```
+
+This keeps the first investigation models as a pure domain boundary.
+
+When V2.1 is implemented and validated, move it from:
+
+```text
+TARGET / PLANNED
+```
+
+to the relevant:
+
+```text
+CURRENT / IMPLEMENTED
+```
+
+architecture section and leave the remaining target sections explicitly
+planned.
