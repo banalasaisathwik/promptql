@@ -325,7 +325,7 @@ grounding flow:
 Evidence -> deterministic fact derivation -> Facts
         -> typed LLM hypothesis generator -> CandidateHypothesis
         -> deterministic validator -> ValidatedHypothesis
-        -> V2.19 deterministic renderer (planned)
+        -> V2.19 deterministic renderer -> grounded API/UI result
 ```
 
 Facts remain objective, evidence-backed relationships; a hypothesis is an
@@ -342,7 +342,54 @@ duplicate, mismatched, or insufficient Fact references in candidate order.
 This is structural and semantic support, not proof of the actual root cause.
 No dependency, Redis, Postgres, Kafka, or provider-specific branch exists. The
 current Fact vocabulary does not justify dependency or deployment causal kinds,
-and V2.19 owns template rendering of accepted structures.
+and V2.19 owns template rendering of accepted structures. The renderer accepts
+only `ValidatedHypothesis` values, resolves every supporting Fact ID, and emits
+`GroundedInvestigationResult` using fixed templates. It never receives the
+candidate rationale or raw provider prose.
+
+Changed-file Evidence now produces an atomic `ChangedFileFact`; the existing
+matching-file and changed-hunk Facts remain separate deterministic
+relationships. The code-change validator requires both kinds of support for the
+same path, so a rendered contributing-factor statement remains traceable to
+the observed file and its failure-location link. Renderer summaries also keep
+budget exhaustion, no progress, planning limits, provider unavailability, and
+plan-validation failure semantically distinct from a failed runtime snapshot.
+
+## V2.19 investigation console integration
+
+The user-facing V2 path now reuses the existing persisted snapshot mechanism:
+
+```text
+structured InvestigationRequest
+  -> POST /v1/investigations
+  -> PostgreSQL pending InvestigationRun
+  -> existing LiveRunTaskRegistry
+  -> typed investigation runtime snapshot
+  -> GET /v1/runs/{run_id} polling
+  -> React InvestigationDashboard
+```
+
+`InvestigationRun.state` contains compact planning rounds, normalized Evidence,
+derived Facts, MissingInformation, validated hypotheses, tool-call budget
+accounting, and a termination reason. The nullable `investigation_state` JSON
+column extends the existing workflow-run row; V1 merge-readiness rows continue
+to use their existing typed request/result and step table. The UI selects the
+run variant from the validated `workflow_name` and does not reconstruct events
+or derive domain semantics.
+
+The final boundary is:
+
+```text
+ValidatedHypothesis + validated supporting Facts
+  -> render_grounded_result()
+  -> GroundedInvestigationResult
+  -> InvestigationDashboard
+```
+
+The current integration uses a bounded static plan to exercise the existing
+validated plan and executor path while the full adaptive planner remains a
+separate runtime capability. No new SSE, WebSocket, event bus, Langfuse, or
+OpenTelemetry replacement is introduced.
 
 ```text
 redis-prod ----
@@ -2018,12 +2065,12 @@ V2.15 Cancellation
 V2.16 Dynamic replanning
 V2.17 Hypothesis generation
 V2.18 Claim/evidence validation
-V2.19 Grounded rendering
+V2.19 Grounded rendering and initial investigation console (implemented offline)
 V2.20 Component/trajectory evals
 V2.21 Agent-level OTel/Grafana
 V2.22 Replay
 V2.23 Queue/workers if justified
-V2.24 Investigation UI/timeline
+V2.24 Investigation UI/timeline (initial console implemented with V2.19)
 V2.25 Live verification/release gates
 ```
 

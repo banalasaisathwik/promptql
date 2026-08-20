@@ -1982,3 +1982,38 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   testable but deliberately covers fewer incident stories. V2.19 may render only
   validated structures with deterministic templates; hard contradiction rules
   await a future deterministic counter-evidence Fact vocabulary.
+
+### 2026-08-19 - Render grounded investigations through the existing live snapshot path
+
+- **Engineering concept:** A frontend investigation console is a projection of
+  backend runtime/domain state, not a second reasoning engine. The existing
+  `LiveRunTaskRegistry`, `RunRepository`, `GET /v1/runs/{run_id}`, and React
+  polling controller now carry a typed `InvestigationRun` alongside the V1
+  merge-readiness run.
+- **Syntax and implementation:** `InvestigationRuntimeSnapshot` is a validated
+  Pydantic aggregate for rounds, tool states, Evidence, Facts, budget, and
+  termination. `render_grounded_result()` accepts `ValidatedHypothesis`, looks
+  up each supporting Fact ID, and returns `GroundedInvestigationResult`; this
+  is runtime validation rather than a TypeScript-only interface guarantee.
+- **Decision:** ADR-025 extends the existing persisted run resource with a
+  nullable `investigation_state` JSON column instead of introducing another
+  streaming system or process-local UI state. This preserves refreshability and
+  V1 compatibility while keeping the new state compact.
+- **Invariant and failure behavior:** A candidate cannot cross the renderer
+  boundary, an unknown Fact ID raises a grounding error, and no accepted
+  hypothesis produces no-causal-conclusion wording. `derive_facts()` now also
+  materializes a `ChangedFileFact` for every normalized changed-file Evidence;
+  the validator can therefore require both that atomic fact and a separate
+  failure-location relationship. Budget, provider, no-progress, planning-limit,
+  and plan-validation endings use distinct deterministic summaries, while a
+  true runtime failure remains a failed snapshot with a sanitized error.
+- **Validation evidence:** `tests/unit/test_grounded_hypotheses.py`,
+  `tests/unit/test_investigation_workflow.py`, and
+  `tests/integration/test_investigation_api.py` cover the backend boundary;
+  the frontend investigation parser, form, dashboard, polling, lint, and
+  production build cover the user-visible projection.
+- **Trade-off and unresolved question:** The current API integration uses a
+  bounded static plan to exercise the existing validated executor while the
+  adaptive planner remains available as a separate capability. Checkpoint
+  recovery, event replay, live provider verification, and dependency-specific
+  hypothesis predicates remain deferred.

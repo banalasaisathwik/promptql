@@ -107,6 +107,9 @@ class WorkflowRunRow(DatabaseModel):
     result: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB(none_as_null=True)
     )
+    investigation_state: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
     runtime_error: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB(none_as_null=True)
     )

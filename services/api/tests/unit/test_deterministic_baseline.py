@@ -74,7 +74,8 @@ class DeterministicBaselineTests(unittest.IsolatedAsyncioTestCase):
             [fact.fact_type for fact in result.facts],
             [
                 "deployment_preceded_incident", "deployment_references_commit",
-                "commit_associated_with_pull_request", "changed_file_matches_failure_file",
+                "commit_associated_with_pull_request", "changed_file",
+                "changed_file_matches_failure_file",
                 "changed_hunk_overlaps_failure_line",
             ],
         )
@@ -154,15 +155,15 @@ class FactDerivationTests(unittest.TestCase):
         other_path = self.changed_file.model_copy(update={"content": self.changed_file.content.model_copy(update={"path": "services/payments.py"})})
 
         facts = derive_facts((self.changed_file, overlapping, self.frame))
-        self.assertEqual([fact.fact_type for fact in facts], ["changed_file_matches_failure_file", "changed_hunk_overlaps_failure_line"])
-        self.assertEqual([fact.fact_type for fact in derive_facts((self.changed_file, outside, self.frame))], ["changed_file_matches_failure_file"])
-        self.assertEqual([fact.fact_type for fact in derive_facts((no_patch, overlapping, self.frame))], ["changed_file_matches_failure_file"])
-        self.assertEqual(derive_facts((other_path, overlapping, self.frame)), ())
+        self.assertEqual([fact.fact_type for fact in facts], ["changed_file", "changed_file_matches_failure_file", "changed_hunk_overlaps_failure_line"])
+        self.assertEqual([fact.fact_type for fact in derive_facts((self.changed_file, outside, self.frame))], ["changed_file", "changed_file_matches_failure_file"])
+        self.assertEqual([fact.fact_type for fact in derive_facts((no_patch, overlapping, self.frame))], ["changed_file", "changed_file_matches_failure_file"])
+        self.assertEqual([fact.fact_type for fact in derive_facts((other_path, overlapping, self.frame))], ["changed_file"])
 
     def test_facts_preserve_evidence_references_and_accumulator_rejects_duplicates(self) -> None:
         overlapping = self.hunk.model_copy(update={"content": self.hunk.content.model_copy(update={"old_start": 87, "new_start": 87})})
         facts = derive_facts((self.changed_file, overlapping, self.frame))
-        self.assertEqual(facts[1].evidence_reference_ids, tuple(sorted((self.changed_file.evidence_id, overlapping.evidence_id, self.frame.evidence_id))))
+        self.assertEqual(facts[2].evidence_reference_ids, tuple(sorted((self.changed_file.evidence_id, overlapping.evidence_id, self.frame.evidence_id))))
         accumulator = EvidenceAccumulator()
         accumulator.add((self.incident,))
         with self.assertRaises(DuplicateEvidenceIdError):

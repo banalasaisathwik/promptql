@@ -7,6 +7,7 @@ from pydantic import model_validator
 from app.connectors.models import ContractModel, NonEmptyString
 from app.explanations import ExplanationErrorCode, MergeReadinessExplanation
 from app.runtime import MergeReadinessRun, RunStatus
+from app.runtime.investigation_models import InvestigationRun
 
 
 class ApiErrorCode(StrEnum):
@@ -66,3 +67,7 @@ class MergeReadinessResponse(MergeReadinessRun):
         ):
             raise ValueError("the explanation cannot change the policy decision")
         return self
+
+
+class InvestigationResponse(InvestigationRun):
+    """HTTP representation of a V2 investigation snapshot."""

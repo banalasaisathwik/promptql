@@ -6,7 +6,7 @@
 
 import './App.css'
 import { useEffect, useState } from 'react'
-import { MergeReadinessPage } from './features/inspection/MergeReadinessPage'
+import { InvestigationConsolePage } from './features/inspection/InvestigationConsolePage'
 import { RunDashboardPage } from './features/inspection/RunDashboardPage'
 import { runPathFor } from './routing'
 
@@ -34,8 +34,8 @@ function App() {
   }
 
   return (
-    <MergeReadinessPage
-      onLiveRunStarted={(nextRunId) => {
+    <InvestigationConsolePage
+      onRunStarted={(nextRunId) => {
         const nextPath = runPathFor(nextRunId)
         window.history.pushState(null, '', nextPath)
         setPathname(nextPath)

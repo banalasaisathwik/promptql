@@ -1,7 +1,10 @@
 import { MergeReadinessPanel } from './components/MergeReadinessPanel'
 import { useRunSnapshot } from './useRunSnapshot'
+import { InvestigationDashboard } from './InvestigationDashboard'
 import type {
+  InvestigationRun,
   PullRequestMergeReadiness,
+  RuntimeRun,
   RuntimeStatus,
   RuntimeStep,
   WorkflowStepName,
@@ -169,6 +172,14 @@ export function RunDashboard({ run }: { run: PullRequestMergeReadiness }) {
 }
 
 
+export function RuntimeDashboard({ run }: { run: RuntimeRun }) {
+  if (run.workflow_name === 'investigation') {
+    return <InvestigationDashboard run={run as InvestigationRun} />
+  }
+  return <RunDashboard run={run as PullRequestMergeReadiness} />
+}
+
+
 export function RunDashboardPage({ runId }: { runId: string }) {
   const { snapshot, loading, refreshError } = useRunSnapshot(runId)
 
@@ -195,7 +206,7 @@ export function RunDashboardPage({ runId }: { runId: string }) {
             <p>The dashboard will render only after the API response is validated.</p>
           </div>
         ) : snapshot ? (
-          <RunDashboard run={snapshot} />
+          <RuntimeDashboard run={snapshot} />
         ) : (
           <div className="empty-state">
             <div className="empty-symbol" aria-hidden="true">!</div>

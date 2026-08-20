@@ -6,6 +6,8 @@ from app.investigations import (
     ChangedFileMatchesFailureFileFact,
     DeploymentPrecededIncidentFact,
     InvestigationRequest,
+    MissingInformation,
+    MissingInformationKind,
 )
 from app.investigations.replanning import AdaptiveInvestigationState, ContinuationReason
 from app.investigations.hypotheses import (
@@ -15,10 +17,14 @@ from app.investigations.hypotheses import (
     HypothesisGenerationFailureCode,
     HypothesisGenerationInput,
     HypothesisKind,
+    GroundedTerminationReason,
+    GroundingRenderError,
     HypothesisValidationFailureCode,
     MAX_HYPOTHESES,
     TypedLLMHypothesisGenerator,
     build_hypothesis_generation_input,
+    render_grounded_result,
+    render_missing_information,
 )
 
 
@@ -147,6 +153,86 @@ class DeterministicHypothesisValidatorTests(unittest.TestCase):
         result = DeterministicHypothesisValidator().validate((), _facts())
         self.assertEqual(result.accepted_hypotheses, ())
         self.assertEqual(result.rejected_candidates, ())
+
+
+class GroundedRenderingTests(unittest.TestCase):
+    def test_supported_hypothesis_uses_only_validated_facts(self):
+        validated = DeterministicHypothesisValidator().validate(
+            (_candidate("F_CHANGED", "F_FAILURE_FILE"),), _facts()
+        ).accepted_hypotheses
+
+        result = render_grounded_result(
+            _facts(), validated, (), GroundedTerminationReason.COMPLETED
+        )
+
+        self.assertEqual(
+            result.supported_hypotheses[0].statement,
+            "Changes associated with checkout.py may have contributed to the incident.",
+        )
+        self.assertEqual(result.key_fact_ids, ("F_CHANGED", "F_FAILURE_FILE"))
+
+    def test_same_structured_input_is_deterministic(self):
+        validated = DeterministicHypothesisValidator().validate(
+            (_candidate("F_CHANGED", "F_FAILURE_FILE"),), _facts()
+        ).accepted_hypotheses
+        first = render_grounded_result(
+            _facts(), validated, (), GroundedTerminationReason.COMPLETED
+        )
+        second = render_grounded_result(
+            _facts(), validated, (), GroundedTerminationReason.COMPLETED
+        )
+        self.assertEqual(first, second)
+
+    def test_no_validated_hypothesis_is_insufficient_evidence(self):
+        result = render_grounded_result(
+            _facts(), (), (), GroundedTerminationReason.NO_PROGRESS
+        )
+        self.assertEqual(result.supported_hypotheses, ())
+        self.assertIn("not sufficient", result.summary)
+
+    def test_budget_and_provider_termination_reasons_render_different_safe_summaries(self):
+        budget_result = render_grounded_result(
+            _facts(), (), (), GroundedTerminationReason.BUDGET_EXHAUSTED
+        )
+        provider_result = render_grounded_result(
+            _facts(), (), (), GroundedTerminationReason.PROVIDER_FAILURE
+        )
+
+        self.assertIn("tool-call budget was exhausted", budget_result.summary)
+        self.assertIn("hypothesis generation was unavailable", provider_result.summary)
+        self.assertNotEqual(budget_result.summary, provider_result.summary)
+
+    def test_missing_information_uses_its_deterministic_detail(self):
+        missing = MissingInformation(
+            missing_information_id="M_DEPLOYMENT",
+            kind=MissingInformationKind.DEPLOYMENT_MAPPING_UNAVAILABLE,
+            detail="Deployment evidence was unavailable.",
+        )
+
+        self.assertEqual(
+            render_missing_information(missing),
+            "Deployment evidence was unavailable.",
+        )
+
+    def test_candidate_cannot_cross_the_rendering_boundary(self):
+        with self.assertRaises(GroundingRenderError):
+            render_grounded_result(
+                _facts(),
+                (_candidate("F_CHANGED", "F_FAILURE_FILE"),),
+                (),
+                GroundedTerminationReason.COMPLETED,
+            )
+
+    def test_unknown_fact_id_cannot_be_rendered(self):
+        validated = DeterministicHypothesisValidator().validate(
+            (_candidate("F_CHANGED", "F_FAILURE_FILE"),), _facts()
+        ).accepted_hypotheses[0].model_copy(
+            update={"supporting_fact_ids": ("F_UNKNOWN",)}
+        )
+        with self.assertRaises(GroundingRenderError):
+            render_grounded_result(
+                _facts(), (validated,), (), GroundedTerminationReason.COMPLETED
+            )
 
 
 if __name__ == "__main__":

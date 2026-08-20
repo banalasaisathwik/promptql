@@ -42,6 +42,9 @@ class RuntimeErrorCode(StrEnum):
     CONNECTOR_EXECUTION_FAILED = "connector_execution_failed"
     POLICY_EXECUTION_FAILED = "policy_execution_failed"
     FIXTURE_NOT_FOUND = "fixture_not_found"
+    INVESTIGATION_PROVIDER_FAILURE = "investigation_provider_failure"
+    INVESTIGATION_PLAN_INVALID = "investigation_plan_invalid"
+    INVESTIGATION_RUNTIME_FAILURE = "investigation_runtime_failure"
 
 
 class RuntimeErrorInfo(ContractModel):

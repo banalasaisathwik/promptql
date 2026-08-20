@@ -10,13 +10,16 @@ import { ConnectorApiError } from './apiError'
 import {
   parseLiveRunStart,
   parseMergeReadiness,
+  parseRuntimeRun,
   parseScenarioCatalog,
 } from './responseValidation'
 import type {
   ConnectorRequest,
+  InvestigationRequest,
   FixtureScenario,
   LiveRunStart,
   PullRequestMergeReadiness,
+  RuntimeRun,
 } from './types'
 
 
@@ -154,4 +157,27 @@ export async function fetchMergeReadinessRun(
     signal,
   })
   return parseMergeReadiness(body)
+}
+
+
+export async function startInvestigationRun(
+  request: InvestigationRequest,
+): Promise<LiveRunStart> {
+  const body = await requestJson('/v1/investigations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  return parseLiveRunStart(body)
+}
+
+
+export async function fetchRuntimeRun(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<RuntimeRun> {
+  const body = await requestMergeReadiness(`/v1/runs/${encodeURIComponent(runId)}`, {
+    signal,
+  })
+  return parseRuntimeRun(body)
 }

@@ -1,5 +1,6 @@
 from app.investigations import (
     ChangedFileEvidenceContent,
+    ChangedFileFact,
     ChangedFileMatchesFailureFileFact,
     ChangedHunkOverlapsFailureLineFact,
     DiffHunkEvidenceContent,
@@ -17,13 +18,30 @@ def _normalized_path(path: str) -> str:
 
 def derive_code_failure_facts(
     evidence: tuple[Evidence, ...],
-) -> tuple[ChangedFileMatchesFailureFileFact | ChangedHunkOverlapsFailureLineFact, ...]:
+) -> tuple[
+    ChangedFileFact | ChangedFileMatchesFailureFileFact | ChangedHunkOverlapsFailureLineFact,
+    ...,
+]:
     # A hunk is useful only when a patch exists and its new-file range contains
     # the observed failure line. A deletion range (new_count == 0) has no new line.
-    facts: list[ChangedFileMatchesFailureFileFact | ChangedHunkOverlapsFailureLineFact] = []
+    facts: list[
+        ChangedFileFact | ChangedFileMatchesFailureFileFact | ChangedHunkOverlapsFailureLineFact
+    ] = []
     changed_files = [item for item in evidence if isinstance(item.content, ChangedFileEvidenceContent)]
     hunks = [item for item in evidence if isinstance(item.content, DiffHunkEvidenceContent)]
     frames = [item for item in evidence if isinstance(item.content, StackFrameEvidenceContent)]
+    # Each observed changed file is a first-class Fact. Relationship facts below
+    # can then prove that a particular changed path also matches the failure.
+    for changed_file in changed_files:
+        facts.append(
+            ChangedFileFact(
+                fact_id=fact_id("changed-file", changed_file),
+                evidence_reference_ids=references(changed_file),
+                path=changed_file.content.path,
+                change_type=changed_file.content.change_type,
+            )
+        )
+
     for frame in frames:
         if frame.content.file_path is None:
             continue

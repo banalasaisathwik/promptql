@@ -595,7 +595,7 @@ V2.18
 Evidence-backed claim validation
 
 V2.19
-Grounded rendering
+Grounded rendering and initial investigation console (implemented offline)
 
 V2.20
 Component and trajectory evals
@@ -610,13 +610,20 @@ V2.23
 Queue/workers only if runtime requirements justify them
 
 V2.24
-Investigation UI and execution timeline
+Investigation UI and execution timeline (initial console implemented with V2.19)
 
 V2.25
 Live verification and V2 release gates
 ```
 
-This is a roadmap, not a statement that these features currently exist.
+V2.19 grounded rendering and the initial investigation console are now
+implemented offline. The console accepts structured incident context, reuses
+the persisted live-run snapshot path, and shows Evidence, Facts, missing
+information, validated hypotheses, budget/termination state, and a
+deterministic grounded result. It does not expose raw model causal prose.
+
+Live provider/database verification, crash recovery, replay, and high-fan-out
+streaming remain future work.
 
 ---
 
