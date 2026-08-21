@@ -238,8 +238,10 @@ async def run_plain_call(settings: LLMSettings) -> dict[str, object]:
             max_tokens=16,
             timeout=settings.request_timeout_seconds,
         )
-        message = response.choices[0].message.content if response.choices else None
-        if not isinstance(message, str) or message.strip().lower() != "ok":
+        # A returned choice proves the plain transport/auth/model-access path.
+        # Some reasoning models can spend a tiny allowance before producing
+        # visible content; the next typed stage owns content/schema validation.
+        if not response.choices:
             return {
                 "stage": "plain",
                 "status": "FAIL",
@@ -247,7 +249,7 @@ async def run_plain_call(settings: LLMSettings) -> dict[str, object]:
                 "http_status": None,
                 "provider_error_code": "unexpected_response",
                 "provider_error_type": "response_content",
-                "provider_message": "The provider response was not the requested word.",
+                "provider_message": "The provider response did not contain a completion choice.",
                 "provider_category": "invalid_structured_response",
                 "requested_model": model,
                 "endpoint": OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,

@@ -12,6 +12,7 @@ from app.connectors.github_code_fakes import (
 )
 from app.connectors.incident_fakes import (
     DEPLOYMENT_REQUEST,
+    FAILURE_LOCATION_REQUEST,
     INCIDENT_REQUEST,
     TELEMETRY_REQUEST,
     FakeIncidentSource,
@@ -22,6 +23,7 @@ from app.tools import (
     DuplicateToolError,
     GetCommitTool,
     GetDiffTool,
+    GetFailureLocationTool,
     GetDeploymentsTool,
     GetIncidentTool,
     GetJiraIssueInput,
@@ -143,10 +145,17 @@ class ToolAdapterTests(unittest.IsolatedAsyncioTestCase):
         telemetry_result = await QueryTelemetryTool(source).execute(
             TELEMETRY_REQUEST.model_dump()
         )
+        failure_location_result = await GetFailureLocationTool(source).execute(
+            FAILURE_LOCATION_REQUEST.model_dump()
+        )
 
         self.assertEqual(incident_result.evidence[0].kind.value, "incident")
         self.assertEqual(deployment_result.evidence[0].kind.value, "deployment")
         self.assertEqual(telemetry_result.evidence[0].content.event_count, 17)
+        self.assertEqual(
+            failure_location_result.evidence[0].content.file_path,
+            "services/checkout.py",
+        )
 
     async def test_jira_adapter_normalizes_connector_result_to_evidence(self) -> None:
         issue = next(iter(JIRA_FIXTURES.values()))

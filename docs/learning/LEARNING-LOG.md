@@ -1,5 +1,45 @@
 # Learning log
 
+## 2026-08-21 — Controlled Evidence collection includes every connector call
+
+- **Engineering concept:** A connector call is not controlled merely because it
+  returns typed Evidence. It must also cross capability allowlisting, plan
+  validation, execution lifecycle, retry classification, and budget accounting.
+- **Important syntax:** A new `StrEnum` tool ID and frozen `ToolDefinition`
+  reuse the existing Pydantic input/output contracts. `model_copy(update=...)`
+  persists safe planner/hypothesis metadata without mutating prior snapshots;
+  dictionary `setdefault()` gives stable first-observation dedupe.
+- **Implementation locations:** `app/tools/models.py` and `adapters.py` register
+  `get_failure_location`; `app/investigations/replanning.py` persists planner
+  metadata, accurately relates new Facts to each action, and deduplicates gaps;
+  `app/explanations/fakes.py` drives the real offline adaptive fixture path;
+  `app/workflows/investigation.py` removes the hidden post-runtime lookup.
+- **Validation commands:** Focused tool/runtime/workflow/hypothesis/API/diagnostic
+  tests passed 47 tests; final backend discovery passed 376 tests with six
+  environment-guarded PostgreSQL skips. Python compilation, frontend 38-test
+  suite, Oxlint, production build, and `git diff --check` passed. OpenRouter
+  plain transport and strict planner-routing schema probes passed live with
+  `openai/gpt-oss-120b` after the final tool contract change.
+- **Important design decision:** ADR-026 puts failure-location retrieval behind
+  the existing read-only tool runtime instead of manually duplicating budget and
+  retry behavior around a direct `IncidentSource` call.
+- **Why selected:** The tool route is the smallest design that makes every
+  external Evidence request visible, bounded, retry-safe, and persistable while
+  reusing all existing V2 contracts.
+- **Invariant / failure behavior:** Model plans remain proposals. Only a
+  registered, allowed, statically valid tool executes; every physical attempt
+  consumes budget; stack-frame content becomes a Fact only through deterministic
+  derivation; raw prompts/provider payloads remain absent from snapshots.
+- **Concrete trade-off:** The planner schema gains one capability and therefore
+  needs another live compatibility smoke. In return, the workflow loses an
+  unbudgeted call that could previously fail after the main exception boundary
+  and leave a durable run stuck in `running`.
+- **Unresolved question:** Whether per-step persistence is worth the additional
+  write volume remains deferred; round-level planned/completed checkpoints are
+  currently truthful and sufficient for V2 polling.
+- **V2 milestone:** Completion stabilization before code-level diagnosis and
+  V2 component/trajectory evals.
+
 ## 2026-08-21 — Live typed planning needs contract parity and runtime proof
 
 - **Concept:** A passing isolated LLM diagnostic proves only that a provider can

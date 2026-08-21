@@ -43,3 +43,4 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-023](ADR-023-bounded-tool-retry-policy.md) | Accepted | Typed transient failure classification and executor-owned bounded retries charged to the shared tool-call budget |
 | [ADR-024](ADR-024-grounded-hypothesis-proposals.md) | Accepted | Bounded LLM hypothesis proposals with deterministic Fact-relationship validation |
 | [ADR-025](ADR-025-investigation-console-snapshot-integration.md) | Accepted | Investigation console uses the existing persisted run snapshot and polling mechanism |
+| [ADR-026](ADR-026-budgeted-failure-location-evidence.md) | Accepted | Collect failure-location Evidence through the validated, budgeted read-only tool runtime |

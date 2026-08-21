@@ -53,7 +53,7 @@ def incident_plan(reference: str) -> InvestigationPlan:
 def hypothesis_plan() -> InvestigationPlan:
     return InvestigationPlan(steps=(
         PlanStep(step_id="s1", tool_id=InvestigationToolId.GET_INCIDENT, reason="Collect incident evidence.", arguments=(PlanArgument(name="incident_reference", value=Literal(value="incident:checkout-500")),)),
-        PlanStep(step_id="s2", tool_id=InvestigationToolId.GET_PULL_REQUEST, reason="Collect pull request evidence.", arguments=(PlanArgument(name="repository_owner", value=Literal(value="octo-org")), PlanArgument(name="repository_name", value=Literal(value="analytics")), PlanArgument(name="pr_number", value=Literal(value=42)))),
+        PlanStep(step_id="s2", tool_id=InvestigationToolId.GET_FAILURE_LOCATION, reason="Collect failure location evidence.", arguments=(PlanArgument(name="incident_reference", value=Literal(value="incident:checkout-500")),)),
         PlanStep(step_id="s3", tool_id=InvestigationToolId.GET_DIFF, reason="Collect changed file evidence.", arguments=(PlanArgument(name="repository_owner", value=Literal(value="octo-org")), PlanArgument(name="repository_name", value=Literal(value="analytics")), PlanArgument(name="pr_number", value=Literal(value=42)))),
     ))
 
@@ -125,6 +125,11 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         completed = await workflow.continue_persisted_run(pending)
 
         self.assertEqual(len(completed.state.validated_hypotheses), 1)
+        self.assertIsNotNone(completed.state.hypothesis_generation_metadata)
+        self.assertTrue(completed.state.action_history)
+        self.assertTrue(
+            all(round.planner_metadata is not None for round in completed.state.rounds)
+        )
         self.assertEqual(len(completed.result.supported_hypotheses), 1)
         self.assertIn("may have contributed", completed.result.supported_hypotheses[0].statement)
         self.assertNotIn("provider rationale", completed.result.model_dump_json())
@@ -195,6 +200,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(planner.inputs[0].allowed_tools, planner.inputs[1].allowed_tools)
         self.assertEqual(completed.state.termination_reason, "no_progress")
+        self.assertFalse(completed.state.action_history[0].produced_new_facts)
 
     async def test_round_boundaries_are_persisted_before_the_final_result(self):
         repository = InMemoryRunRepository()

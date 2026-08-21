@@ -23,6 +23,10 @@ class GroundedTerminationReason(StrEnum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     NO_PROGRESS = "no_progress"
     PLANNING_LIMIT_REACHED = "planning_limit_reached"
+    PLANNER_FAILURE = "planner_failure"
+    HYPOTHESIS_GENERATION_FAILURE = "hypothesis_generation_failure"
+    # Older V2.19 JSON snapshots used this broader value. Retaining it keeps
+    # persisted runs readable while new runs record the precise failed stage.
     PROVIDER_FAILURE = "provider_failure"
     PLAN_VALIDATION_FAILURE = "plan_validation_failure"
 
@@ -137,8 +141,16 @@ def _render_summary(
         GroundedTerminationReason.PLANNING_LIMIT_REACHED: (
             "The investigation stopped after reaching the configured planning-round limit. "
         ),
-        GroundedTerminationReason.PROVIDER_FAILURE: (
+        GroundedTerminationReason.PLANNER_FAILURE: (
+            "Evidence collection stopped because structured planning was unavailable. "
+        ),
+        GroundedTerminationReason.HYPOTHESIS_GENERATION_FAILURE: (
             "Evidence collection completed, but structured hypothesis generation was unavailable. "
+        ),
+        # This branch renders historical snapshots only; current workflow code
+        # selects PLANNER_FAILURE or HYPOTHESIS_GENERATION_FAILURE instead.
+        GroundedTerminationReason.PROVIDER_FAILURE: (
+            "The investigation could not complete because a configured model provider was unavailable. "
         ),
         GroundedTerminationReason.PLAN_VALIDATION_FAILURE: (
             "The investigation stopped because its execution plan could not be validated. "

@@ -22,6 +22,7 @@ from app.investigations.hypotheses import (
     HypothesisGenerationFailureCode,
     HypothesisGenerationInput,
     HypothesisKind,
+    GroundedInvestigationResult,
     GroundedTerminationReason,
     GroundingRenderError,
     HypothesisValidationFailureCode,
@@ -217,12 +218,25 @@ class GroundedRenderingTests(unittest.TestCase):
             _facts(), (), (), GroundedTerminationReason.BUDGET_EXHAUSTED
         )
         provider_result = render_grounded_result(
-            _facts(), (), (), GroundedTerminationReason.PROVIDER_FAILURE
+            _facts(), (), (), GroundedTerminationReason.HYPOTHESIS_GENERATION_FAILURE
         )
 
         self.assertIn("tool-call budget was exhausted", budget_result.summary)
         self.assertIn("hypothesis generation was unavailable", provider_result.summary)
         self.assertNotEqual(budget_result.summary, provider_result.summary)
+
+    def test_legacy_provider_failure_value_remains_readable(self):
+        result = GroundedInvestigationResult.model_validate(
+            {
+                "termination_reason": "provider_failure",
+                "summary": "A previously persisted safe summary.",
+            }
+        )
+
+        self.assertEqual(
+            result.termination_reason,
+            GroundedTerminationReason.PROVIDER_FAILURE,
+        )
 
     def test_missing_information_uses_its_deterministic_detail(self):
         missing = MissingInformation(

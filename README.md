@@ -148,6 +148,30 @@ GROQ_REQUEST_TIMEOUT_SECONDS=30
 GROQ_MAX_OUTPUT_TOKENS=512
 ```
 
+OpenRouter uses the same typed Chat Completions boundary through a fixed
+`https://openrouter.ai/api/v1` base URL. Task-specific model variables override
+the provider-neutral default; model selection is deterministic and never an LLM
+decision:
+
+```text
+PROMPTQL_LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=<local OpenRouter API key>
+PROMPTQL_DEFAULT_MODEL=<approved structured-output model ID>
+PROMPTQL_PLANNER_MODEL=<optional planner override>
+PROMPTQL_HYPOTHESIS_MODEL=<optional hypothesis override>
+PROMPTQL_CODE_DIAGNOSIS_MODEL=<optional code-diagnosis override>
+OPENROUTER_REQUEST_TIMEOUT_SECONDS=120
+OPENROUTER_MAX_OUTPUT_TOKENS=4096
+```
+
+Run the secret-safe provider gates from `services/api`. Network stages require
+the explicit paid-call acknowledgement and print only allowlisted metadata:
+
+```powershell
+uv run --env-file .env python -m app.diagnostics.openrouter --stage config
+uv run --env-file .env python -m app.diagnostics.openrouter --stage all --acknowledge-paid-call
+```
+
 `GEMINI_API_KEY` must contain a Gemini API key created in Google AI Studio. It
 is not an OpenAI key, Google OAuth access token, project ID, or service-account
 JSON value. If Google rejects the key, the terminal emits a safe event like:

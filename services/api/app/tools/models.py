@@ -8,6 +8,7 @@ from app.connectors.models import (
     ContractModel,
     GitHubCommitEvidenceRequest,
     GitHubPullRequestEvidenceRequest,
+    FailureLocationEvidenceRequest,
     IncidentEvidenceRequest,
     DeploymentEvidenceRequest,
     TelemetryWindowEvidenceRequest,
@@ -22,6 +23,7 @@ class InvestigationToolId(StrEnum):
     GET_PULL_REQUEST = "get_pull_request"
     GET_DIFF = "get_diff"
     GET_INCIDENT = "get_incident"
+    GET_FAILURE_LOCATION = "get_failure_location"
     GET_DEPLOYMENTS = "get_deployments"
     QUERY_TELEMETRY = "query_telemetry"
     GET_JIRA_ISSUE = "get_jira_issue"
@@ -113,6 +115,14 @@ class GetIncidentPlanOutput(ContractModel):
     incident_reference: NonEmptyString
 
 
+class GetFailureLocationPlanOutput(ContractModel):
+    # Incident sources may know only part of a stack frame. Optional fields
+    # describe that bounded uncertainty instead of inventing a file or line.
+    file_path: NonEmptyString | None = None
+    function_name: NonEmptyString | None = None
+    line_number: int | None = None
+
+
 class GetJiraIssuePlanOutput(ContractModel):
     issue_key: JiraIssueKey
 
@@ -132,6 +142,7 @@ ToolInputModel = (
         GitHubCommitEvidenceRequest
         | GitHubPullRequestEvidenceRequest
         | IncidentEvidenceRequest
+        | FailureLocationEvidenceRequest
         | DeploymentEvidenceRequest
         | TelemetryWindowEvidenceRequest
         | GetJiraIssueInput
@@ -187,6 +198,13 @@ TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         input_model=GitHubPullRequestEvidenceRequest,
         output_model=ToolResult,
         plan_output_model=GetDiffPlanOutput,
+    ),
+    ToolDefinition(
+        tool_id=InvestigationToolId.GET_FAILURE_LOCATION,
+        description="Retrieve the normalized failure location for one engineering incident.",
+        input_model=FailureLocationEvidenceRequest,
+        output_model=ToolResult,
+        plan_output_model=GetFailureLocationPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_INCIDENT,
