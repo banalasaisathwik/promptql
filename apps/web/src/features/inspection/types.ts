@@ -386,6 +386,11 @@ export interface GenerationMetadata {
   resolved_model: string | null
   prompt_id: string
   prompt_version: string
+  token_usage: {
+    input_tokens: number
+    output_tokens: number
+    total_tokens: number | null
+  } | null
 }
 
 export interface GroundedInvestigationResult {

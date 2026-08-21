@@ -117,6 +117,8 @@ def get_investigation_workflow(
     # The application boundary already resolved task-to-model policy. The HTTP
     # route only passes those provider-neutral typed clients into the workflow;
     # it never receives a provider key, URL, or model-selection decision.
+    # RuntimeTelemetry follows that same dependency boundary, so the workflow
+    # remains testable with its no-op default and never creates an exporter.
     return InvestigationWorkflowService(
         run_repository,
         request.app.state.investigation_hypothesis_client,
@@ -124,6 +126,7 @@ def get_investigation_workflow(
         code_diagnosis_client=request.app.state.investigation_code_diagnosis_client,
         github_code_source=request.app.state.github_code_source,
         jira_connector=request.app.state.jira_connector,
+        telemetry=request.app.state.runtime_telemetry,
     )
 
 

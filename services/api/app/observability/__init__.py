@@ -1,5 +1,9 @@
+"""Bounded tracing, metrics, and structured logging for runtime execution."""
+
 from app.observability.contracts import (
     FailureCategory,
+    InvestigationStage,
+    InvestigationStageResult,
     LLMCallResult,
     PersistenceCheckpoint,
     PersistenceOperation,
@@ -14,6 +18,8 @@ from app.observability.setup import Observability, create_observability
 
 __all__ = [
     "FailureCategory",
+    "InvestigationStage",
+    "InvestigationStageResult",
     "LLMCallResult",
     "NoOpRuntimeTelemetry",
     "Observability",

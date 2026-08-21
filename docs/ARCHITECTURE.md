@@ -11,6 +11,7 @@ flowchart LR
     API -. "read-only REST" .-> Jira["Jira Cloud"]
     API -. "optional structured generation" .-> LLM["Selected OpenAI, Gemini, Groq, or OpenRouter API"]
     API -. "OTLP traces and metrics" .-> Observability["Hosted observability<br/>Grafana Cloud"]
+    API -. "optional bounded OTLP traces" .-> Langfuse["Langfuse"]
 ```
 
 Plain-text alternative:
@@ -19,6 +20,7 @@ Plain-text alternative:
 browser -> Vite React application -> FastAPI API -> Neon PostgreSQL
                                       `-> optional selected LLM provider
                                       `-> OTLP traces/metrics -> Grafana Cloud
+                                      `-> optional bounded OTLP traces -> Langfuse
 ```
 
 The frontend loads the backend-owned demo scenario catalog, starts or
@@ -280,6 +282,13 @@ apps/web/src/features/inspection/
   explicitly enabled. Grafana Cloud is configuration, not a domain dependency;
   setup and exporter failures degrade safely without changing HTTP, runtime,
   policy, or persistence behavior.
+- The investigation runtime uses the same OpenTelemetry API for a correlated
+  root trace and bounded stage spans. A separately enabled, failure-isolated
+  OTLP trace exporter can send those spans to Langfuse. Only safe identifiers,
+  counts, task/provider/model/prompt-version metadata, provider-reported token
+  counts, duration, and closed failure categories cross that boundary. Prompt
+  text, questions, code, Evidence/Fact bodies, candidates, provider responses,
+  endpoints, headers, and credentials do not.
 - Frontend network data remains `unknown` until `responseValidation.ts` proves
   the expected runtime structure. The parser accepts pending, running,
   completed, failed, and cancelled snapshots as distinct unions. The dashboard
@@ -397,8 +406,8 @@ rounds remain visible when the next plan is saved. Failure-location retrieval is
 registered as `get_failure_location`; it now crosses the same tool allowlist,
 plan validation, retry classification, global budget, step lifecycle, Evidence,
 Fact, and snapshot boundaries as every other planned source call. There is no
-hidden post-runtime connector lookup. No new SSE,
-WebSocket, event bus, Langfuse, or OpenTelemetry replacement is introduced.
+hidden post-runtime connector lookup. No new SSE, WebSocket, event bus, or
+OpenTelemetry replacement is introduced.
 
 The deterministic fake provider is a real offline product adapter, not a
 transport-shape-only stub. For the checkout fixture it proposes bounded plans
@@ -428,6 +437,30 @@ location or causal claim. A diagnosis provider/schema failure preserves the
 already grounded hypothesis, records the distinct `code_diagnosis_failure`
 termination reason, and exposes no candidate payload.
 
+### Investigation observability and passive LLMOps export (implemented)
+
+`RuntimeTelemetry.observe_investigation_stage()` creates one correlated trace
+over investigation execution and nested spans for planning rounds, planner
+calls, plan validation, physical tool attempts, retry delays, Fact derivation,
+hypothesis generation and validation, code diagnosis and validation, rendering,
+and termination. Stage-duration histograms, physical-tool-attempt counters, and
+terminal planning-round counters use exact bounded label sets. A retry is
+visible independently while still consuming the authoritative execution budget.
+
+Generation spans record task, provider, requested and provider-resolved model,
+prompt version, and provider-reported token counts. Standard GenAI attributes
+accompany PromptQL-specific allowlisted fields so an optional Langfuse
+destination can interpret usage and derive cost when its pricing catalog has a
+match. Unknown token usage or price remains unknown; application code never
+invents cost.
+
+`create_observability()` can attach two independent exporters to one tracer
+provider: the existing general OTLP exporter plus metrics, and a Langfuse OTLP
+traces-only exporter. Either destination can be enabled alone. Both use the
+existing failure-isolating wrapper, so setup/export failure emits only a bounded
+warning and cannot affect planning, persistence, rendering, or HTTP status.
+Langfuse remains passive observability with no runtime read or decision path.
+
 ```text
 redis-prod ----
 postgres-prod -+-> future generic dependency validation, once Fact predicates exist
@@ -442,9 +475,10 @@ site-specific Jira blocker mapping, tenant isolation, retention, explanation
 persistence, LLM retries/fallback, prompt optimization, hosted eval services,
 LLM-as-a-judge, production-traffic eval collection, dashboards, alerting, and
 OpenTelemetry log export are not implemented. Neon/Grafana resources and
-application deployment are not provisioned by this repository. The local eval
-harness exists, but no Stage 2 development or holdout provider run has been
-authorized or executed.
+application deployment are not provisioned by this repository. Hosted Langfuse
+export has not been verified because project credentials are not configured.
+The V1 explanation eval harness exists, but V2 component and trajectory evals
+remain the next implementation milestone.
 
 ## Validated explanation response boundary
 

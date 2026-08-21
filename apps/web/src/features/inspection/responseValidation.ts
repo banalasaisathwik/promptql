@@ -696,6 +696,20 @@ function isDeveloperRecommendation(
 
 
 function isGenerationMetadata(value: unknown): value is GenerationMetadata {
+  // PURPOSE: Treat token counts like every other network field: an interface
+  // helps at compile time, but only these guards make provider metadata safe to
+  // render. `Number.isSafeInteger` also rejects numeric strings and infinities.
+  const tokenUsageIsValid =
+    isRecord(value) &&
+    (value.token_usage === null ||
+      (isRecord(value.token_usage) &&
+        Number.isSafeInteger(value.token_usage.input_tokens) &&
+        Number(value.token_usage.input_tokens) >= 0 &&
+        Number.isSafeInteger(value.token_usage.output_tokens) &&
+        Number(value.token_usage.output_tokens) >= 0 &&
+        (value.token_usage.total_tokens === null ||
+          (Number.isSafeInteger(value.token_usage.total_tokens) &&
+            Number(value.token_usage.total_tokens) >= 0))))
   return (
     isRecord(value) &&
     isNonEmptyString(value.task) &&
@@ -704,7 +718,8 @@ function isGenerationMetadata(value: unknown): value is GenerationMetadata {
     (value.requested_model === null || isNonEmptyString(value.requested_model)) &&
     (value.resolved_model === null || isNonEmptyString(value.resolved_model)) &&
     isNonEmptyString(value.prompt_id) &&
-    isNonEmptyString(value.prompt_version)
+    isNonEmptyString(value.prompt_version) &&
+    tokenUsageIsValid
   )
 }
 

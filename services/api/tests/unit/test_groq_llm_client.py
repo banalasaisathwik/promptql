@@ -82,7 +82,13 @@ def _adapter(completions):
     )
 
 
-def _response(parsed_output, *, usage=None, refusal=None):
+def _response(
+    parsed_output,
+    *,
+    usage=None,
+    refusal=None,
+    model="provider-resolved-model",
+):
     return SimpleNamespace(
         choices=(
             SimpleNamespace(
@@ -92,6 +98,7 @@ def _response(parsed_output, *, usage=None, refusal=None):
                 )
             ),
         ),
+        model=model,
         usage=usage,
     )
 
@@ -123,6 +130,7 @@ class GroqLLMClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(structured.token_usage.input_tokens, 25)
         self.assertEqual(structured.token_usage.output_tokens, 9)
         self.assertEqual(structured.token_usage.total_tokens, 34)
+        self.assertEqual(structured.resolved_model, "provider-resolved-model")
         request = completions.requests[0]
         self.assertEqual(request["model"], "openai/gpt-oss-20b")
         self.assertEqual(request["timeout"], 14)

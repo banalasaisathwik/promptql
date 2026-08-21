@@ -236,6 +236,40 @@ def _validate_otlp_endpoint(raw_endpoint: str) -> str | None:
     return endpoint.rstrip("/")
 
 
+def _validate_langfuse_base_url(raw_url: str) -> str:
+    # SECURITY: Accept an origin, not an arbitrary ingestion URL. This prevents
+    # a committed path/query/user-info value from smuggling credentials or
+    # silently producing a different endpoint when setup appends its fixed path.
+    base_url = raw_url.strip().rstrip("/")
+    parsed_url = urlsplit(base_url)
+    local_hosts = {"127.0.0.1", "localhost", "::1"}
+    if (
+        parsed_url.scheme not in {"http", "https"}
+        or not parsed_url.hostname
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_url.query
+        or parsed_url.fragment
+        or parsed_url.path not in {"", "/"}
+        or (
+            parsed_url.scheme != "https"
+            and parsed_url.hostname not in local_hosts
+        )
+    ):
+        raise TelemetryConfigurationError(
+            "LANGFUSE_BASE_URL must be a credential-free HTTPS origin or localhost."
+        )
+    return base_url
+
+
+def _validate_langfuse_key(value: str | None, variable_name: str) -> str:
+    if value is None or ":" in value or any(character.isspace() for character in value):
+        raise TelemetryConfigurationError(
+            f"{variable_name} is required and must not contain whitespace or a colon."
+        )
+    return value
+
+
 def parse_postgresql_url(raw_url: str, variable_name: str) -> URL:
     if not raw_url.strip():
         raise DatabaseConfigurationError(f"{variable_name} is required.")
@@ -461,12 +495,18 @@ class LLMSettings:
 
 @dataclass(frozen=True)
 class TelemetrySettings:
+    # Langfuse is independent from general OTLP export. `repr=False` prevents a
+    # routine settings log or assertion failure from printing project keys.
     enabled: bool
     console_enabled: bool
     service_name: str
     otlp_endpoint: str | None
     otlp_headers: dict[str, str]
     protocol: str
+    langfuse_enabled: bool = False
+    langfuse_base_url: str | None = None
+    langfuse_public_key: str | None = field(default=None, repr=False)
+    langfuse_secret_key: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_environment(cls) -> "TelemetrySettings":
@@ -499,6 +539,25 @@ class TelemetrySettings:
         headers = _parse_otlp_headers(
             os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
         )
+        langfuse_enabled = _parse_boolean(
+            os.environ.get("PROMPTQL_LANGFUSE_ENABLED", "false"),
+            "PROMPTQL_LANGFUSE_ENABLED",
+        )
+        langfuse_base_url = None
+        langfuse_public_key = None
+        langfuse_secret_key = None
+        if langfuse_enabled:
+            langfuse_base_url = _validate_langfuse_base_url(
+                os.environ.get("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+            )
+            langfuse_public_key = _validate_langfuse_key(
+                os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip() or None,
+                "LANGFUSE_PUBLIC_KEY",
+            )
+            langfuse_secret_key = _validate_langfuse_key(
+                os.environ.get("LANGFUSE_SECRET_KEY", "").strip() or None,
+                "LANGFUSE_SECRET_KEY",
+            )
         if enabled and not console_enabled and endpoint is None:
             raise TelemetryConfigurationError(
                 "Enabled telemetry requires a console or OTLP exporter."
@@ -511,4 +570,8 @@ class TelemetrySettings:
             otlp_endpoint=endpoint,
             otlp_headers=headers,
             protocol=protocol,
+            langfuse_enabled=langfuse_enabled,
+            langfuse_base_url=langfuse_base_url,
+            langfuse_public_key=langfuse_public_key,
+            langfuse_secret_key=langfuse_secret_key,
         )

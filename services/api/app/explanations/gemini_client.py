@@ -245,6 +245,7 @@ class GeminiLLMClient:
                     return LLMStructuredResponse(
                         output=generated.model_dump(mode="json"),
                         token_usage=self._token_usage(response),
+                        resolved_model=getattr(response, "model", None),
                     )
 
         raise LLMProviderError(category) from None
@@ -279,4 +280,5 @@ class GeminiLLMClient:
             if hasattr(parsed_output, "model_dump")
             else parsed_output,
             token_usage=self._token_usage(response),
+            resolved_model=getattr(response, "model", None),
         )

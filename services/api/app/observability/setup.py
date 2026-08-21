@@ -1,6 +1,7 @@
 pass
 
 import logging
+from base64 import b64encode
 from dataclasses import dataclass, field
 from threading import Lock
 from weakref import WeakSet
@@ -257,6 +258,32 @@ def _disabled_observability(
     )
 
 
+def _langfuse_exporter_configuration(
+    settings: TelemetrySettings,
+) -> tuple[str, dict[str, str]]:
+    # SECURITY: Credentials become an HTTP header only at the exporter edge.
+    # They never enter span attributes, metrics, domain models, or settings repr.
+    if (
+        settings.langfuse_base_url is None
+        or settings.langfuse_public_key is None
+        or settings.langfuse_secret_key is None
+    ):
+        raise ValueError("enabled Langfuse telemetry needs complete settings")
+    langfuse_auth = b64encode(
+        (
+            f"{settings.langfuse_public_key}:"
+            f"{settings.langfuse_secret_key}"
+        ).encode("utf-8")
+    ).decode("ascii")
+    return (
+        f"{settings.langfuse_base_url}/api/public/otel/v1/traces",
+        {
+            "Authorization": f"Basic {langfuse_auth}",
+            "x-langfuse-ingestion-version": "4",
+        },
+    )
+
+
 def create_observability(
     settings: TelemetrySettings | None = None,
 ) -> Observability:
@@ -266,7 +293,7 @@ def create_observability(
     event_logger = StructuredEventLogger(configure_structured_logger())
     try:
         resolved_settings = settings or TelemetrySettings.from_environment()
-        if not resolved_settings.enabled:
+        if not resolved_settings.enabled and not resolved_settings.langfuse_enabled:
             return _disabled_observability(event_logger)
 
         resource = Resource.create(
@@ -279,7 +306,7 @@ def create_observability(
         metric_readers = []
 
 
-        if resolved_settings.console_enabled:
+        if resolved_settings.enabled and resolved_settings.console_enabled:
             console_span_exporter = FailureIsolatingSpanExporter(
                 ConsoleSpanExporter(),
                 event_logger,
@@ -303,7 +330,7 @@ def create_observability(
                 )
             )
 
-        if resolved_settings.otlp_endpoint is not None:
+        if resolved_settings.enabled and resolved_settings.otlp_endpoint is not None:
             _quiet_otlp_internal_loggers()
             trace_exporter = FailureIsolatingSpanExporter(
                 OTLPSpanExporter(
@@ -336,6 +363,31 @@ def create_observability(
                         event_logger,
                     ),
                     export_interval_millis=METRIC_EXPORT_INTERVAL_MILLIS,
+                    export_timeout_millis=EXPORT_TIMEOUT_MILLIS,
+                )
+            )
+
+        if resolved_settings.langfuse_enabled:
+            # DESIGN: Reuse the same tracer provider and bounded spans. A second
+            # processor is fan-out, not a parallel event or decision system;
+            # Langfuse receives traces only while general OTLP retains metrics.
+            _quiet_otlp_internal_loggers()
+            langfuse_endpoint, langfuse_headers = (
+                _langfuse_exporter_configuration(resolved_settings)
+            )
+            langfuse_exporter = FailureIsolatingSpanExporter(
+                OTLPSpanExporter(
+                    endpoint=langfuse_endpoint,
+                    headers=langfuse_headers,
+                    timeout=EXPORT_TIMEOUT_MILLIS / 1_000,
+                ),
+                event_logger,
+            )
+            tracer_provider.add_span_processor(
+                BatchSpanProcessor(
+                    langfuse_exporter,
+                    max_queue_size=MAX_SPAN_QUEUE_SIZE,
+                    max_export_batch_size=MAX_SPAN_EXPORT_BATCH_SIZE,
                     export_timeout_millis=EXPORT_TIMEOUT_MILLIS,
                 )
             )

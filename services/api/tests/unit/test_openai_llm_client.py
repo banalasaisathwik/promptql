@@ -108,6 +108,7 @@ class OpenAILLMClientTests(unittest.IsolatedAsyncioTestCase):
         response = SimpleNamespace(
             output_parsed=generated,
             output=(),
+            model="provider-resolved-model",
             usage=SimpleNamespace(
                 input_tokens=41,
                 output_tokens=12,
@@ -125,6 +126,7 @@ class OpenAILLMClientTests(unittest.IsolatedAsyncioTestCase):
             generated,
         )
         self.assertEqual(structured.token_usage.total_tokens, 53)
+        self.assertEqual(structured.resolved_model, "provider-resolved-model")
         request = responses.requests[0]
         self.assertEqual(request["model"], "configured-model")
         self.assertEqual(request["timeout"], 19)
