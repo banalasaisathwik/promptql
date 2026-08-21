@@ -1,5 +1,47 @@
 # Learning log
 
+## 2026-08-21 — Evidence identity is safer than model-copied coordinates
+
+- **Engineering concept:** When authoritative structured state already owns a
+  value, an LLM should select its stable identity instead of copying the value.
+  A model can propose a semantic code-finding category, while deterministic code
+  resolves the exact file, line, function, and hunk from normalized Evidence.
+- **Important syntax:** `Annotated[..., Field(max_length=...)]` bounds Pydantic
+  collections at runtime; a discriminated Evidence content union is narrowed
+  with `isinstance()` before location fields are copied; `sha256(...).hexdigest()`
+  creates stable bounded recommendation IDs without storing model prose.
+- **Implementation locations:** `app/investigations/code_diagnosis/context.py`
+  builds minimized support bundles and code locations; `service.py` owns typed
+  generation failures; `validator.py` resolves `location_evidence_id` and
+  rejects relationship gaps; `remediation.py` maps only validated categories to
+  fixed read-only actions; `app/diagnostics/openrouter.py` provides a live gate.
+- **Validation commands:** The focused code-diagnosis, OpenRouter-diagnostic,
+  and model-policy tests passed throughout implementation; the final focused
+  code-diagnosis/diagnostic run passed 20 tests. Full discovery passed 392 tests
+  with six environment-guarded PostgreSQL skips, and Python compilation plus
+  `git diff --check` passed after the teaching-comment pass. The final OpenRouter probe using
+  `openai/gpt-oss-120b` returned one schema-valid candidate, one deterministically
+  accepted finding, and zero rejections.
+- **Important design decision:** ADR-027 removes numeric coordinates and
+  function names from the provider output schema. The candidate selects a
+  support-bundle Evidence ID; deterministic code materializes exact coordinates.
+- **Why selected:** Earlier live candidates parsed successfully but combined
+  unrelated hunk and line fields. Tightening the data contract eliminated that
+  entire fabrication class without weakening validation or adding retries.
+- **Invariant / failure behavior:** Candidate explanations never become product
+  wording. Every accepted finding must resolve an accepted hypothesis, all its
+  supporting Facts, the full cited Fact-to-Evidence union, a changed file, a
+  failure file, and one same-path observed location.
+- **Concrete trade-off:** The input repeats a small bounded support bundle and
+  the model has less freedom to describe a location. In return, provider output
+  is easier to generate, validate, replay, and evaluate, and coordinates remain
+  backend truth.
+- **Unresolved question:** Semantic finding-category quality still needs a
+  reference-answer eval. Grounding proves support consistency, not that the
+  category is the actual root cause.
+- **V2 milestone:** Completion Phase 2 code diagnosis and recommendations;
+  persistence/API/UI projection follows separately.
+
 ## 2026-08-21 — Controlled Evidence collection includes every connector call
 
 - **Engineering concept:** A connector call is not controlled merely because it

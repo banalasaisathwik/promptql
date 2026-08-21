@@ -44,3 +44,4 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-024](ADR-024-grounded-hypothesis-proposals.md) | Accepted | Bounded LLM hypothesis proposals with deterministic Fact-relationship validation |
 | [ADR-025](ADR-025-investigation-console-snapshot-integration.md) | Accepted | Investigation console uses the existing persisted run snapshot and polling mechanism |
 | [ADR-026](ADR-026-budgeted-failure-location-evidence.md) | Accepted | Collect failure-location Evidence through the validated, budgeted read-only tool runtime |
+| [ADR-027](ADR-027-evidence-identified-code-diagnosis.md) | Accepted | Let models select an observed code-location Evidence ID while deterministic code resolves coordinates and remediation |

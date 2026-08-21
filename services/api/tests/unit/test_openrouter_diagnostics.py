@@ -8,6 +8,7 @@ from app.config import LLMProvider, LLMSettings, ModelPolicy
 from app.diagnostics.openrouter import (
     _failure_result,
     resolved_configuration,
+    run_code_diagnosis_call,
     run_plain_call,
 )
 
@@ -88,6 +89,30 @@ class OpenRouterDiagnosticTests(unittest.TestCase):
         self.assertEqual(configuration["hypothesis_model"], "hypothesis-model")
         self.assertTrue(configuration["api_key_present"])
         self.assertNotIn("private-openrouter-key", json.dumps(configuration))
+
+    def test_unconfigured_code_diagnosis_is_reported_without_constructing_client(self) -> None:
+        settings = LLMSettings(
+            provider=LLMProvider.OPENROUTER,
+            api_key="private-openrouter-key",
+            model=None,
+            request_timeout_seconds=30,
+            max_output_tokens=512,
+            model_policy=ModelPolicy(
+                default_model=None,
+                planner_model="planner-model",
+                hypothesis_model="hypothesis-model",
+                code_diagnosis_model=None,
+            ),
+        )
+
+        with patch("app.diagnostics.openrouter._typed_client") as client_factory:
+            result = asyncio.run(run_code_diagnosis_call(settings))
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["provider_category"], "configuration_error")
+        self.assertEqual(result["api_method"], "not_called")
+        self.assertIsNone(resolved_configuration(settings)["code_diagnosis_model"])
+        client_factory.assert_not_called()
 
     def test_failure_result_extracts_only_sanitized_upstream_fields(self) -> None:
         error = RuntimeError("outer private-openrouter-key")

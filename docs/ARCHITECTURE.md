@@ -407,6 +407,22 @@ one code-change hypothesis only when the derived changed-file and failure-file
 Facts agree. The same deterministic validator and renderer used for real
 providers remain authoritative.
 
+### Code-diagnosis component (implemented, workflow integration next)
+
+`app/investigations/code_diagnosis/` implements the next bounded trust boundary.
+`CodeContextBuilder` selects only Evidence locations related to accepted
+hypothesis paths and caps both location count and diff-line content. The typed
+provider candidate selects a `location_evidence_id`; it cannot emit a numeric
+line or function. `DeterministicCodeFindingValidator` resolves exact coordinates
+from normalized Evidence and requires complete hypothesis, Fact-to-Evidence,
+changed-file, and failure-file support. Backend-owned templates produce
+read-only developer recommendations from validated categories.
+
+This component is not yet invoked by `InvestigationWorkflowService` or exposed
+through the persisted API snapshot. That cross-layer integration is the next
+completion phase, so current production responses still end at grounded
+hypotheses.
+
 ```text
 redis-prod ----
 postgres-prod -+-> future generic dependency validation, once Fact predicates exist

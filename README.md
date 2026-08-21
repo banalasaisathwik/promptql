@@ -170,7 +170,12 @@ the explicit paid-call acknowledgement and print only allowlisted metadata:
 ```powershell
 uv run --env-file .env python -m app.diagnostics.openrouter --stage config
 uv run --env-file .env python -m app.diagnostics.openrouter --stage all --acknowledge-paid-call
+uv run --env-file .env python -m app.diagnostics.openrouter --stage code-diagnosis --acknowledge-paid-call
 ```
+
+The code-diagnosis stage reports provider, schema, and deterministic grounding
+status separately. It prints counts and stable rejection codes only, never code
+lines, candidate prose, prompts, provider payloads, or credentials.
 
 `GEMINI_API_KEY` must contain a Gemini API key created in Google AI Studio. It
 is not an OpenAI key, Google OAuth access token, project ID, or service-account
