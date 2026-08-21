@@ -413,7 +413,7 @@ async def observe_investigation_case(
     )
     trajectory = InvestigationTrajectoryObservation(
         completed=terminal.status is RunStatus.COMPLETED,
-        provider_execution_success=(
+        generation_boundary_success=(
             termination_reason is not None
             and termination_reason not in generation_failure_reasons
         ),
@@ -557,11 +557,29 @@ def _count_rate(numerator: int, denominator: int) -> CountRate:
     )
 
 
-def _all_boolean_fields(model) -> bool:
+def _all_boolean_fields(model, *, exclude: frozenset[str] = frozenset()) -> bool:
     return all(
         value
         for field_name, value in model
-        if isinstance(value, bool)
+        if isinstance(value, bool) and field_name not in exclude
+    )
+
+
+def _component_generation_succeeded(
+    observation: InvestigationEvalObservation,
+) -> bool:
+    # Watch out: Diagnosis may be skipped because an otherwise valid hypothesis
+    # response produced no accepted candidate. That is a quality result, not an
+    # operational failure, so only an attempted diagnosis can fail this gate.
+    required_boundaries = (observation.planner, observation.hypothesis)
+    if not all(
+        boundary.attempted and boundary.provider_success and boundary.schema_valid
+        for boundary in required_boundaries
+    ):
+        return False
+    code_boundary = observation.code_diagnosis
+    return not code_boundary.attempted or (
+        code_boundary.provider_success and code_boundary.schema_valid
     )
 
 
@@ -592,23 +610,41 @@ def aggregate_investigation_observations(
     )
     # Key syntax: Pydantic's `model_fields` supplies stable field names, avoiding
     # a second hand-maintained list that could drift from the observation schema.
+    # Why here: Conditional denominators stop network/schema failures from being
+    # counted a second time as reasoning-quality failures.
+    component_eligible_observations = tuple(
+        observation
+        for observation in observations
+        if _component_generation_succeeded(observation)
+    )
+    trajectory_eligible_observations = tuple(
+        observation
+        for observation in observations
+        if observation.trajectory.generation_boundary_success
+    )
     component_names = tuple(InvestigationComponentObservation.model_fields)
     trajectory_names = tuple(
         name
         for name, field in InvestigationTrajectoryObservation.model_fields.items()
-        if field.annotation is bool
+        if field.annotation is bool and name != "generation_boundary_success"
     )
     component_pass_rates = {
         name: _count_rate(
-            sum(getattr(observation.components, name) for observation in observations),
-            len(observations),
+            sum(
+                getattr(observation.components, name)
+                for observation in component_eligible_observations
+            ),
+            len(component_eligible_observations),
         )
         for name in component_names
     }
     trajectory_pass_rates = {
         name: _count_rate(
-            sum(getattr(observation.trajectory, name) for observation in observations),
-            len(observations),
+            sum(
+                getattr(observation.trajectory, name)
+                for observation in trajectory_eligible_observations
+            ),
+            len(trajectory_eligible_observations),
         )
         for name in trajectory_names
     }
@@ -627,13 +663,26 @@ def aggregate_investigation_observations(
             schema_successes,
             len(provider_success_boundaries),
         ),
-        component_quality=_count_rate(
-            sum(_all_boolean_fields(item.components) for item in observations),
+        trajectory_generation_success=_count_rate(
+            len(trajectory_eligible_observations),
             len(observations),
         ),
+        component_quality=_count_rate(
+            sum(
+                _all_boolean_fields(item.components)
+                for item in component_eligible_observations
+            ),
+            len(component_eligible_observations),
+        ),
         trajectory_quality=_count_rate(
-            sum(_all_boolean_fields(item.trajectory) for item in observations),
-            len(observations),
+            sum(
+                _all_boolean_fields(
+                    item.trajectory,
+                    exclude=frozenset({"generation_boundary_success"}),
+                )
+                for item in trajectory_eligible_observations
+            ),
+            len(trajectory_eligible_observations),
         ),
         component_pass_rates=component_pass_rates,
         trajectory_pass_rates=trajectory_pass_rates,
@@ -728,6 +777,7 @@ async def execute_investigation_eval(
     release_rates = (
         metrics.provider_success.rate,
         metrics.schema_valid.rate,
+        metrics.trajectory_generation_success.rate,
         metrics.component_quality.rate,
         metrics.trajectory_quality.rate,
     )
@@ -737,6 +787,7 @@ async def execute_investigation_eval(
             (
                 "provider_success",
                 "schema_valid",
+                "trajectory_generation_success",
                 "component_quality",
                 "trajectory_quality",
             ),

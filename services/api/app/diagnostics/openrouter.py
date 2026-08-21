@@ -31,6 +31,7 @@ from app.investigations.fact_derivation import derive_facts
 from app.investigations.hypotheses import (
     CandidateHypothesis,
     DeterministicHypothesisValidator,
+    GroundedTerminationReason,
     HypothesisGenerationError,
     HypothesisGenerationInput,
     HypothesisKind,
@@ -44,19 +45,27 @@ from app.investigations.planning import (
     build_planner_input,
 )
 from app.investigations.planning.instructions import PLANNER_SYSTEM_INSTRUCTIONS
+from app.runtime import InMemoryRunRepository, RunStatus
 from app.tools.models import TOOL_DEFINITIONS
+from app.workflows import InvestigationWorkflowService
 
 
 OPENROUTER_CHAT_COMPLETIONS_ENDPOINT = (
     f"{OPENROUTER_OPENAI_BASE_URL}/chat/completions"
 )
-PAID_STAGES = (
+# Watch out: `workflow` remains a separately acknowledged stage. Including its
+# five-call bound in `all` would silently expand the established component probe.
+COMPONENT_STAGES = (
     "plain",
     "typed",
     "planner",
     "planner-routing",
     "hypothesis",
     "code-diagnosis",
+)
+PAID_STAGES = (
+    *COMPONENT_STAGES,
+    "workflow",
     "all",
 )
 ALL_STAGES = ("config", *PAID_STAGES)
@@ -605,6 +614,92 @@ async def run_code_diagnosis_call(
         await client.aclose()
 
 
+async def run_workflow_call(settings: LLMSettings) -> dict[str, object]:
+    # Purpose: Prove the complete provider-backed production workflow without
+    # requiring PostgreSQL or live connectors to be healthy at the same time.
+    # Flow: Task-routed clients propose plans, hypotheses, and code findings;
+    # fake read-only connectors supply stable Evidence; production validators,
+    # budgets, persistence contracts, and rendering decide the safe result.
+    models = {
+        "planning": settings.model_for(LLMTask.PLANNING),
+        "hypothesis_generation": settings.model_for(LLMTask.HYPOTHESIS_GENERATION),
+        "code_diagnosis": settings.model_for(LLMTask.CODE_DIAGNOSIS),
+    }
+    clients = tuple(_typed_client(settings, model)[0] for model in models.values())
+    try:
+        workflow = InvestigationWorkflowService(
+            InMemoryRunRepository(),
+            clients[1],
+            planner_client=clients[0],
+            code_diagnosis_client=clients[2],
+        )
+        request = InvestigationRequest(
+            repository_owner="octo-org",
+            repository_name="analytics",
+            question="Why did checkout start returning 500 errors?",
+            incident_reference="incident:checkout-500",
+            deployment_reference="deployment:1042",
+            pull_request_number=42,
+            service="checkout-api",
+            environment="production",
+        )
+        pending = await workflow.create_persisted_run(request)
+        terminal = await workflow.continue_persisted_run(pending)
+        state = terminal.state
+        result = terminal.result
+        # Why here: A completed run can sensibly stop after no progress, a round
+        # limit, or budget exhaustion while retaining a fully grounded result.
+        successful_termination_reasons = {
+            GroundedTerminationReason.COMPLETED,
+            GroundedTerminationReason.NO_PROGRESS,
+            GroundedTerminationReason.PLANNING_LIMIT_REACHED,
+            GroundedTerminationReason.BUDGET_EXHAUSTED,
+        }
+        passed = (
+            terminal.status is RunStatus.COMPLETED
+            and result is not None
+            and result.termination_reason in successful_termination_reasons
+            and bool(result.supported_hypotheses)
+            and bool(result.code_findings)
+            and bool(result.recommendations)
+        )
+        return {
+            "stage": "workflow",
+            "status": "PASS" if passed else "FAIL",
+            "requested_models": models,
+            "maximum_provider_calls": 5,
+            "run_status": terminal.status.value,
+            "termination_reason": (
+                result.termination_reason.value if result is not None else None
+            ),
+            "planning_round_count": len(state.rounds) if state is not None else 0,
+            "evidence_count": len(state.evidence) if state is not None else 0,
+            "fact_count": len(state.facts) if state is not None else 0,
+            "hypothesis_count": (
+                len(result.supported_hypotheses) if result is not None else 0
+            ),
+            "code_finding_count": len(result.code_findings) if result is not None else 0,
+            "recommendation_count": (
+                len(result.recommendations) if result is not None else 0
+            ),
+        }
+    except Exception as error:
+        # Watch out: Unexpected failures expose only their class. Exception text
+        # could contain provider or source payloads and is never diagnostic output.
+        return {
+            "stage": "workflow",
+            "status": "FAIL",
+            "requested_models": models,
+            "maximum_provider_calls": 5,
+            "exception_class": error.__class__.__name__,
+        }
+    finally:
+        for client in clients:
+            close = getattr(client, "aclose", None)
+            if callable(close):
+                await close()
+
+
 async def run_stage(stage: str, settings: LLMSettings) -> list[dict[str, object]]:
     if stage == "config":
         return [{"stage": "config", "status": "PASS", **resolved_configuration(settings)}]
@@ -616,9 +711,10 @@ async def run_stage(stage: str, settings: LLMSettings) -> list[dict[str, object]
         "planner-routing": run_planner_routing_call,
         "hypothesis": run_hypothesis_call,
         "code-diagnosis": run_code_diagnosis_call,
+        "workflow": run_workflow_call,
     }
     requested_stages = (
-        ("plain", "typed", "planner", "hypothesis", "code-diagnosis")
+        tuple(stage for stage in COMPONENT_STAGES if stage != "planner-routing")
         if stage == "all"
         else (stage,)
     )

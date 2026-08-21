@@ -1960,6 +1960,11 @@ ground-truth correctness
 
 Do not reduce them to one ambiguous "accuracy" metric.
 
+Component quality is conditional on successful component provider/schema
+boundaries, and trajectory quality is conditional on a successful workflow
+generation boundary. Failed provider/schema calls remain release failures, but
+they do not become misleading reasoning-quality zeroes.
+
 Repeated sampling reruns only probabilistic stages. A preflight reports the
 maximum possible provider calls; a real run requires explicit paid-call
 acknowledgement. Aggregate report artifacts omit the question, prompts, code,

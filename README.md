@@ -172,11 +172,14 @@ the explicit paid-call acknowledgement and print only allowlisted metadata:
 uv run --env-file .env python -m app.diagnostics.openrouter --stage config
 uv run --env-file .env python -m app.diagnostics.openrouter --stage all --acknowledge-paid-call
 uv run --env-file .env python -m app.diagnostics.openrouter --stage code-diagnosis --acknowledge-paid-call
+uv run --env-file .env python -m app.diagnostics.openrouter --stage workflow --acknowledge-paid-call
 ```
 
 The code-diagnosis stage reports provider, schema, and deterministic grounding
 status separately. It prints counts and stable rejection codes only, never code
 lines, candidate prose, prompts, provider payloads, or credentials.
+The workflow stage uses fake connectors and in-memory persistence to isolate the
+complete adaptive provider path and is capped at five provider calls.
 
 `GEMINI_API_KEY` must contain a Gemini API key created in Google AI Studio. It
 is not an OpenAI key, Google OAuth access token, project ID, or service-account
@@ -265,8 +268,9 @@ fixtures with:
 uv run python -m app.evals.investigations.runner --fake-dry-run --dataset development --samples-per-case 3 --inter-request-delay-seconds 0
 ```
 
-The V2 report separates provider execution, schema validity, component quality,
-and trajectory quality. See [TESTING.md](docs/TESTING.md) for holdout, preflight,
+The V2 report separates provider execution, schema validity, workflow-generation
+success, component quality, and trajectory quality. Quality denominators exclude
+samples whose required generation boundary failed. See [TESTING.md](docs/TESTING.md) for holdout, preflight,
 paid-provider, artifact-safety, and current fixture-coverage details.
 
 PostgreSQL integration tests require a dedicated test branch and the explicit

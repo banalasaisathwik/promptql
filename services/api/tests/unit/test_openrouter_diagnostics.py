@@ -6,11 +6,15 @@ from unittest.mock import patch
 
 from app.config import LLMProvider, LLMSettings, ModelPolicy
 from app.diagnostics.openrouter import (
+    COMPONENT_STAGES,
+    PAID_STAGES,
     _failure_result,
     resolved_configuration,
     run_code_diagnosis_call,
     run_plain_call,
+    run_workflow_call,
 )
+from app.explanations import FakeLLMClient
 
 
 def _settings() -> LLMSettings:
@@ -30,6 +34,29 @@ def _settings() -> LLMSettings:
 
 
 class OpenRouterDiagnosticTests(unittest.TestCase):
+    def test_workflow_stage_runs_the_complete_fake_connector_trajectory(self) -> None:
+        with patch(
+            "app.diagnostics.openrouter._typed_client",
+            side_effect=lambda _settings, _model: (FakeLLMClient(), object()),
+        ) as client_factory:
+            result = asyncio.run(run_workflow_call(_settings()))
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["maximum_provider_calls"], 5)
+        self.assertIn(
+            result["termination_reason"],
+            {"completed", "no_progress", "planning_limit_reached", "budget_exhausted"},
+        )
+        self.assertGreaterEqual(result["planning_round_count"], 2)
+        self.assertGreater(result["evidence_count"], 0)
+        self.assertGreater(result["fact_count"], 0)
+        self.assertGreater(result["hypothesis_count"], 0)
+        self.assertGreater(result["code_finding_count"], 0)
+        self.assertGreater(result["recommendation_count"], 0)
+        self.assertIn("workflow", PAID_STAGES)
+        self.assertNotIn("workflow", COMPONENT_STAGES)
+        self.assertEqual(client_factory.call_count, 3)
+
     def test_plain_gate_accepts_a_transport_response_with_a_choice(self) -> None:
         class Completions:
             async def create(self, **_request):
