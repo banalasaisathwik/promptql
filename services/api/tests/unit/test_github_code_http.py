@@ -267,6 +267,19 @@ class HttpGitHubCodeEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence.content.state.value, "open")
         self.assertIsNone(evidence.content.merge_commit_sha)
 
+    async def test_omitted_merge_commit_is_preserved_as_absent(self) -> None:
+        responses = GitHubCodeResponses()
+        responses.pull = pull_response(state="open", merged=False)
+        responses.pull.pop("merge_commit_sha")
+        source = create_source(responses)
+        try:
+            evidence = await source.get_pull_request_evidence(PULL_REQUEST)
+        finally:
+            await source.aclose()
+
+        self.assertEqual(evidence.content.state.value, "open")
+        self.assertIsNone(evidence.content.merge_commit_sha)
+
     async def test_file_statuses_normalize_to_domain_change_types(self) -> None:
         cases = (
             ("modified", None, FileChangeType.MODIFIED),

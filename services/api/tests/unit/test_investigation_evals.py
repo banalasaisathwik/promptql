@@ -93,6 +93,7 @@ class InvestigationEvalExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(observation.components.planner_valid)
         self.assertTrue(observation.components.planner_useful)
         self.assertTrue(observation.components.unsupported_claims_rejected)
+        self.assertTrue(observation.trajectory.generation_boundary_success)
         self.assertTrue(observation.trajectory.allowed_tools_only)
         self.assertTrue(observation.trajectory.all_plans_validated)
         self.assertTrue(observation.trajectory.budget_respected)
@@ -110,6 +111,7 @@ class InvestigationEvalExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(report.release_passed)
         self.assertEqual(report.metrics.provider_success.denominator, 3)
         self.assertEqual(report.metrics.provider_success.rate, 1)
+        self.assertEqual(report.metrics.trajectory_generation_success.rate, 1)
         self.assertEqual(report.metrics.component_quality.rate, 1)
         self.assertEqual(report.metrics.trajectory_quality.rate, 1)
         self.assertIsNone(report.metrics.estimated_cost)
@@ -132,6 +134,9 @@ class InvestigationEvalExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(observations[0].code_diagnosis.attempted)
         self.assertEqual(report.metrics.provider_success.rate, 0)
         self.assertIsNone(report.metrics.schema_valid.rate)
+        self.assertEqual(report.metrics.trajectory_generation_success.rate, 0)
+        self.assertIsNone(report.metrics.component_quality.rate)
+        self.assertIsNone(report.metrics.trajectory_quality.rate)
         self.assertEqual(
             report.metrics.provider_failures_by_stage_and_category,
             {
@@ -159,6 +164,9 @@ class InvestigationEvalExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(observations[0].planner.schema_valid)
         self.assertEqual(report.metrics.provider_success.rate, 1)
         self.assertEqual(report.metrics.schema_valid.rate, 0)
+        self.assertEqual(report.metrics.trajectory_generation_success.rate, 0)
+        self.assertIsNone(report.metrics.component_quality.rate)
+        self.assertIsNone(report.metrics.trajectory_quality.rate)
         self.assertNotIn("provider_success", report.failed_checks)
         self.assertIn("schema_valid", report.failed_checks)
 

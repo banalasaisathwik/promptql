@@ -176,9 +176,10 @@ evaluation.
 ## OpenRouter provider-boundary diagnostics
 
 The diagnostic module proves provider connectivity and typed generation without
-starting FastAPI, an investigation workflow, a tool, or PostgreSQL. Configuration
-output includes only provider/model names, the fixed endpoint, and whether a key
-is present:
+starting FastAPI or PostgreSQL. Component stages isolate one boundary; the
+`workflow` stage runs the production adaptive workflow with fake connectors and
+in-memory persistence. Configuration output includes only provider/model names,
+the fixed endpoint, and whether a key is present:
 
 ```powershell
 uv run --env-file .env python -m app.diagnostics.openrouter --stage config
@@ -192,6 +193,8 @@ uv run --env-file .env python -m app.diagnostics.openrouter --stage plain --ackn
 uv run --env-file .env python -m app.diagnostics.openrouter --stage typed --acknowledge-paid-call
 uv run --env-file .env python -m app.diagnostics.openrouter --stage planner --acknowledge-paid-call
 uv run --env-file .env python -m app.diagnostics.openrouter --stage hypothesis --acknowledge-paid-call
+uv run --env-file .env python -m app.diagnostics.openrouter --stage code-diagnosis --acknowledge-paid-call
+uv run --env-file .env python -m app.diagnostics.openrouter --stage workflow --acknowledge-paid-call
 ```
 
 Failures report only the exception class, HTTP status, provider error code/type,
@@ -199,7 +202,11 @@ sanitized provider message, requested model, endpoint/method, and any nested
 upstream provider fields. The API key, authorization headers, request prompt,
 evidence payload, and raw response are never printed. The optional
 `planner-routing` stage probes OpenRouter's `require_parameters=true` routing
-without changing production routing policy.
+without changing production routing policy. The workflow stage makes at most
+five calls: up to three planning rounds, then hypothesis and code diagnosis.
+Its result contains only status, termination reason, model IDs, and counts.
+`--stage all` retains the established component-only sequence; invoke the
+workflow stage separately so its additional call bound is explicit.
 
 For `openai/gpt-oss-120b`, use the configured upper bounds shown in `.env.example`
 (`OPENROUTER_REQUEST_TIMEOUT_SECONDS=120` and
@@ -251,12 +258,19 @@ A bounded real smoke requires explicit acknowledgement:
 uv run --env-file .env python -m app.evals.investigations.runner --dataset development --samples-per-case 1 --acknowledge-paid-calls
 ```
 
-Exit code 0 means provider, schema, component, and trajectory gates all passed;
+Exit code 0 means provider, schema, workflow-generation, component, and
+trajectory gates all passed;
 1 means execution completed but one or more release gates failed; 2 means a
 configuration or safety gate failed. Reports under the ignored
 `local-artifacts/investigation-evals/` directory contain aggregate IDs, rates,
 latency, and token totals only. They omit questions, prompts, Evidence payloads,
 code, generated output, credentials, raw exceptions, and unversioned cost.
+
+Component quality is conditioned on successful component generation/schema
+boundaries. Trajectory quality is conditioned on a successful workflow
+generation boundary. An outage or invalid schema therefore fails its own gate
+and leaves reasoning quality `n/a`; it is never counted again as a false quality
+zero.
 
 Development and holdout are versioned and use repeated probabilistic samples,
 but the first catalog contains one checkout fixture family expressed with two

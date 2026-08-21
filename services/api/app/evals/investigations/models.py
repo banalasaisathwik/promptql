@@ -70,7 +70,7 @@ class InvestigationComponentObservation(ContractModel):
 
 class InvestigationTrajectoryObservation(ContractModel):
     completed: bool
-    provider_execution_success: bool
+    generation_boundary_success: bool
     allowed_tools_only: bool
     all_plans_validated: bool
     budget_respected: bool
@@ -108,6 +108,9 @@ class InvestigationEvalMetrics(ContractModel):
     completed_samples: int = Field(ge=0)
     provider_success: CountRate
     schema_valid: CountRate
+    # Purpose: Keep workflow generation availability out of trajectory reasoning
+    # quality, just as component provider/schema rates have separate denominators.
+    trajectory_generation_success: CountRate
     component_quality: CountRate
     trajectory_quality: CountRate
     component_pass_rates: dict[str, CountRate]

@@ -143,6 +143,12 @@ def format_investigation_eval_summary(report) -> str:
             f"planned/completed: {metrics.planned_samples}/{metrics.completed_samples}",
             rate("provider success", metrics.provider_success),
             rate("schema valid after provider success", metrics.schema_valid),
+            # Flow: A workflow-generation outage is reported before quality; its
+            # quality denominator is then empty rather than a misleading zero.
+            rate(
+                "trajectory generation success",
+                metrics.trajectory_generation_success,
+            ),
             rate("component quality", metrics.component_quality),
             rate("trajectory quality", metrics.trajectory_quality),
             (

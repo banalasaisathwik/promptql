@@ -1,6 +1,6 @@
 # Execution plan: V2 completion audit and release gate
 
-- Status: Active
+- Status: Complete
 - Owner: Repository owner
 - Created: 2026-08-21
 - Last updated: 2026-08-21
@@ -125,23 +125,23 @@ question + typed context
 
 ## Acceptance criteria
 
-- [ ] The fake fixture path exercises at least two planning rounds and produces
+- [x] The fake fixture path exercises at least two planning rounds and produces
   persisted Evidence, Facts, a validated hypothesis, a validated code finding,
   and grounded remediation.
-- [ ] Every LLM output remains a proposal until strict schema validation and a
+- [x] Every LLM output remains a proposal until strict schema validation and a
   separate deterministic domain validator accept it.
-- [ ] A fabricated file, hunk, symbol, Evidence ID, or Fact ID cannot reach the
+- [x] A fabricated file, hunk, symbol, Evidence ID, or Fact ID cannot reach the
   final API result.
-- [ ] Planner, hypothesis, and code-diagnosis structured schemas pass a bounded
+- [x] Planner, hypothesis, and code-diagnosis structured schemas pass a bounded
   live provider smoke using configured task models.
-- [ ] One provider-backed investigation completes through the real adaptive
+- [x] One provider-backed investigation completes through the real adaptive
   workflow with fake connectors.
-- [ ] Snapshot polling exposes only truthful backend state and stops terminally.
-- [ ] V2 spans/metrics/logs contain allowlisted identifiers and counts, never
+- [x] Snapshot polling exposes only truthful backend state and stops terminally.
+- [x] V2 spans/metrics/logs contain allowlisted identifiers and counts, never
   prompts, raw code, Evidence payloads, credentials, or provider responses.
 - [x] Component and trajectory evals separate provider execution success,
   schema validity, deterministic grounding, and reference-answer quality.
-- [ ] Full backend/frontend regression, compile, build, lint, diff, and secret
+- [x] Full backend/frontend regression, compile, build, lint, diff, and secret
   checks pass; database and connector gates are either verified or explicit.
 
 ## Invariants
@@ -210,7 +210,7 @@ repeat affected checks.
   persistence, frontend polling, observability, and evals.
 - [x] 2026-08-21: Captured offline baseline and live OpenRouter planner and
   hypothesis evidence; identified the PostgreSQL authentication gate.
-- [ ] Close and merge milestones 1-6.
+- [x] Close and merge milestones 1-6.
 - [x] 2026-08-21: Registered failure-location retrieval as a budgeted read-only
   tool, repaired the deterministic fake trajectory, and persisted safe planner,
   hypothesis, and action-history metadata.
@@ -238,6 +238,21 @@ repeat affected checks.
   execution, and aggregate-safe artifacts. Three-sample fake development and
   holdout runs passed every gate; broader case diversity remains future quality
   work rather than an implementation blocker.
+- [x] 2026-08-21: Milestone 6 live checks reached the configured OpenRouter,
+  GitHub, Jira, Neon application database, and FastAPI startup boundaries. The
+  provider-backed workflow completed safely with two rounds, five Evidence,
+  two Facts, and one grounded hypothesis, then rejected an invalid second plan;
+  the formal one-sample live eval failed provider reliability and left quality
+  inconclusive. GitHub facts and V2 PR/file Evidence now pass live after making
+  an omitted `merge_commit_sha` truly optional. Jira returned typed `not_found`
+  for the PR-derived key, the application database is at Alembic head and
+  `/health` is 200, while the separate test database credentials remain invalid.
+- [x] 2026-08-21: Final offline release regression passed 410 backend tests
+  with six environment-guarded PostgreSQL skips, full Python compilation, 40
+  frontend tests, Oxlint, TypeScript compilation, and the Vite production build.
+  Diff hygiene and secret-value checks passed; the intentionally failed
+  `lint:web` invocation from `apps/web` was corrected to that package's
+  manifest-backed `bun run lint` command.
 
 ## Decisions and discoveries
 
@@ -252,15 +267,20 @@ repeat affected checks.
   semantically equivalent valid plans do not become false failures.
 - Round-level checkpoints satisfy V2 truthful-progress requirements. Per-step
   callbacks remain optional unless implementation evidence shows a clean need.
-- Database authentication failure is external configuration evidence, not a
-  reason to weaken startup or persistence requirements.
+- Application database authentication and startup now pass; separate guarded
+  test-database authentication remains an external configuration gate and is
+  not a reason to weaken persistence requirements.
 
 ## Risks and open questions
 
-- Current Neon application/test credentials are rejected; database verification
-  remains external until the repository owner rotates or restores them.
-- Jira credentials exist, but a safe concrete issue key has not yet been
-  established for a live read; discover one read-only or record the explicit gate.
+- The configured Neon application database works and is at migration head, but
+  `TEST_DATABASE_URL` is still rejected; guarded PostgreSQL tests require its
+  credential to be rotated or restored.
+- Jira credentials reached the configured site, but the safe PR-derived key was
+  not present there. A known harmless issue key from that exact site is required.
+- The bounded OpenRouter eval and workflow smoke exposed provider timeouts and
+  an invalid second-round plan. Deterministic controls behaved correctly, but a
+  clean live eval release pass still requires provider/model reliability.
 - Langfuse credentials are absent. Implement only an optional, failure-isolated
   boundary supported by current dependencies or an approved minimal dependency.
   The dependency-free OTLP boundary is now implemented; only hosted export
@@ -268,6 +288,9 @@ repeat affected checks.
 
 ## Completion
 
-Pending implementation, final validation, Git history, release matrix, and
-external-gate record. Move this plan to `completed` only when no implementation
-gap remains.
+All in-repository implementation gaps identified by the A-AF audit are closed.
+The remaining items are external verification/quality gates: a clean repeated
+OpenRouter trajectory-eval pass, a harmless issue key belonging to the configured
+Jira site, valid dedicated test-database credentials, hosted Langfuse credentials,
+and deployed browser/telemetry verification. This plan moves to `completed` with
+those gates preserved explicitly rather than weakening or simulating them.

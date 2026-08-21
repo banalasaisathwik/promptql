@@ -2472,3 +2472,34 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   material.
 - **Unresolved question:** Which additional incident families should become
   deterministic fixtures before using these rates as a broader V2 quality gate?
+
+### 2026-08-21 - Let live release evidence refine compatibility and eval denominators
+
+- **V2 milestone:** V2.25 live verification and release gates.
+- **Engineering concept and syntax:** In Pydantic, `str | None` makes `null`
+  valid but does not make a key optional; adding `= None` also accepts omission.
+  Conditional eval denominators similarly distinguish an unavailable candidate
+  from a candidate that was available and reasoned badly.
+- **Implementation locations:** `connectors/github_code_http_models.py` accepts
+  GitHub's omitted `merge_commit_sha`; `diagnostics/openrouter.py` adds a
+  five-call-maximum workflow smoke; `evals/investigations/evaluation.py` and
+  `models.py` separate workflow-generation success from component/trajectory
+  quality; their focused tests lock those boundaries down.
+- **Decision and invariant:** External/provider failures remain release failures,
+  but do not become reasoning-quality zeroes. A missing optional upstream field
+  becomes explicit domain absence; raw payloads and exception text never enter
+  diagnostic output.
+- **Failure behavior and trade-off:** The live OpenRouter run completed safely
+  with partial grounded state but exposed provider failures and an invalid
+  second-round plan, so live quality remains inconclusive. GitHub facts, PR
+  Evidence, and 26 file Evidence records pass live after the omission fix. The
+  PR-derived Jira key returned typed `not_found`, and the dedicated test database
+  still rejects authentication even though the application database is at head
+  and FastAPI `/health` returns 200.
+- **Validation evidence:** Focused GitHub/diagnostic/eval suites passed after the
+  fixes. Live checks used bounded read-only or paid calls and emitted only safe
+  models, states, categories, and counts. The final full offline regression is
+  recorded in the completed execution plan.
+- **Unresolved question:** Which approved OpenRouter model/prompt combination can
+  pass repeated V2 trajectory evals reliably, and which harmless issue key should
+  verify Jira against the currently configured site?
