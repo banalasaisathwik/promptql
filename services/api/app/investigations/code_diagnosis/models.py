@@ -6,7 +6,6 @@ from typing import Annotated, Self
 from pydantic import Field, StringConstraints, model_validator
 
 from app.connectors.models import ContractModel, NonEmptyString
-from app.investigations.hypotheses import ValidatedHypothesis
 from app.investigations.models import (
     DiffLineKind,
     FactSet,
@@ -94,10 +93,22 @@ class CodeDiagnosisSupport(ContractModel):
     ]
 
 
+class CodeDiagnosisHypothesis(ContractModel):
+    # This minimized projection gives the provider only accepted hypothesis
+    # fields and avoids making the code-diagnosis package own hypothesis models.
+    hypothesis_id: InvestigationIdentifier
+    kind: NonEmptyString
+    subject: NonEmptyString
+    supporting_fact_ids: Annotated[
+        tuple[InvestigationIdentifier, ...],
+        Field(min_length=1, max_length=10),
+    ]
+
+
 class CodeDiagnosisInput(ContractModel):
     investigation_goal: NonEmptyString
     hypotheses: Annotated[
-        tuple[ValidatedHypothesis, ...],
+        tuple[CodeDiagnosisHypothesis, ...],
         Field(min_length=1, max_length=MAX_CODE_FINDINGS),
     ]
     facts: Annotated[FactSet, Field(max_length=30)]

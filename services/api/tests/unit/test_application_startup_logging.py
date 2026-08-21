@@ -40,6 +40,10 @@ class ApplicationStartupLoggingTests(unittest.IsolatedAsyncioTestCase):
             application.state.investigation_llm_client,
             application.state.investigation_hypothesis_client,
         )
+        self.assertIs(
+            application.state.investigation_llm_client,
+            application.state.investigation_code_diagnosis_client,
+        )
 
     async def test_startup_logs_selected_github_and_jira_sources(self) -> None:
         log_stream = io.StringIO()

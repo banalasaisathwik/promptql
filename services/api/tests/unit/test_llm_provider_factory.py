@@ -208,12 +208,13 @@ class LLMSettingsTests(unittest.TestCase):
                     with self.assertRaises(LLMConfigurationError):
                         LLMSettings.from_environment()
 
-    def test_openrouter_allows_explicit_planner_and_hypothesis_models_without_default(self) -> None:
+    def test_openrouter_allows_all_explicit_task_models_without_default(self) -> None:
         with patch.dict(os.environ, {
             "PROMPTQL_LLM_PROVIDER": "openrouter",
             "OPENROUTER_API_KEY": "secret",
             "PROMPTQL_PLANNER_MODEL": "planner-model",
             "PROMPTQL_HYPOTHESIS_MODEL": "hypothesis-model",
+            "PROMPTQL_CODE_DIAGNOSIS_MODEL": "code-model",
         }, clear=True):
             settings = LLMSettings.from_environment()
 
@@ -222,6 +223,17 @@ class LLMSettingsTests(unittest.TestCase):
             settings.model_for(LLMTask.HYPOTHESIS_GENERATION),
             "hypothesis-model",
         )
+        self.assertEqual(settings.model_for(LLMTask.CODE_DIAGNOSIS), "code-model")
+
+    def test_openrouter_rejects_incomplete_explicit_task_models_without_default(self) -> None:
+        with patch.dict(os.environ, {
+            "PROMPTQL_LLM_PROVIDER": "openrouter",
+            "OPENROUTER_API_KEY": "secret",
+            "PROMPTQL_PLANNER_MODEL": "planner-model",
+            "PROMPTQL_HYPOTHESIS_MODEL": "hypothesis-model",
+        }, clear=True):
+            with self.assertRaises(LLMConfigurationError):
+                LLMSettings.from_environment()
 
 
 class LLMProviderFactoryTests(unittest.TestCase):

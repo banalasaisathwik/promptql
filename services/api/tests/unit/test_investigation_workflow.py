@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from app.explanations import (
     FakeLLMClient,
@@ -20,7 +21,14 @@ from app.tools import InvestigationToolId
 from app.runtime import InMemoryRunRepository, RunStatus
 from app.workflows.investigation import (
     InvestigationWorkflowService,
+    _code_diagnosis_failure_diagnostics,
     _hypothesis_failure_diagnostics,
+)
+from app.investigations.code_diagnosis import (
+    CodeContextBuilder,
+    CodeDiagnosisError,
+    CodeDiagnosisFailureCode,
+    TypedLLMCodeDiagnoser,
 )
 
 
@@ -59,6 +67,28 @@ def hypothesis_plan() -> InvestigationPlan:
 
 
 class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_code_diagnosis_failure_diagnostics_are_allowlisted(self):
+        completed = await self._completed_fake_context()
+        diagnosis_input = CodeContextBuilder().build(
+            completed.request,
+            completed.state.validated_hypotheses,
+            completed.state.facts,
+            completed.state.evidence,
+        )
+        diagnostics = _code_diagnosis_failure_diagnostics(
+            TypedLLMCodeDiagnoser(FakeLLMClient()),
+            diagnosis_input,
+            CodeDiagnosisError(CodeDiagnosisFailureCode.PROVIDER_FAILURE),
+        )
+
+        self.assertEqual(
+            diagnostics["event"],
+            "investigation.code_diagnosis.failed",
+        )
+        self.assertEqual(diagnostics["hypothesis_count"], 1)
+        self.assertNotIn(completed.request.question, str(diagnostics))
+        self.assertNotIn("services/checkout.py", str(diagnostics))
+
     def test_hypothesis_failure_diagnostics_are_allowlisted(self):
         diagnostics = _hypothesis_failure_diagnostics(
             TypedLLMHypothesisGenerator(FakeLLMClient()),
@@ -133,6 +163,69 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(completed.result.supported_hypotheses), 1)
         self.assertIn("may have contributed", completed.result.supported_hypotheses[0].statement)
         self.assertNotIn("provider rationale", completed.result.model_dump_json())
+
+    async def test_code_diagnosis_failure_preserves_grounded_hypothesis(self):
+        repository = InMemoryRunRepository()
+        workflow = InvestigationWorkflowService(
+            repository,
+            FakeLLMClient(),
+            planner_client=SequentialPlannerClient(
+                (hypothesis_plan(), hypothesis_plan())
+            ),
+            code_diagnosis_client=FakeLLMClient(
+                typed_output={"candidates": [{"invented": True}]}
+            ),
+        )
+        pending = await workflow.create_persisted_run(
+            InvestigationRequest(
+                repository_owner="octo-org",
+                repository_name="analytics",
+                question="Why did checkout fail?",
+                incident_reference="incident:checkout-500",
+                pull_request_number=42,
+            )
+        )
+
+        completed = await workflow.continue_persisted_run(pending)
+
+        self.assertEqual(completed.status, RunStatus.COMPLETED)
+        self.assertEqual(len(completed.result.supported_hypotheses), 1)
+        self.assertEqual(completed.result.code_findings, ())
+        self.assertEqual(completed.result.recommendations, ())
+        self.assertEqual(
+            completed.result.termination_reason,
+            "code_diagnosis_failure",
+        )
+
+    async def test_unexpected_post_processing_error_terminally_fails_run(self):
+        repository = InMemoryRunRepository()
+        workflow = InvestigationWorkflowService(
+            repository,
+            FakeLLMClient(),
+            planner_client=SequentialPlannerClient(
+                (hypothesis_plan(), hypothesis_plan())
+            ),
+        )
+        pending = await workflow.create_persisted_run(
+            InvestigationRequest(
+                repository_owner="octo-org",
+                repository_name="analytics",
+                question="Why did checkout fail?",
+                incident_reference="incident:checkout-500",
+                pull_request_number=42,
+            )
+        )
+
+        with patch(
+            "app.workflows.investigation.render_grounded_result",
+            side_effect=RuntimeError("private internal detail"),
+        ):
+            failed = await workflow.continue_persisted_run(pending)
+
+        self.assertEqual(failed.status, RunStatus.FAILED)
+        self.assertEqual(failed.error.code, "investigation_runtime_failure")
+        self.assertNotIn("private internal detail", failed.error.message)
+        self.assertIs(repository.get(failed.run_id), failed)
 
     async def test_persisted_investigation_reuses_snapshot_repository_and_renders_result(self):
         repository = InMemoryRunRepository()
@@ -272,6 +365,19 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed.state.rounds, ())
         self.assertEqual(completed.state.evidence, ())
         self.assertEqual(completed.result.supported_hypotheses, ())
+
+    async def _completed_fake_context(self):
+        repository = InMemoryRunRepository()
+        workflow = InvestigationWorkflowService(repository, FakeLLMClient())
+        request = InvestigationRequest(
+            repository_owner="octo-org",
+            repository_name="analytics",
+            question="Why did checkout fail?",
+            incident_reference="incident:checkout-500",
+            pull_request_number=42,
+        )
+        pending = await workflow.create_persisted_run(request)
+        return await workflow.continue_persisted_run(pending)
 
 
 if __name__ == "__main__":

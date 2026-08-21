@@ -1,5 +1,9 @@
 """Deterministic minimization of code Evidence for diagnosis generation."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from app.investigations.code_diagnosis.models import (
     MAX_CODE_CONTEXT_LOCATIONS,
     MAX_CODE_LINES_PER_HUNK,
@@ -7,9 +11,9 @@ from app.investigations.code_diagnosis.models import (
     CodeContextLine,
     CodeContextLocation,
     CodeDiagnosisInput,
+    CodeDiagnosisHypothesis,
     CodeDiagnosisSupport,
 )
-from app.investigations.hypotheses import ValidatedHypothesis
 from app.investigations.models import (
     ChangedFileEvidenceContent,
     DiffHunkEvidenceContent,
@@ -18,6 +22,9 @@ from app.investigations.models import (
     InvestigationRequest,
     StackFrameEvidenceContent,
 )
+
+if TYPE_CHECKING:
+    from app.investigations.hypotheses.models import ValidatedHypothesis
 
 
 def _normalized_path(path: str) -> str:
@@ -81,7 +88,15 @@ class CodeContextBuilder:
         )
         return CodeDiagnosisInput(
             investigation_goal=request.question,
-            hypotheses=selected_hypotheses,
+            hypotheses=tuple(
+                CodeDiagnosisHypothesis(
+                    hypothesis_id=hypothesis.hypothesis_id,
+                    kind=hypothesis.kind,
+                    subject=hypothesis.subject,
+                    supporting_fact_ids=hypothesis.supporting_fact_ids,
+                )
+                for hypothesis in selected_hypotheses
+            ),
             facts=selected_facts,
             support_bundles=support_bundles,
             locations=locations,

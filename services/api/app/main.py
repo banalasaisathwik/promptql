@@ -155,6 +155,7 @@ def create_app(
         selected_llm_client = llm_client
         investigation_planner_client = llm_client
         investigation_hypothesis_client = llm_client
+        investigation_code_diagnosis_client = llm_client
     else:
         resolved_llm_settings = llm_settings or LLMSettings.from_environment()
         if resolved_llm_settings.provider is LLMProvider.FAKE:
@@ -164,6 +165,7 @@ def create_app(
             selected_llm_client = create_llm_client(resolved_llm_settings)
             investigation_planner_client = selected_llm_client
             investigation_hypothesis_client = selected_llm_client
+            investigation_code_diagnosis_client = selected_llm_client
         else:
             # V1 explanations have no separate task policy yet. When this service
             # starts with investigation-only task models, use planning as the
@@ -182,6 +184,12 @@ def create_app(
             investigation_hypothesis_client = create_llm_client(
                 resolved_llm_settings,
                 resolved_llm_settings.model_for(LLMTask.HYPOTHESIS_GENERATION),
+            )
+            # WHY HERE: Client construction is the credential/model boundary;
+            # the workflow receives only the provider-neutral typed protocol.
+            investigation_code_diagnosis_client = create_llm_client(
+                resolved_llm_settings,
+                resolved_llm_settings.model_for(LLMTask.CODE_DIAGNOSIS),
             )
     explanation_service = MergeReadinessExplanationService(
         selected_llm_client,
@@ -219,6 +227,7 @@ def create_app(
                 id(selected_llm_client): selected_llm_client,
                 id(investigation_planner_client): investigation_planner_client,
                 id(investigation_hypothesis_client): investigation_hypothesis_client,
+                id(investigation_code_diagnosis_client): investigation_code_diagnosis_client,
             }.values():
                 if isinstance(
                     client,
@@ -236,6 +245,9 @@ def create_app(
     application.state.investigation_llm_client = selected_llm_client
     application.state.investigation_planner_client = investigation_planner_client
     application.state.investigation_hypothesis_client = investigation_hypothesis_client
+    application.state.investigation_code_diagnosis_client = (
+        investigation_code_diagnosis_client
+    )
     application.state.github_code_source = github_code_source
     application.state.live_run_task_registry = live_run_task_registry
     application.include_router(connector_router)

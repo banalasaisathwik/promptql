@@ -51,6 +51,10 @@ const RUN: InvestigationRun = {
     missing_information: [],
     validated_hypotheses: [],
     rejected_hypothesis_count: 1,
+    validated_code_findings: [],
+    code_diagnosis_metadata: null,
+    rejected_code_finding_count: 0,
+    developer_recommendations: [],
     max_tool_calls: 10,
     used_tool_calls: 1,
     remaining_tool_calls: 9,
@@ -60,6 +64,8 @@ const RUN: InvestigationRun = {
     termination_reason: 'provider_failure',
     summary: 'The investigation found relevant evidence, but it is not sufficient to support a causal hypothesis.',
     supported_hypotheses: [],
+    code_findings: [],
+    recommendations: [],
     key_fact_ids: [],
     missing_information: [],
   },
@@ -138,4 +144,49 @@ test('shows only validated hypotheses in the final grounded result', () => {
   expect(markup).toContain('Likely contributing factor')
   expect(markup).toContain('Changes associated with checkout.py may have contributed')
   expect(markup).not.toContain('provider rationale')
+})
+
+
+test('projects only backend-validated code locations and recommendations', () => {
+  const codeFinding = {
+    finding_id: 'CF1',
+    hypothesis_id: 'H1',
+    file_path: 'checkout.py',
+    line_number: 42,
+    function_name: 'submit_order',
+    hunk_evidence_id: 'E2',
+    category: 'error_handling',
+    supporting_fact_ids: ['F1'],
+    supporting_evidence_ids: ['E1', 'E2'],
+  }
+  const recommendation = {
+    recommendation_id: 'REC-CF1-1',
+    code: 'validate_error_handling',
+    message: 'Verify the error-handling path at the validated location.',
+    finding_id: 'CF1',
+    supporting_fact_ids: ['F1'],
+    supporting_evidence_ids: ['E1', 'E2'],
+  }
+  const markup = renderToStaticMarkup(<InvestigationDashboard run={{
+    ...RUN,
+    state: {
+      ...RUN.state,
+      validated_code_findings: [codeFinding],
+      developer_recommendations: [recommendation],
+    },
+    result: {
+      ...RUN.result!,
+      code_findings: [{
+        ...codeFinding,
+        statement: 'The validated evidence identifies an error handling concern at checkout.py:42.',
+      }],
+      recommendations: [recommendation],
+    },
+  }} />)
+
+  expect(markup).toContain('Validated code findings')
+  expect(markup).toContain('checkout.py:42 in submit_order')
+  expect(markup).toContain('The validated evidence identifies an error handling concern')
+  expect(markup).toContain('Verify the error-handling path at the validated location.')
+  expect(markup).not.toContain('provider code rationale')
 })

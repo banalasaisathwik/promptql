@@ -86,6 +86,13 @@ class InvestigationApiTests(unittest.TestCase):
         self.assertTrue(completed.state.facts)
         self.assertEqual(len(completed.state.validated_hypotheses), 1)
         self.assertEqual(len(completed.result.supported_hypotheses), 1)
+        self.assertEqual(len(completed.state.validated_code_findings), 1)
+        self.assertIsNotNone(completed.state.code_diagnosis_metadata)
+        self.assertEqual(completed.state.rejected_code_finding_count, 0)
+        self.assertEqual(len(completed.state.developer_recommendations), 3)
+        self.assertEqual(len(completed.result.code_findings), 1)
+        self.assertEqual(len(completed.result.recommendations), 3)
+        self.assertIn("suspected contributor", completed.result.code_findings[0].statement)
 
 
 if __name__ == "__main__":

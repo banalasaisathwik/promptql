@@ -17,6 +17,17 @@ from app.investigations import (
     ToolInvoker,
 )
 from app.investigations.planning import PlanValidator, TypedLLMPlanner
+from app.investigations.code_diagnosis import (
+    CodeContextBuilder,
+    CodeDiagnosisError,
+    CodeDiagnosisInput,
+    DeterministicCodeFindingValidator,
+    TypedLLMCodeDiagnoser,
+    build_developer_recommendations,
+)
+from app.investigations.code_diagnosis.instructions import (
+    CODE_DIAGNOSIS_PROMPT_VERSION,
+)
 from app.investigations.hypotheses import (
     DeterministicHypothesisValidator,
     GroundedTerminationReason,
@@ -44,9 +55,10 @@ from app.tools import build_tool_adapters, build_tool_registry
 
 
 INVESTIGATION_WORKFLOW_NAME = "investigation"
-INVESTIGATION_WORKFLOW_VERSION = "2.19.1"
+INVESTIGATION_WORKFLOW_VERSION = "2.19.2"
 DEFAULT_TOOL_CALL_BUDGET = 10
 _HYPOTHESIS_DIAGNOSTIC_LOGGER = logging.getLogger("promptql.runtime")
+_CODE_DIAGNOSIS_LOGGER = logging.getLogger("promptql.runtime")
 
 
 # PURPOSE: Make the final probabilistic boundary as observable as planning.
@@ -94,6 +106,45 @@ def _hypothesis_failure_diagnostics(
     }
 
 
+def _code_diagnosis_failure_diagnostics(
+    diagnoser: TypedLLMCodeDiagnoser,
+    diagnosis_input: CodeDiagnosisInput,
+    error: CodeDiagnosisError,
+) -> dict[str, object]:
+    """Allowlist code-diagnosis failure metadata without code or candidate text."""
+
+    client = getattr(diagnoser, "_client", None)
+    provider = getattr(client, "provider", None)
+    details = error.provider_details
+    return {
+        "event": "investigation.code_diagnosis.failed",
+        "provider": getattr(provider, "value", provider),
+        "requested_model": getattr(client, "model", None),
+        "prompt_version": CODE_DIAGNOSIS_PROMPT_VERSION,
+        "hypothesis_count": len(diagnosis_input.hypotheses),
+        "facts_count": len(diagnosis_input.facts),
+        "location_count": len(diagnosis_input.locations),
+        "exception_class": type(error).__name__,
+        "failure_code": error.code.value,
+        "provider_failure_category": error.provider_failure_category,
+        "http_status": details.http_status if details is not None else None,
+        "provider_type": details.provider_type if details is not None else None,
+        "provider_code": details.provider_code if details is not None else None,
+        "provider_message": details.provider_message if details is not None else str(error),
+        "failed_generation_present": (
+            details.failed_generation_present if details is not None else False
+        ),
+        "failed_generation_length": (
+            details.failed_generation_length if details is not None else None
+        ),
+        "local_schema_error": (
+            error.code.value
+            if error.code.value in {"invalid_response", "candidate_schema_invalid"}
+            else None
+        ),
+    }
+
+
 class InvestigationWorkflowService:
     # PURPOSE: Adapt the V2 executor and hypothesis boundary to the existing
     # durable run lifecycle used by the V1 live dashboard.
@@ -112,6 +163,7 @@ class InvestigationWorkflowService:
         llm_client: LLMClient,
         planner_client: TypedLLMClient | None = None,
         *,
+        code_diagnosis_client: TypedLLMClient | None = None,
         github_code_source: GitHubCodeEvidenceSource | None = None,
         incident_source: IncidentSource | None = None,
         jira_connector: JiraConnector | None = None,
@@ -119,6 +171,7 @@ class InvestigationWorkflowService:
         self._repository = repository
         self._llm_client = llm_client
         self._planner_client = planner_client or llm_client
+        self._code_diagnosis_client = code_diagnosis_client or llm_client
         self._github_code_source = github_code_source or FakeGitHubCodeEvidenceSource()
         self._incident_source = incident_source or FakeIncidentSource()
         self._jira_connector = jira_connector
@@ -218,63 +271,137 @@ class InvestigationWorkflowService:
                 started_at,
                 RuntimeErrorCode.INVESTIGATION_RUNTIME_FAILURE,
             )
-        # Execution state is converted to a compact API snapshot before any
-        # hypothesis generation, so Facts remain the source of truth for both
-        # observability and final rendering.
-        state = self._snapshot_from_adaptive(adaptive_state)
-
-        validated_hypotheses = ()
-        rejected_count = 0
-        hypothesis_metadata = None
-        termination_reason = _grounded_reason(adaptive_state.continuation_reason.value)
         try:
-            hypothesis_input = build_hypothesis_generation_input(
-                running.request,
-                AdaptiveInvestigationState(
-                    rounds=(),
-                    evidence=adaptive_state.evidence,
-                    facts=adaptive_state.facts,
-                    missing_information=adaptive_state.missing_information,
-                    action_history=adaptive_state.action_history,
-                    remaining_tool_calls=adaptive_state.remaining_tool_calls,
-                    continuation_reason=adaptive_state.continuation_reason,
-                ),
+            return await self._complete_adaptive_run(
+                running,
+                adaptive_state,
             )
-            if adaptive_state.facts:
-                # An empty Fact set has no admissible causal support. Skipping
-                # the provider call is cheaper and keeps abstention deterministic.
-                hypothesis_generator = TypedLLMHypothesisGenerator(self._llm_client)
+        except Exception:
+            # Any programming/invariant failure after evidence collection must
+            # still move the durable run out of RUNNING. Known provider failures
+            # are handled inside the completion path and retain partial truth.
+            return self._fail(
+                running,
+                started_at,
+                RuntimeErrorCode.INVESTIGATION_RUNTIME_FAILURE,
+            )
+
+    async def _complete_adaptive_run(
+        self,
+        running: InvestigationRun,
+        adaptive_state: AdaptiveInvestigationState,
+    ) -> InvestigationRun:
+        # Execution state is converted to a compact API snapshot before any
+        # probabilistic synthesis, so Facts remain authoritative throughout.
+        state = self._snapshot_from_adaptive(adaptive_state)
+        validated_hypotheses = ()
+        rejected_hypothesis_count = 0
+        hypothesis_metadata = None
+        termination_reason = _grounded_reason(
+            adaptive_state.continuation_reason.value
+        )
+        hypothesis_input = build_hypothesis_generation_input(
+            running.request,
+            AdaptiveInvestigationState(
+                rounds=(),
+                evidence=adaptive_state.evidence,
+                facts=adaptive_state.facts,
+                missing_information=adaptive_state.missing_information,
+                action_history=adaptive_state.action_history,
+                remaining_tool_calls=adaptive_state.remaining_tool_calls,
+                continuation_reason=adaptive_state.continuation_reason,
+            ),
+        )
+        if adaptive_state.facts:
+            # An empty Fact set has no admissible causal support. Skipping the
+            # provider call is cheaper and keeps abstention deterministic.
+            hypothesis_generator = TypedLLMHypothesisGenerator(self._llm_client)
+            try:
                 generated = await hypothesis_generator.generate(hypothesis_input)
                 hypothesis_metadata = generated.metadata
                 validation_result = DeterministicHypothesisValidator().validate(
-                    generated.candidates, adaptive_state.facts
+                    generated.candidates,
+                    adaptive_state.facts,
                 )
                 validated_hypotheses = validation_result.accepted_hypotheses
-                rejected_count = len(validation_result.rejected_candidates)
-        except HypothesisGenerationError as error:
-            _HYPOTHESIS_DIAGNOSTIC_LOGGER.error(
-                json.dumps(
-                    _hypothesis_failure_diagnostics(
-                        hypothesis_generator,
-                        hypothesis_input,
-                        error,
-                    ),
-                    separators=(",", ":"),
-                    sort_keys=True,
+                rejected_hypothesis_count = len(
+                    validation_result.rejected_candidates
                 )
+            except HypothesisGenerationError as error:
+                _HYPOTHESIS_DIAGNOSTIC_LOGGER.error(
+                    json.dumps(
+                        _hypothesis_failure_diagnostics(
+                            hypothesis_generator,
+                            hypothesis_input,
+                            error,
+                        ),
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                )
+                termination_reason = (
+                    GroundedTerminationReason.HYPOTHESIS_GENERATION_FAILURE
+                )
+
+        validated_code_findings = ()
+        rejected_code_finding_count = 0
+        code_diagnosis_metadata = None
+        developer_recommendations = ()
+        if validated_hypotheses:
+            # FLOW: A validated hypothesis unlocks a minimized provider call,
+            # but not an authoritative finding. Only the deterministic validator
+            # can copy an observed location into persisted domain state.
+            diagnosis_input = CodeContextBuilder().build(
+                running.request,
+                validated_hypotheses,
+                adaptive_state.facts,
+                adaptive_state.evidence,
             )
-            termination_reason = (
-                GroundedTerminationReason.HYPOTHESIS_GENERATION_FAILURE
-            )
+            code_diagnoser = TypedLLMCodeDiagnoser(self._code_diagnosis_client)
+            try:
+                generated_findings = await code_diagnoser.generate(diagnosis_input)
+                code_diagnosis_metadata = generated_findings.metadata
+                finding_validation = DeterministicCodeFindingValidator().validate(
+                    generated_findings.candidates,
+                    validated_hypotheses,
+                    adaptive_state.facts,
+                    adaptive_state.evidence,
+                )
+                validated_code_findings = finding_validation.accepted_findings
+                rejected_code_finding_count = len(
+                    finding_validation.rejected_candidates
+                )
+                developer_recommendations = build_developer_recommendations(
+                    validated_code_findings
+                )
+            except CodeDiagnosisError as error:
+                # WATCH OUT: This is a partial-success result. Evidence and the
+                # grounded hypothesis stay useful even though the optional,
+                # later diagnosis stage could not produce accepted structure.
+                _CODE_DIAGNOSIS_LOGGER.error(
+                    json.dumps(
+                        _code_diagnosis_failure_diagnostics(
+                            code_diagnoser,
+                            diagnosis_input,
+                            error,
+                        ),
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                )
+                termination_reason = GroundedTerminationReason.CODE_DIAGNOSIS_FAILURE
 
         state = state.model_copy(
             update={
                 "validated_hypotheses": validated_hypotheses,
-                "rejected_hypothesis_count": rejected_count,
+                "rejected_hypothesis_count": rejected_hypothesis_count,
                 "hypothesis_generation_metadata": hypothesis_metadata,
-                # The snapshot reports the adaptive runtime's actual stopping
-                # condition; the rendered result may separately report that
-                # hypothesis generation was unavailable.
+                "validated_code_findings": validated_code_findings,
+                "rejected_code_finding_count": rejected_code_finding_count,
+                "code_diagnosis_metadata": code_diagnosis_metadata,
+                "developer_recommendations": developer_recommendations,
+                # This field reports the adaptive runtime stop. The final result
+                # separately reports a later synthesis-stage provider failure.
                 "termination_reason": adaptive_state.continuation_reason.value,
             }
         )
@@ -283,6 +410,8 @@ class InvestigationWorkflowService:
             validated_hypotheses,
             state.missing_information,
             termination_reason,
+            validated_code_findings,
+            developer_recommendations,
         )
         completed = running.model_copy(
             update={

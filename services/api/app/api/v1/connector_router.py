@@ -121,6 +121,7 @@ def get_investigation_workflow(
         run_repository,
         request.app.state.investigation_hypothesis_client,
         planner_client=request.app.state.investigation_planner_client,
+        code_diagnosis_client=request.app.state.investigation_code_diagnosis_client,
         github_code_source=request.app.state.github_code_source,
         jira_connector=request.app.state.jira_connector,
     )

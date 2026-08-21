@@ -28,6 +28,10 @@ import type {
   InvestigationRuntimeState,
   InvestigationStepSnapshot,
   GroundedInvestigationResult,
+  DeveloperRecommendation,
+  GenerationMetadata,
+  GroundedCodeFinding,
+  ValidatedCodeFinding,
   ValidatedHypothesis,
   RuntimeRun,
   RequiredCheck,
@@ -644,6 +648,67 @@ function isGroundedHypothesis(
 }
 
 
+function isValidatedCodeFinding(value: unknown): value is ValidatedCodeFinding {
+  // Network JSON does not inherit the TypeScript interface. In particular, a
+  // numeric-looking string must not become an authoritative source location.
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.finding_id) &&
+    isNonEmptyString(value.hypothesis_id) &&
+    isNonEmptyString(value.file_path) &&
+    (value.line_number === null ||
+      (Number.isSafeInteger(value.line_number) && Number(value.line_number) > 0)) &&
+    (value.function_name === null || isNonEmptyString(value.function_name)) &&
+    (value.hunk_evidence_id === null || isNonEmptyString(value.hunk_evidence_id)) &&
+    isNonEmptyString(value.category) &&
+    Array.isArray(value.supporting_fact_ids) &&
+    value.supporting_fact_ids.every(isNonEmptyString) &&
+    Array.isArray(value.supporting_evidence_ids) &&
+    value.supporting_evidence_ids.every(isNonEmptyString)
+  )
+}
+
+
+function isGroundedCodeFinding(value: unknown): value is GroundedCodeFinding {
+  return (
+    isRecord(value) &&
+    isValidatedCodeFinding(value) &&
+    isNonEmptyString(value.statement)
+  )
+}
+
+
+function isDeveloperRecommendation(
+  value: unknown,
+): value is DeveloperRecommendation {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.recommendation_id) &&
+    isNonEmptyString(value.code) &&
+    isNonEmptyString(value.message) &&
+    isNonEmptyString(value.finding_id) &&
+    Array.isArray(value.supporting_fact_ids) &&
+    value.supporting_fact_ids.every(isNonEmptyString) &&
+    Array.isArray(value.supporting_evidence_ids) &&
+    value.supporting_evidence_ids.every(isNonEmptyString)
+  )
+}
+
+
+function isGenerationMetadata(value: unknown): value is GenerationMetadata {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.task) &&
+    isNonEmptyString(value.provider) &&
+    isNonEmptyString(value.model) &&
+    (value.requested_model === null || isNonEmptyString(value.requested_model)) &&
+    (value.resolved_model === null || isNonEmptyString(value.resolved_model)) &&
+    isNonEmptyString(value.prompt_id) &&
+    isNonEmptyString(value.prompt_version)
+  )
+}
+
+
 function isGroundedResult(value: unknown): value is GroundedInvestigationResult {
   return (
     isRecord(value) &&
@@ -653,6 +718,10 @@ function isGroundedResult(value: unknown): value is GroundedInvestigationResult 
     value.supported_hypotheses.every(
       isGroundedHypothesis,
     ) &&
+    Array.isArray(value.code_findings) &&
+    value.code_findings.every(isGroundedCodeFinding) &&
+    Array.isArray(value.recommendations) &&
+    value.recommendations.every(isDeveloperRecommendation) &&
     Array.isArray(value.key_fact_ids) &&
     value.key_fact_ids.every(isNonEmptyString) &&
     Array.isArray(value.missing_information) &&
@@ -676,6 +745,14 @@ function isInvestigationState(value: unknown): value is InvestigationRuntimeStat
     value.validated_hypotheses.every(isValidatedHypothesis) &&
     Number.isSafeInteger(value.rejected_hypothesis_count) &&
     Number(value.rejected_hypothesis_count) >= 0 &&
+    Array.isArray(value.validated_code_findings) &&
+    value.validated_code_findings.every(isValidatedCodeFinding) &&
+    (value.code_diagnosis_metadata === null ||
+      isGenerationMetadata(value.code_diagnosis_metadata)) &&
+    Number.isSafeInteger(value.rejected_code_finding_count) &&
+    Number(value.rejected_code_finding_count) >= 0 &&
+    Array.isArray(value.developer_recommendations) &&
+    value.developer_recommendations.every(isDeveloperRecommendation) &&
     Number.isSafeInteger(value.max_tool_calls) &&
     Number(value.max_tool_calls) >= 0 &&
     Number.isSafeInteger(value.used_tool_calls) &&

@@ -221,6 +221,11 @@ repeat affected checks.
   deterministic Evidence-ID location resolver, and grounded remediation
   templates. Its live OpenRouter probe passed provider, schema, and grounding
   gates; workflow/API/UI integration remains Milestone 3.
+- [x] 2026-08-21: Milestone 3 integrated code diagnosis after validated
+  hypotheses, persisted its safe metadata/findings/rejections/recommendations,
+  rendered only grounded structures, and projected the strict contract through
+  API and UI. Focused backend tests passed 64/64; frontend tests passed 40/40
+  with lint and production build green before the final teaching-comment pass.
 
 ## Decisions and discoveries
 

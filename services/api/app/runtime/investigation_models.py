@@ -7,6 +7,11 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from app.connectors.models import ContractModel, NonEmptyString
+from app.investigations.code_diagnosis import (
+    CodeDiagnosisMetadata,
+    DeveloperRecommendation,
+    ValidatedCodeFinding,
+)
 from app.investigations.hypotheses import (
     GroundedInvestigationResult,
     ValidatedHypothesis,
@@ -69,6 +74,12 @@ class InvestigationRuntimeSnapshot(ContractModel):
     validated_hypotheses: tuple[ValidatedHypothesis, ...] = ()
     hypothesis_generation_metadata: HypothesisGenerationMetadata | None = None
     rejected_hypothesis_count: Annotated[int, Field(ge=0)] = 0
+    # These defaults are both lifecycle-friendly and backward-compatible:
+    # snapshots written before code diagnosis decode as having no findings.
+    validated_code_findings: tuple[ValidatedCodeFinding, ...] = ()
+    code_diagnosis_metadata: CodeDiagnosisMetadata | None = None
+    rejected_code_finding_count: Annotated[int, Field(ge=0)] = 0
+    developer_recommendations: tuple[DeveloperRecommendation, ...] = ()
     max_tool_calls: Annotated[int, Field(ge=0)]
     used_tool_calls: Annotated[int, Field(ge=0)]
     remaining_tool_calls: Annotated[int, Field(ge=0)]

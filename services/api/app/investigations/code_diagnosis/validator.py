@@ -1,5 +1,9 @@
 """Pure grounding rules for untrusted code-finding candidates."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from app.investigations.code_diagnosis.models import (
     CodeFindingValidationFailureCode,
     CodeFindingValidationResult,
@@ -7,7 +11,6 @@ from app.investigations.code_diagnosis.models import (
     SuspectedCodeFinding,
     ValidatedCodeFinding,
 )
-from app.investigations.hypotheses import ValidatedHypothesis
 from app.investigations.models import (
     ChangedFileEvidenceContent,
     DiffHunkEvidenceContent,
@@ -15,6 +18,9 @@ from app.investigations.models import (
     FactSet,
     StackFrameEvidenceContent,
 )
+
+if TYPE_CHECKING:
+    from app.investigations.hypotheses.models import ValidatedHypothesis
 
 
 def _normalized_path(path: str) -> str:

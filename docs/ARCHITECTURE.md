@@ -407,7 +407,7 @@ one code-change hypothesis only when the derived changed-file and failure-file
 Facts agree. The same deterministic validator and renderer used for real
 providers remain authoritative.
 
-### Code-diagnosis component (implemented, workflow integration next)
+### Code-diagnosis component and product integration (implemented)
 
 `app/investigations/code_diagnosis/` implements the next bounded trust boundary.
 `CodeContextBuilder` selects only Evidence locations related to accepted
@@ -418,10 +418,15 @@ from normalized Evidence and requires complete hypothesis, Fact-to-Evidence,
 changed-file, and failure-file support. Backend-owned templates produce
 read-only developer recommendations from validated categories.
 
-This component is not yet invoked by `InvestigationWorkflowService` or exposed
-through the persisted API snapshot. That cross-layer integration is the next
-completion phase, so current production responses still end at grounded
-hypotheses.
+After hypothesis validation, `InvestigationWorkflowService` builds this bounded
+context, calls the independently routed code-diagnosis client, validates every
+candidate, and derives recommendations. `InvestigationRuntimeState` persists
+accepted findings, safe generation metadata, rejection count, and recommendations
+inside the existing JSON snapshot. `render_grounded_result()` accepts only those
+validated structures, and the API/UI project them without reconstructing a
+location or causal claim. A diagnosis provider/schema failure preserves the
+already grounded hypothesis, records the distinct `code_diagnosis_failure`
+termination reason, and exposes no candidate payload.
 
 ```text
 redis-prod ----
@@ -497,10 +502,12 @@ PROMPTQL_LLM_PROVIDER=openrouter + OPENROUTER_API_KEY + configured model
 For investigations, `ModelPolicy` performs deterministic task-to-requested-model
 selection before provider construction: `PLANNING` uses
 `PROMPTQL_PLANNER_MODEL`, `HYPOTHESIS_GENERATION` uses
-`PROMPTQL_HYPOTHESIS_MODEL`, and either falls back to
-`PROMPTQL_DEFAULT_MODEL`. `CODE_DIAGNOSIS` is configuration-ready only. The
-planner and hypothesis generator therefore receive independent typed clients,
-while their prompts, schemas, validators, and runtime remain provider-neutral.
+`PROMPTQL_HYPOTHESIS_MODEL`, and `CODE_DIAGNOSIS` uses
+`PROMPTQL_CODE_DIAGNOSIS_MODEL`; each falls back to `PROMPTQL_DEFAULT_MODEL`.
+The planner, hypothesis generator, and code diagnoser therefore receive
+independent typed clients, while their prompts, schemas, validators, and runtime
+remain provider-neutral. Without a default, startup requires all three explicit
+task models instead of deferring a missing-model failure into an investigation.
 PromptQL owns task-to-requested-model selection; OpenRouter owns serving-provider
 routing/failover. PromptQL deliberately does not perform semantic, quality-based,
 or automatic model routing, which keeps evaluations, cost, and failure analysis

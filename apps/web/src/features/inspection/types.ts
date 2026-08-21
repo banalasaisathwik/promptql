@@ -351,10 +351,49 @@ export interface GroundedHypothesis extends ValidatedHypothesis {
   statement: string
 }
 
+export interface ValidatedCodeFinding {
+  // Exact coordinates exist only after backend Evidence resolution. These
+  // fields describe API truth; they are not candidate model output.
+  finding_id: string
+  hypothesis_id: string
+  file_path: string
+  line_number: number | null
+  function_name: string | null
+  hunk_evidence_id: string | null
+  category: string
+  supporting_fact_ids: string[]
+  supporting_evidence_ids: string[]
+}
+
+export interface GroundedCodeFinding extends ValidatedCodeFinding {
+  statement: string
+}
+
+export interface DeveloperRecommendation {
+  recommendation_id: string
+  code: string
+  message: string
+  finding_id: string
+  supporting_fact_ids: string[]
+  supporting_evidence_ids: string[]
+}
+
+export interface GenerationMetadata {
+  task: string
+  provider: string
+  model: string
+  requested_model: string | null
+  resolved_model: string | null
+  prompt_id: string
+  prompt_version: string
+}
+
 export interface GroundedInvestigationResult {
   termination_reason: string
   summary: string
   supported_hypotheses: GroundedHypothesis[]
+  code_findings: GroundedCodeFinding[]
+  recommendations: DeveloperRecommendation[]
   key_fact_ids: string[]
   missing_information: InvestigationMissingInformation[]
 }
@@ -366,6 +405,10 @@ export interface InvestigationRuntimeState {
   missing_information: InvestigationMissingInformation[]
   validated_hypotheses: ValidatedHypothesis[]
   rejected_hypothesis_count: number
+  validated_code_findings: ValidatedCodeFinding[]
+  code_diagnosis_metadata: GenerationMetadata | null
+  rejected_code_finding_count: number
+  developer_recommendations: DeveloperRecommendation[]
   max_tool_calls: number
   used_tool_calls: number
   remaining_tool_calls: number

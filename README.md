@@ -151,7 +151,8 @@ GROQ_MAX_OUTPUT_TOKENS=512
 OpenRouter uses the same typed Chat Completions boundary through a fixed
 `https://openrouter.ai/api/v1` base URL. Task-specific model variables override
 the provider-neutral default; model selection is deterministic and never an LLM
-decision:
+decision. If `PROMPTQL_DEFAULT_MODEL` is omitted, all three task-specific model
+variables are required so startup cannot fail only when a later stage is reached:
 
 ```text
 PROMPTQL_LLM_PROVIDER=openrouter

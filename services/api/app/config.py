@@ -419,9 +419,15 @@ class LLMSettings:
                     f"{variable_prefix}_API_KEY is required when the LLM "
                     f"provider is {provider.value}."
                 )
-            if model is None and planner_model is None and hypothesis_model is None:
+            # Without a shared default, validate the whole investigation model
+            # set at startup instead of discovering one missing stage mid-run.
+            task_models_complete = all(
+                (planner_model, hypothesis_model, code_diagnosis_model)
+            )
+            if model is None and not task_models_complete:
                 raise LLMConfigurationError(
-                    "PROMPTQL_DEFAULT_MODEL or a planning/hypothesis task model "
+                    "PROMPTQL_DEFAULT_MODEL or all planning, hypothesis, and "
+                    "code-diagnosis task models "
                     f"is required when the LLM provider is {provider.value}."
                 )
 
