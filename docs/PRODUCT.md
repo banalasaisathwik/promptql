@@ -625,11 +625,15 @@ the persisted live-run snapshot path, and shows Evidence, Facts, missing
 information, validated hypotheses, budget/termination state, and a
 deterministic grounded result. It does not expose raw model causal prose.
 
-Planner and hypothesis schemas have current live OpenRouter evidence. Code
-diagnosis, V2 observability/evals, and final release verification remain active
-completion work. Database verification is externally gated by the currently
-rejected local Neon credentials. Crash recovery, replay, and high-fan-out
-streaming remain intentionally deferred.
+The integrated post-hypothesis stage now supplies bounded observed locations to
+a typed code-diagnosis model, deterministically resolves exact file/line/function
+coordinates from Evidence, and derives read-only developer actions from accepted
+finding categories. These fields persist in the authoritative run snapshot and
+are projected by the API and console. Planner, hypothesis, and code-diagnosis
+schemas have current live OpenRouter evidence. V2 observability/evals and final
+release verification remain active completion work. Database verification is
+externally gated by the currently rejected local Neon credentials. Crash
+recovery, replay, and high-fan-out streaming remain intentionally deferred.
 
 ---
 

@@ -1,9 +1,11 @@
 import type {
+  DeveloperRecommendation,
   InvestigationEvidence,
   InvestigationFact,
   InvestigationRun,
   InvestigationStepSnapshot,
   InvestigationMissingInformation,
+  ValidatedCodeFinding,
 } from './types'
 
 
@@ -42,6 +44,23 @@ function factLabel(fact: InvestigationFact): string {
 function MissingInformationList({ items }: { items: InvestigationMissingInformation[] }) {
   if (items.length === 0) return <p className="run-empty">No missing information recorded.</p>
   return <ul className="plain-list">{items.map((item) => <li key={item.missing_information_id}>{item.detail ?? item.kind.replaceAll('_', ' ')}</li>)}</ul>
+}
+
+
+function codeFindingLocation(finding: ValidatedCodeFinding): string {
+  // The browser formats backend-owned coordinates; it never guesses a nearest
+  // line or reconstructs a location from Evidence content.
+  const line = finding.line_number === null ? '' : `:${finding.line_number}`
+  const functionName = finding.function_name === null ? '' : ` in ${finding.function_name}`
+  return `${finding.file_path}${line}${functionName}`
+}
+
+
+function RecommendationList({ items }: { items: DeveloperRecommendation[] }) {
+  // Recommendation messages are deterministic backend output, not prose
+  // generated or expanded by this presentation component.
+  if (items.length === 0) return <p className="run-empty">No developer action is supported by a validated code finding.</p>
+  return <ul className="plain-list">{items.map((item) => <li key={item.recommendation_id}><strong>{item.message}</strong><small>{item.code.replaceAll('_', ' ')} · supported by {item.supporting_fact_ids.join(', ')}</small></li>)}</ul>
 }
 
 
@@ -84,7 +103,11 @@ export function InvestigationDashboard({ run }: { run: InvestigationRun }) {
 
       <section className="run-card" aria-labelledby="hypotheses-title"><p className="step-label">Hypotheses</p><h2 id="hypotheses-title">Validated hypotheses</h2>{state?.validated_hypotheses.length ? <ul className="plain-list">{state.validated_hypotheses.map((hypothesis) => <li key={hypothesis.hypothesis_id}><strong>{hypothesis.subject}</strong><small>{hypothesis.kind.replaceAll('_', ' ')} · supported by {hypothesis.supporting_fact_ids.join(', ')}</small></li>)}</ul> : <p className="run-empty">No validated causal hypothesis is available. Rejected candidate count: {state?.rejected_hypothesis_count ?? 0}.</p>}</section>
 
-      {result && <section className="run-result" aria-labelledby="grounded-result-title"><p className="eyebrow">Final grounded result</p><h2 id="grounded-result-title">{result.supported_hypotheses.length ? 'Likely contributing factor' : 'No supported causal hypothesis'}</h2><p>{result.summary}</p>{result.supported_hypotheses.map((hypothesis) => <article className="grounded-hypothesis" key={hypothesis.hypothesis_id}><h3>{hypothesis.statement}</h3><p>Supporting Facts: {hypothesis.supporting_fact_ids.join(', ')}</p></article>)}<p className="terminal-note">Stopped because: {result.termination_reason.replaceAll('_', ' ')}</p></section>}
+      <section className="run-card" aria-labelledby="code-findings-title"><p className="step-label">Code diagnosis</p><h2 id="code-findings-title">Validated code findings</h2>{state?.validated_code_findings.length ? <ul className="plain-list">{state.validated_code_findings.map((finding) => <li key={finding.finding_id}><strong>{codeFindingLocation(finding)}</strong><small>{finding.category.replaceAll('_', ' ')} · supported by {finding.supporting_fact_ids.join(', ')}</small></li>)}</ul> : <p className="run-empty">No code location passed deterministic grounding. Rejected candidate count: {state?.rejected_code_finding_count ?? 0}.</p>}</section>
+
+      <section className="run-card" aria-labelledby="recommendations-title"><p className="step-label">Next steps</p><h2 id="recommendations-title">Recommended developer actions</h2><RecommendationList items={state?.developer_recommendations ?? []} /></section>
+
+      {result && <section className="run-result" aria-labelledby="grounded-result-title"><p className="eyebrow">Final grounded result</p><h2 id="grounded-result-title">{result.supported_hypotheses.length ? 'Likely contributing factor' : 'No supported causal hypothesis'}</h2><p>{result.summary}</p>{result.supported_hypotheses.map((hypothesis) => <article className="grounded-hypothesis" key={hypothesis.hypothesis_id}><h3>{hypothesis.statement}</h3><p>Supporting Facts: {hypothesis.supporting_fact_ids.join(', ')}</p></article>)}{result.code_findings.map((finding) => <article className="grounded-hypothesis" key={finding.finding_id}><h3>{finding.statement}</h3><p>Exact validated location: {codeFindingLocation(finding)}</p></article>)}{result.recommendations.length > 0 && <div><h3>Grounded actions</h3><RecommendationList items={result.recommendations} /></div>}<p className="terminal-note">Stopped because: {result.termination_reason.replaceAll('_', ' ')}</p></section>}
     </>
   )
 }

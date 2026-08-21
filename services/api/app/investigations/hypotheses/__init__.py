@@ -16,6 +16,7 @@ from app.investigations.hypotheses.service import TypedLLMHypothesisGenerator
 from app.investigations.hypotheses.prompt import build_hypothesis_generation_input
 from app.investigations.hypotheses.validator import DeterministicHypothesisValidator
 from app.investigations.hypotheses.rendering import (
+    GroundedCodeFinding,
     GroundedHypothesis,
     GroundedInvestigationResult,
     GroundedTerminationReason,
@@ -32,6 +33,7 @@ __all__ = [
     "HypothesisKind", "HypothesisValidationFailureCode", "HypothesisValidationResult",
     "MAX_HYPOTHESES", "TypedLLMHypothesisGenerator", "ValidatedHypothesis",
     "GroundedHypothesis", "GroundedInvestigationResult", "GroundedTerminationReason",
+    "GroundedCodeFinding",
     "GroundingRenderError", "render_fact_summary", "render_grounded_result",
     "render_missing_information",
     "build_hypothesis_generation_input",

@@ -15,6 +15,12 @@ from app.investigations import (
     MissingInformationKind,
 )
 from app.investigations.replanning import AdaptiveInvestigationState, ContinuationReason
+from app.investigations.code_diagnosis import (
+    CodeFindingCategory,
+    DeveloperRecommendation,
+    DeveloperRecommendationCode,
+    ValidatedCodeFinding,
+)
 from app.investigations.hypotheses import (
     CandidateHypothesis,
     DeterministicHypothesisValidator,
@@ -179,6 +185,70 @@ class DeterministicHypothesisValidatorTests(unittest.TestCase):
 
 
 class GroundedRenderingTests(unittest.TestCase):
+    def test_validated_code_finding_and_grounded_recommendation_are_rendered(self):
+        validated_hypotheses = DeterministicHypothesisValidator().validate(
+            (_candidate("F_CHANGED", "F_FAILURE_FILE"),), _facts()
+        ).accepted_hypotheses
+        finding = ValidatedCodeFinding(
+            finding_id="CF_CHECKOUT",
+            hypothesis_id="H_CODE_CHANGE",
+            file_path="checkout.py",
+            line_number=42,
+            function_name="submit_order",
+            hunk_evidence_id="E_CHANGED",
+            category=CodeFindingCategory.ERROR_HANDLING_OR_NULL_PATH,
+            supporting_fact_ids=("F_CHANGED", "F_FAILURE_FILE"),
+            supporting_evidence_ids=("E_CHANGED", "E_FAILURE"),
+        )
+        recommendation = DeveloperRecommendation(
+            recommendation_id="REC_CF_CHECKOUT_1",
+            code=DeveloperRecommendationCode.VALIDATE_ERROR_HANDLING,
+            message="Verify the error-handling path at the validated location.",
+            finding_id="CF_CHECKOUT",
+            supporting_fact_ids=finding.supporting_fact_ids,
+            supporting_evidence_ids=finding.supporting_evidence_ids,
+        )
+
+        result = render_grounded_result(
+            _facts(),
+            validated_hypotheses,
+            (),
+            GroundedTerminationReason.COMPLETED,
+            (finding,),
+            (recommendation,),
+        )
+
+        self.assertEqual(result.code_findings[0].line_number, 42)
+        self.assertIn("suspected contributor", result.code_findings[0].statement)
+        self.assertEqual(result.recommendations, (recommendation,))
+
+    def test_recommendation_cannot_reference_a_different_finding(self):
+        validated_hypotheses = DeterministicHypothesisValidator().validate(
+            (_candidate("F_CHANGED", "F_FAILURE_FILE"),), _facts()
+        ).accepted_hypotheses
+        finding = ValidatedCodeFinding(
+            finding_id="CF_CHECKOUT",
+            hypothesis_id="H_CODE_CHANGE",
+            file_path="checkout.py",
+            category=CodeFindingCategory.ERROR_HANDLING_OR_NULL_PATH,
+            supporting_fact_ids=("F_CHANGED", "F_FAILURE_FILE"),
+            supporting_evidence_ids=("E_CHANGED", "E_FAILURE"),
+        )
+        recommendation = DeveloperRecommendation(
+            recommendation_id="REC_UNKNOWN_1",
+            code=DeveloperRecommendationCode.VALIDATE_ERROR_HANDLING,
+            message="Verify the error-handling path at the validated location.",
+            finding_id="CF_UNKNOWN",
+            supporting_fact_ids=finding.supporting_fact_ids,
+            supporting_evidence_ids=finding.supporting_evidence_ids,
+        )
+
+        with self.assertRaises(GroundingRenderError):
+            render_grounded_result(
+                _facts(), validated_hypotheses, (), GroundedTerminationReason.COMPLETED,
+                (finding,), (recommendation,),
+            )
+
     def test_supported_hypothesis_uses_only_validated_facts(self):
         validated = DeterministicHypothesisValidator().validate(
             (_candidate("F_CHANGED", "F_FAILURE_FILE"),), _facts()

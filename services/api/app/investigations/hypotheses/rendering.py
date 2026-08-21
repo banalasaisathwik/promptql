@@ -3,6 +3,11 @@
 from enum import StrEnum
 
 from app.connectors.models import ContractModel, NonEmptyString
+from app.investigations.code_diagnosis.models import (
+    CodeFindingCategory,
+    DeveloperRecommendation,
+    ValidatedCodeFinding,
+)
 from app.investigations.models import (
     ChangedFileFact,
     ChangedFileMatchesFailureFileFact,
@@ -25,6 +30,7 @@ class GroundedTerminationReason(StrEnum):
     PLANNING_LIMIT_REACHED = "planning_limit_reached"
     PLANNER_FAILURE = "planner_failure"
     HYPOTHESIS_GENERATION_FAILURE = "hypothesis_generation_failure"
+    CODE_DIAGNOSIS_FAILURE = "code_diagnosis_failure"
     # Older V2.19 JSON snapshots used this broader value. Retaining it keeps
     # persisted runs readable while new runs record the precise failed stage.
     PROVIDER_FAILURE = "provider_failure"
@@ -39,12 +45,27 @@ class GroundedHypothesis(ContractModel):
     supporting_fact_ids: tuple[InvestigationIdentifier, ...]
 
 
+class GroundedCodeFinding(ContractModel):
+    finding_id: InvestigationIdentifier
+    hypothesis_id: InvestigationIdentifier
+    category: CodeFindingCategory
+    file_path: NonEmptyString
+    line_number: int | None = None
+    function_name: NonEmptyString | None = None
+    hunk_evidence_id: InvestigationIdentifier | None = None
+    statement: NonEmptyString
+    supporting_fact_ids: tuple[InvestigationIdentifier, ...]
+    supporting_evidence_ids: tuple[InvestigationIdentifier, ...]
+
+
 class GroundedInvestigationResult(ContractModel):
     """The compact user-facing result produced from validated runtime state."""
 
     termination_reason: GroundedTerminationReason
     summary: NonEmptyString
     supported_hypotheses: tuple[GroundedHypothesis, ...] = ()
+    code_findings: tuple[GroundedCodeFinding, ...] = ()
+    recommendations: tuple[DeveloperRecommendation, ...] = ()
     key_fact_ids: tuple[InvestigationIdentifier, ...] = ()
     missing_information: tuple[MissingInformation, ...] = ()
 
@@ -58,6 +79,8 @@ def render_grounded_result(
     validated_hypotheses: tuple[ValidatedHypothesis, ...],
     missing_information: tuple[MissingInformation, ...],
     termination_reason: GroundedTerminationReason,
+    validated_code_findings: tuple[ValidatedCodeFinding, ...] = (),
+    recommendations: tuple[DeveloperRecommendation, ...] = (),
 ) -> GroundedInvestigationResult:
     # PURPOSE: Turn validated causal structure into the only final wording that
     # the investigation API and UI may expose.
@@ -99,11 +122,19 @@ def render_grounded_result(
         has_supported_hypothesis=bool(rendered_hypotheses),
         termination_reason=termination_reason,
     )
+    rendered_code_findings = _render_code_findings(
+        validated_code_findings,
+        validated_hypotheses,
+        facts_by_id,
+    )
+    _validate_recommendations(recommendations, validated_code_findings)
 
     return GroundedInvestigationResult(
         termination_reason=termination_reason,
         summary=summary,
         supported_hypotheses=tuple(rendered_hypotheses),
+        code_findings=rendered_code_findings,
+        recommendations=recommendations,
         key_fact_ids=tuple(key_fact_ids),
         missing_information=missing_information,
     )
@@ -147,6 +178,9 @@ def _render_summary(
         GroundedTerminationReason.HYPOTHESIS_GENERATION_FAILURE: (
             "Evidence collection completed, but structured hypothesis generation was unavailable. "
         ),
+        GroundedTerminationReason.CODE_DIAGNOSIS_FAILURE: (
+            "A causal hypothesis was grounded, but structured code diagnosis was unavailable. "
+        ),
         # This branch renders historical snapshots only; current workflow code
         # selects PLANNER_FAILURE or HYPOTHESIS_GENERATION_FAILURE instead.
         GroundedTerminationReason.PROVIDER_FAILURE: (
@@ -157,6 +191,74 @@ def _render_summary(
         ),
     }
     return f"{prefixes[termination_reason]}{conclusion}"
+
+
+def _render_code_findings(
+    findings: tuple[ValidatedCodeFinding, ...],
+    hypotheses: tuple[ValidatedHypothesis, ...],
+    facts_by_id: dict[str, object],
+) -> tuple[GroundedCodeFinding, ...]:
+    # PURPOSE: Cross the final presentation boundary using only accepted domain
+    # values. The LLM's explanation field is intentionally no longer available.
+    hypothesis_ids = {item.hypothesis_id for item in hypotheses}
+    rendered: list[GroundedCodeFinding] = []
+    for finding in findings:
+        if not isinstance(finding, ValidatedCodeFinding):
+            raise GroundingRenderError("only validated code findings may be rendered")
+        if finding.hypothesis_id not in hypothesis_ids:
+            raise GroundingRenderError("code finding references an unknown validated hypothesis")
+        if not set(finding.supporting_fact_ids) <= set(facts_by_id):
+            raise GroundingRenderError("code finding references an unknown Fact")
+        rendered.append(
+            GroundedCodeFinding(
+                finding_id=finding.finding_id,
+                hypothesis_id=finding.hypothesis_id,
+                category=finding.category,
+                file_path=finding.file_path,
+                line_number=finding.line_number,
+                function_name=finding.function_name,
+                hunk_evidence_id=finding.hunk_evidence_id,
+                statement=_render_code_finding_statement(finding),
+                supporting_fact_ids=finding.supporting_fact_ids,
+                supporting_evidence_ids=finding.supporting_evidence_ids,
+            )
+        )
+    return tuple(rendered)
+
+
+def _render_code_finding_statement(finding: ValidatedCodeFinding) -> str:
+    labels = {
+        CodeFindingCategory.CHANGED_CODE_NEAR_FAILURE: "changed code near the observed failure",
+        CodeFindingCategory.ERROR_HANDLING_OR_NULL_PATH: "an error-handling or null path",
+        CodeFindingCategory.INPUT_VALIDATION: "an input-validation path",
+        CodeFindingCategory.STATE_OR_RESOURCE_LIFECYCLE: "a state or resource-lifecycle path",
+        CodeFindingCategory.CONFIGURATION_OR_DEPLOYMENT: "a configuration or deployment path",
+    }
+    location = finding.file_path
+    if finding.function_name is not None:
+        location = f"{location} in {finding.function_name}"
+    if finding.line_number is not None:
+        location = f"{location} at line {finding.line_number}"
+    return f"The Evidence identifies {labels[finding.category]} at {location} as a suspected contributor."
+
+
+def _validate_recommendations(
+    recommendations: tuple[DeveloperRecommendation, ...],
+    findings: tuple[ValidatedCodeFinding, ...],
+) -> None:
+    # WATCH OUT: A recommendation is safe wording, but its references still
+    # must belong to the exact finding that caused the template to be selected.
+    findings_by_id = {item.finding_id: item for item in findings}
+    for recommendation in recommendations:
+        finding = findings_by_id.get(recommendation.finding_id)
+        if finding is None:
+            raise GroundingRenderError("recommendation references an unknown code finding")
+        if (
+            recommendation.supporting_fact_ids != finding.supporting_fact_ids
+            or recommendation.supporting_evidence_ids
+            != finding.supporting_evidence_ids
+        ):
+            raise GroundingRenderError("recommendation support differs from its code finding")
 
 
 def render_fact_summary(fact: object) -> str:

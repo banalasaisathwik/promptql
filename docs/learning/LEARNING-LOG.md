@@ -1,5 +1,44 @@
 # Learning log
 
+## 2026-08-21 - Persist only code diagnosis that crossed deterministic grounding
+
+- **Engineering concept:** A typed model response is still a candidate. The
+  workflow may persist and expose a code location only after the deterministic
+  validator resolves its Evidence identity and proves the complete hypothesis,
+  Fact, Evidence, and same-path relationships.
+- **Important syntax:** Pydantic default tuples keep older JSONB snapshots
+  readable; `model_copy(update=...)` adds accepted findings and safe metadata to
+  an immutable runtime state; React type guards require positive integer line
+  numbers before the dashboard accepts a backend snapshot.
+- **Implementation locations:** `workflows/investigation.py` owns post-hypothesis
+  orchestration and failure isolation; `runtime/investigation_models.py` owns
+  the persisted fields; `investigations/hypotheses/rendering.py` owns fixed final
+  wording; `main.py` and `connector_router.py` inject the task-routed client;
+  `apps/web/src/features/inspection/` validates and projects the result.
+- **Validation commands:** The focused backend integration set passed 64 tests.
+  The complete frontend suite passed 40 tests, Oxlint passed, and the TypeScript
+  plus Vite production build passed before the final teaching-comment pass.
+- **Important design decision:** Code diagnosis is a post-hypothesis stage with
+  its own provider client and typed failure reason. A diagnosis failure preserves
+  the already validated hypothesis instead of failing the durable run or
+  fabricating an empty success.
+- **Why selected:** This keeps partial truthful progress useful while preserving
+  separate provider, schema, grounding, and rendering boundaries. It also avoids
+  a database migration because the existing authoritative state/result snapshot
+  is JSONB and the new tuple fields have backward-readable defaults.
+- **Invariant / failure behavior:** The UI never derives causality or coordinates;
+  recommendation support must exactly match its validated finding; unexpected
+  post-processing exceptions terminally fail the run with a sanitized error
+  instead of leaving it stuck in `running`.
+- **Concrete trade-off:** Snapshot JSON grows with bounded findings and actions,
+  and recommendations can appear in both state and final result for lifecycle
+  and final-output consumers. In return, polling remains a single authoritative
+  architecture without a parallel event or frontend-reasoning system.
+- **Unresolved question:** Semantic category correctness still requires V2
+  reference-answer evaluation; deterministic grounding proves traceability, not
+  the true production root cause.
+- **V2 milestone:** Completion Phase 3 persistence, API, and UI projection.
+
 ## 2026-08-21 — Evidence identity is safer than model-copied coordinates
 
 - **Engineering concept:** When authoritative structured state already owns a
