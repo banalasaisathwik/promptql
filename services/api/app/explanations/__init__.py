@@ -4,6 +4,7 @@ from app.explanations.errors import (
     ExplanationValidationFailureCode,
     MergeReadinessExplanationError,
     LLMProviderError,
+    LLMProviderErrorDetails,
     LLMProviderFailureCategory,
 )
 from app.explanations.factory import create_llm_client
@@ -22,6 +23,7 @@ from app.explanations.models import (
 )
 from app.explanations.protocols import LLMClient, TypedLLMClient
 from app.explanations.openai_client import OpenAILLMClient
+from app.explanations.openrouter_client import OpenRouterLLMClient
 from app.explanations.service import (
     MergeReadinessExplanationService,
     build_explanation_input,
@@ -42,6 +44,7 @@ __all__ = [
     "GroqLLMClient",
     "LLMClient",
     "LLMProviderError",
+    "LLMProviderErrorDetails",
     "LLMProviderFailureCategory",
     "LLMProviderName",
     "LLMStructuredResponse",
@@ -51,6 +54,7 @@ __all__ = [
     "MergeReadinessExplanationInput",
     "MergeReadinessExplanationService",
     "OpenAILLMClient",
+    "OpenRouterLLMClient",
     "StrictMergeReadinessExplanationValidator",
     "ValidatedExplanation",
     "TypedLLMClient",

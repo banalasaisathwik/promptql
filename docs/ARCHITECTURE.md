@@ -9,7 +9,7 @@ flowchart LR
     API --> PostgreSQL["Managed PostgreSQL<br/>Neon"]
     API -. "read-only REST" .-> GitHub["GitHub"]
     API -. "read-only REST" .-> Jira["Jira Cloud"]
-    API -. "optional structured explanation" .-> LLM["Selected OpenAI, Gemini, or Groq API"]
+    API -. "optional structured generation" .-> LLM["Selected OpenAI, Gemini, Groq, or OpenRouter API"]
     API -. "OTLP traces and metrics" .-> Observability["Hosted observability<br/>Grafana Cloud"]
 ```
 
@@ -120,6 +120,7 @@ services/api/app/explanations/
 |-- openai_client.py             # Async Responses Structured Output adapter
 |-- gemini_client.py             # Google compatibility adapter and compact claims
 |-- groq_client.py               # Groq strict JSON Schema compatibility adapter
+|-- openrouter_client.py         # OpenRouter reuse of the chat-completions adapter
 |-- errors.py                    # Typed sanitized failure categories
 |-- validator.py                # Ground generated codes in policy facts
 |-- templates.py                # Render approved user-facing wording
@@ -459,7 +460,25 @@ PROMPTQL_LLM_PROVIDER=groq + Groq key + model
   -> GroqLLMClient.generate_structured()
   -> beta.chat.completions.parse(response_format=GeneratedExplanation)
   -> LLMStructuredResponse
+
+PROMPTQL_LLM_PROVIDER=openrouter + OPENROUTER_API_KEY + configured model
+  -> AsyncOpenAI(base_url="https://openrouter.ai/api/v1", max_retries=0)
+  -> OpenRouterLLMClient.generate_typed()
+  -> LLMStructuredResponse
 ```
+
+For investigations, `ModelPolicy` performs deterministic task-to-requested-model
+selection before provider construction: `PLANNING` uses
+`PROMPTQL_PLANNER_MODEL`, `HYPOTHESIS_GENERATION` uses
+`PROMPTQL_HYPOTHESIS_MODEL`, and either falls back to
+`PROMPTQL_DEFAULT_MODEL`. `CODE_DIAGNOSIS` is configuration-ready only. The
+planner and hypothesis generator therefore receive independent typed clients,
+while their prompts, schemas, validators, and runtime remain provider-neutral.
+PromptQL owns task-to-requested-model selection; OpenRouter owns serving-provider
+routing/failover. PromptQL deliberately does not perform semantic, quality-based,
+or automatic model routing, which keeps evaluations, cost, and failure analysis
+reproducible. SDK retries remain disabled, so existing runtime retry policy is
+not amplified.
 
 The SDK client owns HTTP/authentication and provider response parsing. The
 adapter owns minimized serialization and provider-error normalization. The
@@ -1245,9 +1264,37 @@ one to five `PlanStep`s with stable V2.5 IDs, explicit literals or narrow
 V2.8 validates their graph and consistency before any future execution.
 
 Provider failure, malformed structured response, and plan-schema failure stay
-distinct. The prompt is versioned as `investigation-planner` / `v2.7.1` and
+distinct. The prompt is versioned as `investigation-planner` / `v2.7.6` and
 excludes raw diff lines, provider payloads, credentials, and telemetry query
 syntax. The V2.6 deterministic runbook remains independently callable.
+
+The standalone plan schema retains its one-to-five-step compatibility contract,
+while the current planner instruction requests one to three steps so live output
+fits the adaptive runtime's existing short-horizon safety boundary. The runtime
+still rejects a longer proposal deterministically if a provider ignores that
+instruction.
+
+`PlannerInput` also carries the caller's existing typed `InvestigationRequest`
+and the caller-approved tools' input/output JSON Schemas. These are deterministic
+projections of backend contracts, not model-generated capabilities. They let the
+planner reuse known repository and incident values and reference only output
+fields that the `PlanValidator` can accept.
+
+The serialized planner argument contract uses `value_kind` as an explicit
+discriminator between literal values and step-output references. Its
+provider-facing schema therefore requires one complete branch rather than a
+mixture of both. The same local Pydantic union remains authoritative after
+generation. Groq typed calls use its supported low reasoning effort, while the
+OpenRouter subclass deliberately omits that Groq-only request parameter.
+
+When Groq rejects a strict structured generation, its adapter retains only
+allowlisted diagnostic metadata: HTTP status, provider type/code, a fixed
+sanitized message, and failed-generation presence/length. It never persists or
+logs provider messages, raw generations, prompts, evidence, headers, or keys.
+The adaptive planner and final hypothesis boundary log the same allowlisted
+shape with counts and prompt identity. This keeps transport, provider structured
+generation, and local Pydantic/schema failures distinguishable without placing
+Facts, prompts, raw provider responses, or credentials in logs.
 
 The implemented planner receives bounded state such as:
 

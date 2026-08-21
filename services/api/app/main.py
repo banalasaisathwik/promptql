@@ -16,7 +16,9 @@ from app.config import (
     GitHubSettings,
     JiraConnectorMode,
     JiraSettings,
+    LLMProvider,
     LLMSettings,
+    LLMTask,
 )
 from app.connectors.errors import FixtureNotFoundError
 from app.connectors.factory import (
@@ -39,6 +41,7 @@ from app.explanations import (
     LLMClient,
     MergeReadinessExplanationService,
     OpenAILLMClient,
+    OpenRouterLLMClient,
     create_llm_client,
 )
 from app.observability import Observability, create_observability
@@ -150,9 +153,36 @@ def create_app(
 
     if llm_client is not None:
         selected_llm_client = llm_client
+        investigation_planner_client = llm_client
+        investigation_hypothesis_client = llm_client
     else:
         resolved_llm_settings = llm_settings or LLMSettings.from_environment()
-        selected_llm_client = create_llm_client(resolved_llm_settings)
+        if resolved_llm_settings.provider is LLMProvider.FAKE:
+            # Fake mode intentionally has neither a model nor a ModelPolicy.
+            # Branch before `model_for()` so Python never evaluates that
+            # non-fake-only lookup while constructing the local/test client.
+            selected_llm_client = create_llm_client(resolved_llm_settings)
+            investigation_planner_client = selected_llm_client
+            investigation_hypothesis_client = selected_llm_client
+        else:
+            # V1 explanations have no separate task policy yet. When this service
+            # starts with investigation-only task models, use planning as the
+            # explicit compatibility choice instead of requiring a hidden global ID.
+            selected_llm_client = create_llm_client(
+                resolved_llm_settings,
+                resolved_llm_settings.model
+                or resolved_llm_settings.model_for(LLMTask.PLANNING),
+            )
+            # The policy is deterministic: the same task and settings always
+            # construct a client for the same requested model.
+            investigation_planner_client = create_llm_client(
+                resolved_llm_settings,
+                resolved_llm_settings.model_for(LLMTask.PLANNING),
+            )
+            investigation_hypothesis_client = create_llm_client(
+                resolved_llm_settings,
+                resolved_llm_settings.model_for(LLMTask.HYPOTHESIS_GENERATION),
+            )
     explanation_service = MergeReadinessExplanationService(
         selected_llm_client,
         telemetry=app_observability.runtime_telemetry,
@@ -185,11 +215,16 @@ def create_app(
                 await github_connector.aclose()
             if isinstance(jira_connector, HttpJiraConnector):
                 await jira_connector.aclose()
-            if isinstance(
-                selected_llm_client,
-                (GeminiLLMClient, GroqLLMClient, OpenAILLMClient),
-            ):
-                await selected_llm_client.aclose()
+            for client in {
+                id(selected_llm_client): selected_llm_client,
+                id(investigation_planner_client): investigation_planner_client,
+                id(investigation_hypothesis_client): investigation_hypothesis_client,
+            }.values():
+                if isinstance(
+                    client,
+                    (GeminiLLMClient, GroqLLMClient, OpenAILLMClient, OpenRouterLLMClient),
+                ):
+                    await client.aclose()
             app_observability.shutdown()
 
 
@@ -199,6 +234,8 @@ def create_app(
     application.state.jira_connector = jira_connector
     application.state.merge_readiness_explanation_service = explanation_service
     application.state.investigation_llm_client = selected_llm_client
+    application.state.investigation_planner_client = investigation_planner_client
+    application.state.investigation_hypothesis_client = investigation_hypothesis_client
     application.state.github_code_source = github_code_source
     application.state.live_run_task_registry = live_run_task_registry
     application.include_router(connector_router)

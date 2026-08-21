@@ -3,7 +3,8 @@ import unittest
 from types import SimpleNamespace
 
 import httpx
-from openai import RateLimitError
+from openai import BadRequestError, LengthFinishReasonError, RateLimitError
+from openai.types.chat import ChatCompletion
 
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.fixture_catalog import FAILED_CI_REQUEST
@@ -12,9 +13,12 @@ from app.explanations import (
     GeneratedExplanation,
     GroqLLMClient,
     LLMProviderError,
+    LLMProviderErrorDetails,
     LLMProviderFailureCategory,
     MergeReadinessExplanationError,
     MergeReadinessExplanationService,
+    OpenRouterLLMClient,
+    TypedLLMRequest,
     build_explanation_input,
 )
 from app.observability.contracts import LLM_TOKEN_USAGE_METRIC
@@ -157,6 +161,132 @@ class GroqLLMClientTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("raw-private", str(raised.exception))
         self.assertNotIn("must-not-escape", str(raised.exception))
+
+    async def test_typed_json_validation_failure_preserves_safe_details(self) -> None:
+        request = httpx.Request(
+            "POST",
+            "https://api.groq.com/openai/v1/chat/completions",
+        )
+        response = httpx.Response(400, request=request)
+        provider_error = BadRequestError(
+            "raw-private-groq-error",
+            response=response,
+            body={
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "json_validate_failed",
+                    "message": "Failed to validate JSON.",
+                    "failed_generation": "private generated plan content",
+                }
+            },
+        )
+        explanation_input = build_explanation_input(
+            await _blocked_policy_result()
+        )
+
+        with self.assertRaises(LLMProviderError) as raised:
+            await _adapter(
+                RecordingChatCompletions(error=provider_error)
+            ).generate_typed(
+                TypedLLMRequest(
+                    system_instructions="Return structured output.",
+                    input=explanation_input,
+                    output_model=GeneratedExplanation,
+                )
+            )
+
+        self.assertEqual(
+            raised.exception.category,
+            LLMProviderFailureCategory.INVALID_REQUEST,
+        )
+        self.assertEqual(
+            raised.exception.details,
+            LLMProviderErrorDetails(
+                http_status=400,
+                provider_type="invalid_request_error",
+                provider_code="json_validate_failed",
+                provider_message="Groq rejected generated structured output.",
+                failed_generation_present=True,
+                failed_generation_length=len("private generated plan content"),
+            ),
+        )
+        self.assertNotIn("raw-private", repr(raised.exception.details))
+        self.assertNotIn("private generated", repr(raised.exception.details))
+
+    async def test_typed_requests_use_low_reasoning(self) -> None:
+        policy_result = await _blocked_policy_result()
+        explanation_input = build_explanation_input(policy_result)
+        completions = RecordingChatCompletions(
+            response=_response(_generated_for(explanation_input))
+        )
+
+        await _adapter(completions).generate_typed(
+            TypedLLMRequest(
+                system_instructions="Return structured output.",
+                input=explanation_input,
+                output_model=GeneratedExplanation,
+            )
+        )
+
+        self.assertEqual(completions.requests[0]["reasoning_effort"], "low")
+
+    async def test_typed_length_finish_is_a_safe_structured_response_failure(self) -> None:
+        completion = ChatCompletion.model_validate(
+            {
+                "id": "safe-test",
+                "created": 0,
+                "model": "openai/gpt-oss-120b",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "length",
+                        "message": {"role": "assistant", "content": ""},
+                    }
+                ],
+            }
+        )
+        error = LengthFinishReasonError(completion=completion)
+        policy_result = await _blocked_policy_result()
+        explanation_input = build_explanation_input(policy_result)
+
+        with self.assertRaises(LLMProviderError) as raised:
+            await _adapter(RecordingChatCompletions(error=error)).generate_typed(
+                TypedLLMRequest(
+                    system_instructions="Return structured output.",
+                    input=explanation_input,
+                    output_model=GeneratedExplanation,
+                )
+            )
+
+        self.assertEqual(
+            raised.exception.category,
+            LLMProviderFailureCategory.INVALID_STRUCTURED_RESPONSE,
+        )
+        self.assertEqual(raised.exception.details.provider_code, "length_finish_reason")
+
+    async def test_openrouter_typed_requests_omit_groq_only_reasoning(self) -> None:
+        policy_result = await _blocked_policy_result()
+        explanation_input = build_explanation_input(policy_result)
+        completions = RecordingChatCompletions(
+            response=_response(_generated_for(explanation_input))
+        )
+        adapter = OpenRouterLLMClient(
+            client=RecordingGroqSDKClient(completions),
+            model="openai/gpt-oss-120b",
+            request_timeout_seconds=14,
+            max_output_tokens=300,
+        )
+
+        await adapter.generate_typed(
+            TypedLLMRequest(
+                system_instructions="Return structured output.",
+                input=explanation_input,
+                output_model=GeneratedExplanation,
+            )
+        )
+
+        self.assertNotIn("reasoning_effort", completions.requests[0])
 
     async def test_missing_or_malformed_parsed_output_is_rejected(self) -> None:
         explanation_input = build_explanation_input(

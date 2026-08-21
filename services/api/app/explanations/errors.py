@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from enum import StrEnum
 
 
@@ -32,9 +33,26 @@ class LLMProviderFailureCategory(StrEnum):
     UPSTREAM_UNAVAILABLE = "upstream_unavailable"
 
 
+@dataclass(frozen=True)
+class LLMProviderErrorDetails:
+    """Allowlisted provider metadata that is safe to surface in diagnostics."""
+
+    http_status: int | None = None
+    provider_type: str | None = None
+    provider_code: str | None = None
+    provider_message: str | None = None
+    failed_generation_present: bool = False
+    failed_generation_length: int | None = None
+
+
 class LLMProviderError(RuntimeError):
-    def __init__(self, category: LLMProviderFailureCategory) -> None:
+    def __init__(
+        self,
+        category: LLMProviderFailureCategory,
+        details: LLMProviderErrorDetails | None = None,
+    ) -> None:
         self.category = category
+        self.details = details
         super().__init__("The explanation provider request failed.")
 
 

@@ -23,6 +23,7 @@ class LLMProviderName(StrEnum):
     GEMINI = "gemini"
     GROQ = "groq"
     OPENAI = "openai"
+    OPENROUTER = "openrouter"
 
 
 class MergeReadinessExplanationInput(ContractModel):

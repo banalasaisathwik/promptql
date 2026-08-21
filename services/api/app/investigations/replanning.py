@@ -1,5 +1,7 @@
 """Bounded, round-boundary orchestration for V2 investigation replanning."""
 
+import json
+import logging
 from collections.abc import Awaitable, Callable, Iterable
 from enum import StrEnum
 
@@ -7,7 +9,7 @@ from pydantic import Field
 
 from app.connectors.models import ContractModel, NonEmptyString
 from app.investigations.execution import AgentExecutor, ExecutionBudget, InvestigationExecutionState
-from app.investigations.models import Evidence, FactSet, MissingInformation
+from app.investigations.models import Evidence, FactSet, InvestigationRequest, MissingInformation
 from app.investigations.planning import (
     ActionSummary,
     ContextBuilder,
@@ -20,11 +22,15 @@ from app.investigations.planning import (
     PlannerToolInputField,
     TypedLLMPlanner,
 )
+from app.investigations.planning.instructions import PLANNER_PROMPT_VERSION
 from app.tools.models import ToolDefinition, ToolOutcome
 
 
 MAX_PLANNING_ROUNDS = 3
 MAX_NO_PROGRESS_ROUNDS = 1
+# Reuse the configured runtime logger. A sibling logger would not inherit its
+# handler because the runtime logger intentionally does not propagate upward.
+_PLANNER_DIAGNOSTIC_LOGGER = logging.getLogger("promptql.runtime")
 
 
 class ContinuationReason(StrEnum):
@@ -64,7 +70,73 @@ def _tool_context(definition: ToolDefinition) -> PlannerToolDefinition:
             PlannerToolInputField(name=name, required=name in required)
             for name in sorted(schema.get("properties", {}))
         ),
+        input_schema=schema,
+        output_schema=definition.plan_output_model.model_json_schema(),
     )
+
+
+# PURPOSE: Preserve enough safe context to distinguish planner transport,
+# provider, and local-schema failures after the typed planner has translated an
+# exception. The compact result is observability data, never runtime state.
+#
+# SECURITY: Counts and stable tool IDs are allowed; the investigation goal,
+# Evidence summaries, prompt, provider response, headers, and credentials stay
+# outside this record.
+def _planner_failure_diagnostics(
+    planner: TypedLLMPlanner,
+    planner_input: PlannerInput,
+    error: InvestigationPlannerError,
+) -> dict[str, object]:
+    """Return only bounded metadata needed to debug a failed planner call."""
+    client = getattr(planner, "_client", None)
+    provider = getattr(client, "provider", None)
+    model = getattr(client, "model", None)
+    provider_details = error.provider_details
+    return {
+        "event": "investigation.planner.failed",
+        "round": planner_input.planning_round,
+        "provider": getattr(provider, "value", provider),
+        "requested_model": model,
+        "prompt_version": PLANNER_PROMPT_VERSION,
+        "facts_count": len(planner_input.facts),
+        "evidence_count": len(planner_input.evidence),
+        "missing_information_count": len(planner_input.missing_information),
+        "action_history_count": len(planner_input.action_history),
+        "remaining_tool_calls": planner_input.remaining_tool_calls,
+        "allowed_tool_ids": [str(tool.tool_id) for tool in planner_input.allowed_tools],
+        "exception_class": type(error).__name__,
+        "http_status": (
+            provider_details.http_status if provider_details is not None else None
+        ),
+        "provider_type": (
+            provider_details.provider_type if provider_details is not None else None
+        ),
+        "provider_code": (
+            provider_details.provider_code if provider_details is not None else None
+        ),
+        "provider_message": (
+            provider_details.provider_message
+            if provider_details is not None and provider_details.provider_message
+            else str(error)
+        ),
+        "failed_generation_present": (
+            provider_details.failed_generation_present
+            if provider_details is not None
+            else False
+        ),
+        "failed_generation_length": (
+            provider_details.failed_generation_length
+            if provider_details is not None
+            else None
+        ),
+        "planner_failure_code": error.code.value,
+        "provider_failure_category": error.provider_failure_category,
+        "local_schema_error": (
+            error.code.value
+            if error.code.value in {"invalid_response", "plan_schema_invalid"}
+            else None
+        ),
+    }
 
 
 class AdaptiveInvestigationRuntime:
@@ -94,6 +166,7 @@ class AdaptiveInvestigationRuntime:
         budget: ExecutionBudget,
         initial_evidence: tuple[Evidence, ...] = (),
         initial_missing_information: tuple[MissingInformation, ...] = (),
+        request_context: InvestigationRequest | None = None,
         on_round_planned: Callable[[AdaptiveInvestigationState, PlannedInvestigation], Awaitable[None]] | None = None,
         on_round_completed: Callable[[AdaptiveInvestigationState], Awaitable[None]] | None = None,
     ) -> AdaptiveInvestigationState:
@@ -119,10 +192,24 @@ class AdaptiveInvestigationRuntime:
                 remaining_tool_calls=remaining,
                 planning_round=round_number,
                 max_planning_rounds=MAX_PLANNING_ROUNDS,
+                request_context=request_context,
             )
             try:
                 planned = await self._planner.plan(planner_input)
-            except InvestigationPlannerError:
+            except InvestigationPlannerError as error:
+                # Log counts and stable identifiers, never the goal, compacted
+                # Evidence, prompt text, headers, provider body, or credentials.
+                _PLANNER_DIAGNOSTIC_LOGGER.error(
+                    json.dumps(
+                        _planner_failure_diagnostics(
+                            self._planner,
+                            planner_input,
+                            error,
+                        ),
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                )
                 return self._state(rounds, evidence, facts, missing_information, history, remaining, ContinuationReason.PLANNER_FAILURE)
             # V2.7 still permits five-step standalone plans; adaptive runtime
             # deliberately accepts only the shorter V2.16 horizon.

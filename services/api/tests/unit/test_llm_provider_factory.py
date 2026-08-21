@@ -6,17 +6,20 @@ from app.config import (
     LLMConfigurationError,
     LLMProvider,
     LLMSettings,
+    LLMTask,
 )
 from app.explanations import (
     FakeLLMClient,
     GeminiLLMClient,
     GroqLLMClient,
     OpenAILLMClient,
+    OpenRouterLLMClient,
     create_llm_client,
 )
 from app.explanations.factory import (
     GEMINI_OPENAI_BASE_URL,
     GROQ_OPENAI_BASE_URL,
+    OPENROUTER_OPENAI_BASE_URL,
 )
 
 
@@ -98,7 +101,7 @@ class LLMSettingsTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 LLMConfigurationError,
-                "PROMPTQL_LLM_PROVIDER must be fake, gemini, groq, or openai",
+                "PROMPTQL_LLM_PROVIDER must be fake, gemini, groq, openai, or openrouter",
             ):
                 LLMSettings.from_environment()
 
@@ -179,6 +182,47 @@ class LLMSettingsTests(unittest.TestCase):
         self.assertEqual(settings.max_output_tokens, 350)
         self.assertNotIn("private-groq-key", repr(settings))
 
+    def test_openrouter_requires_its_own_key_and_task_models_fall_back_to_default(self) -> None:
+        environment = {
+            "PROMPTQL_LLM_PROVIDER": "openrouter",
+            "OPENROUTER_API_KEY": "private-openrouter-key",
+            "PROMPTQL_DEFAULT_MODEL": "default-model",
+            "PROMPTQL_PLANNER_MODEL": "planner-model",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            settings = LLMSettings.from_environment()
+
+        self.assertEqual(settings.provider, LLMProvider.OPENROUTER)
+        self.assertEqual(settings.model_for(LLMTask.PLANNING), "planner-model")
+        self.assertEqual(settings.model_for(LLMTask.HYPOTHESIS_GENERATION), "default-model")
+        self.assertEqual(settings.model_for(LLMTask.CODE_DIAGNOSIS), "default-model")
+        self.assertNotIn("private-openrouter-key", repr(settings))
+
+    def test_openrouter_requires_key_and_at_least_one_active_model(self) -> None:
+        for environment in (
+            {"PROMPTQL_LLM_PROVIDER": "openrouter", "PROMPTQL_DEFAULT_MODEL": "model"},
+            {"PROMPTQL_LLM_PROVIDER": "openrouter", "OPENROUTER_API_KEY": "secret"},
+        ):
+            with self.subTest(environment=environment):
+                with patch.dict(os.environ, environment, clear=True):
+                    with self.assertRaises(LLMConfigurationError):
+                        LLMSettings.from_environment()
+
+    def test_openrouter_allows_explicit_planner_and_hypothesis_models_without_default(self) -> None:
+        with patch.dict(os.environ, {
+            "PROMPTQL_LLM_PROVIDER": "openrouter",
+            "OPENROUTER_API_KEY": "secret",
+            "PROMPTQL_PLANNER_MODEL": "planner-model",
+            "PROMPTQL_HYPOTHESIS_MODEL": "hypothesis-model",
+        }, clear=True):
+            settings = LLMSettings.from_environment()
+
+        self.assertEqual(settings.model_for(LLMTask.PLANNING), "planner-model")
+        self.assertEqual(
+            settings.model_for(LLMTask.HYPOTHESIS_GENERATION),
+            "hypothesis-model",
+        )
+
 
 class LLMProviderFactoryTests(unittest.TestCase):
     @patch("app.explanations.factory.AsyncOpenAI")
@@ -228,6 +272,21 @@ class LLMProviderFactoryTests(unittest.TestCase):
         )
 
     @patch("app.explanations.factory.AsyncOpenAI")
+    def test_gemini_factory_uses_selected_task_model(self, async_openai) -> None:
+        settings = LLMSettings(
+            provider=LLMProvider.GEMINI,
+            api_key="private-gemini-key",
+            model=None,
+            request_timeout_seconds=21,
+            max_output_tokens=456,
+        )
+
+        client = create_llm_client(settings, model="planner-model")
+
+        self.assertIsInstance(client, GeminiLLMClient)
+        self.assertEqual(client.model, "planner-model")
+
+    @patch("app.explanations.factory.AsyncOpenAI")
     def test_groq_factory_uses_fixed_url_and_disables_retries(
         self,
         async_openai,
@@ -248,6 +307,29 @@ class LLMProviderFactoryTests(unittest.TestCase):
             timeout=15,
             max_retries=0,
             base_url=GROQ_OPENAI_BASE_URL,
+        )
+
+    @patch("app.explanations.factory.AsyncOpenAI")
+    def test_openrouter_factory_uses_compatibility_url_and_selected_task_model(
+        self, async_openai
+    ) -> None:
+        settings = LLMSettings(
+            provider=LLMProvider.OPENROUTER,
+            api_key="private-openrouter-key",
+            model="default-model",
+            request_timeout_seconds=15,
+            max_output_tokens=256,
+        )
+
+        client = create_llm_client(settings, model="planner-model")
+
+        self.assertIsInstance(client, OpenRouterLLMClient)
+        self.assertEqual(client.model, "planner-model")
+        async_openai.assert_called_once_with(
+            api_key="private-openrouter-key",
+            timeout=15,
+            max_retries=0,
+            base_url=OPENROUTER_OPENAI_BASE_URL,
         )
 
 

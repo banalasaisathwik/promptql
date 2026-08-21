@@ -1,15 +1,32 @@
 import unittest
 
-from app.explanations import FakeLLMClient, LLMStructuredResponse, LLMProviderName
-from app.investigations.hypotheses import CandidateHypothesis, HypothesisKind
+from app.explanations import (
+    FakeLLMClient,
+    LLMProviderErrorDetails,
+    LLMProviderName,
+    LLMStructuredResponse,
+)
+from app.investigations.hypotheses import (
+    CandidateHypothesis,
+    HypothesisGenerationError,
+    HypothesisGenerationFailureCode,
+    HypothesisGenerationInput,
+    HypothesisKind,
+    TypedLLMHypothesisGenerator,
+)
 from app.investigations.models import InvestigationRequest
 from app.investigations.planning import InvestigationPlan, Literal, PlanArgument, PlanStep
 from app.tools import InvestigationToolId
 from app.runtime import InMemoryRunRepository, RunStatus
-from app.workflows.investigation import InvestigationWorkflowService
+from app.workflows.investigation import (
+    InvestigationWorkflowService,
+    _hypothesis_failure_diagnostics,
+)
 
 
 class SequentialPlannerClient:
+    """Test-only typed planner client that records each bounded planner input."""
+
     provider = LLMProviderName.FAKE
     model = "sequential-planner-test-double"
 
@@ -42,6 +59,32 @@ def hypothesis_plan() -> InvestigationPlan:
 
 
 class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    def test_hypothesis_failure_diagnostics_are_allowlisted(self):
+        diagnostics = _hypothesis_failure_diagnostics(
+            TypedLLMHypothesisGenerator(FakeLLMClient()),
+            HypothesisGenerationInput(
+                investigation_goal="private investigation goal",
+                facts=(),
+            ),
+            HypothesisGenerationError(
+                HypothesisGenerationFailureCode.PROVIDER_FAILURE,
+                provider_details=LLMProviderErrorDetails(
+                    http_status=400,
+                    provider_code="json_validate_failed",
+                    provider_message="Sanitized provider message.",
+                    failed_generation_present=True,
+                    failed_generation_length=123,
+                ),
+                provider_failure_category="invalid_structured_response",
+            ),
+        )
+
+        self.assertEqual(diagnostics["event"], "investigation.hypothesis.failed")
+        self.assertEqual(diagnostics["http_status"], 400)
+        self.assertEqual(diagnostics["provider_code"], "json_validate_failed")
+        self.assertEqual(diagnostics["failed_generation_length"], 123)
+        self.assertNotIn("private investigation goal", str(diagnostics))
+
     async def test_validated_hypothesis_reaches_only_deterministic_grounded_result(self):
         class HypothesisClient(FakeLLMClient):
             async def generate_typed(self, request):

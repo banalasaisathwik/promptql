@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import UTC, datetime
 
@@ -13,7 +14,8 @@ from app.investigations import (
     ExecutionBudget,
     IncidentEvidenceContent,
 )
-from app.investigations.planning import InvestigationPlan, Literal, PlanArgument, PlanStep, PlanValidator, PlannedInvestigation, PlannerMetadata
+from app.explanations import LLMProviderErrorDetails
+from app.investigations.planning import InvestigationPlan, InvestigationPlannerError, Literal, PlanArgument, PlanStep, PlannerFailureCode, PlanValidator, PlannedInvestigation, PlannerMetadata
 from app.tools import InvestigationToolId, TOOL_DEFINITIONS, ToolOutcome, ToolRegistry, ToolResult
 
 
@@ -33,6 +35,23 @@ class SequentialPlanner:
     async def plan(self, planner_input):
         self.inputs.append(planner_input)
         return PlannedInvestigation(plan=self.plans.pop(0), metadata=PlannerMetadata(provider="fake", model="fake", prompt_id="test", prompt_version="test"))
+
+
+class FailingPlanner:
+    async def plan(self, _planner_input):
+        raise InvestigationPlannerError(
+            PlannerFailureCode.PROVIDER_FAILURE,
+            "The planning provider failed.",
+            provider_details=LLMProviderErrorDetails(
+                http_status=400,
+                provider_type="invalid_request_error",
+                provider_code="json_validate_failed",
+                provider_message="Groq rejected generated structured output.",
+                failed_generation_present=True,
+                failed_generation_length=123,
+            ),
+            provider_failure_category="invalid_request",
+        )
 
 
 class AdaptiveRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -86,6 +105,36 @@ class AdaptiveRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(state.continuation_reason, ContinuationReason.PLAN_VALIDATION_FAILURE)
         self.assertEqual(invoker.calls, [])
+
+    async def test_planner_failure_logs_safe_context_without_the_goal(self):
+        registry = ToolRegistry(TOOL_DEFINITIONS)
+        runtime = AdaptiveInvestigationRuntime(
+            FailingPlanner(), PlanValidator(registry), AgentExecutor(registry, RecordingInvoker(()))
+        )
+
+        with self.assertLogs("promptql.runtime", level="ERROR") as logs:
+            state = await runtime.investigate(
+                "Private checkout incident question",
+                TOOL_DEFINITIONS,
+                budget=ExecutionBudget(max_tool_calls=10),
+                initial_evidence=(self._incident("private-evidence-payload"),),
+            )
+
+        record = json.loads(logs.output[0].split(":", 2)[-1])
+        self.assertEqual(state.continuation_reason, ContinuationReason.PLANNER_FAILURE)
+        self.assertEqual(record["round"], 1)
+        self.assertEqual(record["facts_count"], 0)
+        self.assertEqual(record["evidence_count"], 1)
+        self.assertEqual(record["remaining_tool_calls"], 10)
+        self.assertEqual(record["exception_class"], "InvestigationPlannerError")
+        self.assertEqual(record["planner_failure_code"], "provider_failure")
+        self.assertEqual(record["http_status"], 400)
+        self.assertEqual(record["provider_type"], "invalid_request_error")
+        self.assertEqual(record["provider_code"], "json_validate_failed")
+        self.assertEqual(record["provider_failure_category"], "invalid_request")
+        self.assertEqual(record["failed_generation_length"], 123)
+        self.assertNotIn("Private checkout incident question", logs.output[0])
+        self.assertNotIn("private-evidence-payload", logs.output[0])
 
 
 if __name__ == "__main__":

@@ -41,10 +41,12 @@ class TypedLLMPlanner:
                     output_model=InvestigationPlan,
                 )
             )
-        except LLMProviderError:
+        except LLMProviderError as error:
             raise InvestigationPlannerError(
                 PlannerFailureCode.PROVIDER_FAILURE,
                 "The planning provider failed.",
+                provider_details=error.details,
+                provider_failure_category=error.category.value,
             ) from None
         except Exception:
             raise InvestigationPlannerError(
@@ -69,8 +71,10 @@ class TypedLLMPlanner:
         return PlannedInvestigation(
             plan=plan,
             metadata=PlannerMetadata(
+                task="planning",
                 provider=self._client.provider.value,
                 model=self._client.model,
+                requested_model=self._client.model,
                 prompt_id=PLANNER_PROMPT_ID,
                 prompt_version=PLANNER_PROMPT_VERSION,
             ),
