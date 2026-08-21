@@ -221,6 +221,49 @@ without explicit versioned pricing. Provider-total tokens are aggregated as an
 independent provider measurement rather than assumed to equal input plus
 output.
 
+## Versioned V2 investigation evaluations
+
+The V2 harness reuses production planners, validators, Fact derivation, code
+diagnosis, recommendation templates, and the complete adaptive workflow with
+deterministic fake connectors. It grades components and trajectories separately
+without requiring one exact tool order.
+
+Run the three-sample development and holdout paths without network access:
+
+```powershell
+uv run python -m app.evals.investigations.runner --fake-dry-run --dataset development --samples-per-case 3 --inter-request-delay-seconds 0
+uv run python -m app.evals.investigations.runner --fake-dry-run --dataset holdout --samples-per-case 3 --inter-request-delay-seconds 0
+```
+
+Preflight the configured provider without constructing a client or making an
+external request:
+
+```powershell
+uv run --env-file .env python -m app.evals.investigations.runner --preflight --dataset development --samples-per-case 1
+```
+
+The preflight reports requested task models and a conservative maximum of eight
+provider calls per sample: three isolated component calls, up to three planner
+rounds in the adaptive workflow, then workflow hypothesis and diagnosis calls.
+A bounded real smoke requires explicit acknowledgement:
+
+```powershell
+uv run --env-file .env python -m app.evals.investigations.runner --dataset development --samples-per-case 1 --acknowledge-paid-calls
+```
+
+Exit code 0 means provider, schema, component, and trajectory gates all passed;
+1 means execution completed but one or more release gates failed; 2 means a
+configuration or safety gate failed. Reports under the ignored
+`local-artifacts/investigation-evals/` directory contain aggregate IDs, rates,
+latency, and token totals only. They omit questions, prompts, Evidence payloads,
+code, generated output, credentials, raw exceptions, and unversioned cost.
+
+Development and holdout are versioned and use repeated probabilistic samples,
+but the first catalog contains one checkout fixture family expressed with two
+questions. Passing it proves the harness and supported scenario; it does not
+establish broad production incident quality. Grounding and reference agreement
+remain separate from true root-cause correctness.
+
 ## Intended layers
 
 | Layer | Intended location | Purpose | Status |
@@ -235,6 +278,7 @@ output.
 | Groq/OpenRouter compatibility adapters | `services/api/tests/unit/test_llm_provider_factory.py`, `test_groq_llm_client.py` | Provider-specific configuration, fixed endpoints, strict-schema request shape, Groq-only reasoning control, sanitized structured-generation failures, validator preservation, and safe telemetry | Injected OpenAI SDK boundary only; no external requests |
 | V2 adaptive investigation | `test_tool_registry.py`, `test_adaptive_investigation_runtime.py`, `test_investigation_workflow.py`, `test_grounded_hypotheses.py`, and `integration/test_investigation_api.py` | Registered read-only tools, plan validation/execution, global budget, round state, deterministic fake trajectory, grounded hypothesis and code-finding validation, recommendations, and persisted API projection | Offline fake checkout scenario exercises the real adaptive path through final diagnosis; external providers remain explicit smokes |
 | V2 code diagnosis | `tests/unit/test_code_diagnosis.py`, `test_grounded_hypotheses.py`, workflow/API integration tests, and frontend response/dashboard tests | Bounded relevant context, schema failures, complete Fact/Evidence support, Evidence-ID location resolution, fabricated-location rejection, deterministic recommendation templates, persistence, and projection | Offline fake candidate plus an explicit paid OpenRouter provider/schema/grounding diagnostic |
+| V2 investigation evals | `services/api/tests/unit/test_investigation_evals.py` | Versioned dev/holdout cases, component and trajectory graders, deterministic-baseline comparison, repeated samples, provider/schema separation, unsupported-claim rejection, call bounds, and aggregate-only artifacts | Automated and fake runs use deterministic clients/connectors; real runs require paid-call acknowledgement |
 | Versioned explanation evals | `services/api/tests/unit/test_explanation_eval_*.py` | Development/holdout versioning, repeated samples, separate denominators, deterministic graders, pacing without retry, thresholds, safe artifacts, baselines, and paid-call gates | Automated tests use only fake/injected clients; real runs require approval |
 | PostgreSQL integration | `services/api/tests/integration/test_postgres_runtime_persistence.py` | Alembic schema, durable reconstruction, ordering, provenance, legacy nullable rows, failures, and conflicts | Opt-in; skipped unless guarded test credentials are configured |
 | Cross-layer/end-to-end | `tests/integration/test_investigation_api.py` plus frontend API/dashboard tests | API acceptance, persisted investigation snapshots, fixture-backed adaptive execution, and UI projection | Backend/frontend halves are automated; a browser runner is not configured |

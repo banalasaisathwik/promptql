@@ -4,7 +4,8 @@
 - Owner: Repository owner
 - Created: 2026-08-21
 - Last updated: 2026-08-21
-- Related ADRs: ADR-018, ADR-019, ADR-020, ADR-021, ADR-023, ADR-024, ADR-025
+- Related ADRs: ADR-018, ADR-019, ADR-020, ADR-021, ADR-023, ADR-024, ADR-025,
+  ADR-027, ADR-028, ADR-029
 - Related tasks: PromptQL V2 autonomous completion run
 
 ## Objective
@@ -138,7 +139,7 @@ question + typed context
 - [ ] Snapshot polling exposes only truthful backend state and stops terminally.
 - [ ] V2 spans/metrics/logs contain allowlisted identifiers and counts, never
   prompts, raw code, Evidence payloads, credentials, or provider responses.
-- [ ] Component and trajectory evals separate provider execution success,
+- [x] Component and trajectory evals separate provider execution success,
   schema validity, deterministic grounding, and reference-answer quality.
 - [ ] Full backend/frontend regression, compile, build, lint, diff, and secret
   checks pass; database and connector gates are either verified or explicit.
@@ -231,6 +232,12 @@ repeat affected checks.
   provider-resolved model and token metadata, and independent general-OTLP and
   Langfuse OTLP exporters. Hosted Langfuse verification is externally gated by
   absent project credentials; offline instrumentation and redaction tests pass.
+- [x] 2026-08-21: Milestone 5 added versioned V2 component and adaptive-
+  trajectory evals with separate provider/schema/quality rates, deterministic
+  baseline recall, unsupported-claim rejection, repeated sampling, bounded paid
+  execution, and aggregate-safe artifacts. Three-sample fake development and
+  holdout runs passed every gate; broader case diversity remains future quality
+  work rather than an implementation blocker.
 
 ## Decisions and discoveries
 
@@ -241,6 +248,8 @@ repeat affected checks.
   Fact derivation into probabilistic inference.
 - Produce remediation deterministically from validated finding categories and
   support relationships. A second free-prose remediation LLM is unnecessary.
+- Grade legal, grounded trajectory outcomes rather than exact tool ordering so
+  semantically equivalent valid plans do not become false failures.
 - Round-level checkpoints satisfy V2 truthful-progress requirements. Per-step
   callbacks remain optional unless implementation evidence shows a clean need.
 - Database authentication failure is external configuration evidence, not a

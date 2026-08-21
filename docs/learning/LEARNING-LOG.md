@@ -2439,3 +2439,36 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** Should deployment later use an OpenTelemetry
   collector for centralized sampling and fan-out? Keep direct exporters until
   operational scale or policy demonstrates that need.
+
+### 2026-08-21 - Evaluate investigation reasoning without grading implementation order
+
+- **V2 milestone:** V2.20 component and trajectory evaluations.
+- **Engineering concept and syntax:** An evaluation needs distinct observations
+  for transport success, typed schema acceptance, deterministic semantic
+  grounding, and reference-answer agreement. Frozen Pydantic contracts make the
+  dataset and report reproducible; `asyncio` repeats independent probabilistic
+  samples while an injected sleep function keeps pacing testable without delays.
+- **Implementation locations:** `app/evals/investigations/cases.py` owns versioned
+  dev/holdout reference cases; `models.py` owns safe observation/report
+  contracts; `evaluation.py` runs production components, validators, baseline,
+  adversarial rejection, and the adaptive workflow; `runner.py` owns preflight,
+  paid-call gating, task-specific clients, pacing, and aggregate artifacts.
+- **Decision and invariant:** Grade semantic outcomes and runtime controls, not
+  one exact tool order. Every model value remains a proposal, and production
+  validators decide whether hypotheses or code findings count as grounded.
+  Provider failures and schema failures must never be reported as reasoning
+  quality alone.
+- **Failure behavior and trade-off:** One component can fail while the report
+  still records the remaining safe observations and failed gate. The first
+  catalog contains one checkout fixture family, which keeps labels grounded in
+  implemented deterministic fixtures but cannot demonstrate broad incident
+  quality. Adding diverse fixtures is more valuable than increasing samples of
+  the same scenario indefinitely.
+- **Validation evidence:** Six focused unit tests passed. Three independent fake
+  samples on each of the development and holdout splits produced 18/18 provider
+  and schema successes, 6/6 component-quality passes, 6/6 trajectory-quality
+  passes, and 100% baseline/adaptive Evidence and Fact recall. Report-safety
+  tests exclude questions, code excerpts, adversarial prose, and authorization
+  material.
+- **Unresolved question:** Which additional incident families should become
+  deterministic fixtures before using these rates as a broader V2 quality gate?
