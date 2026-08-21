@@ -54,7 +54,7 @@ export function InvestigationDashboard({ run }: { run: InvestigationRun }) {
         <div>
           <p className="eyebrow">Live investigation snapshot</p>
           <h1 id="investigation-run-title">{run.request.repository_name}</h1>
-          <p className="intro-copy">{run.request.incident_summary}</p>
+          <p className="intro-copy">{run.request.question}</p>
         </div>
         <div className={`run-status run-status--${run.status}`}><span>{run.status}</span></div>
       </section>

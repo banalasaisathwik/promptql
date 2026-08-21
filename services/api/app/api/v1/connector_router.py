@@ -114,9 +114,13 @@ def get_investigation_workflow(
     request: Request,
     run_repository: Annotated[RunRepository, Depends(get_run_repository)],
 ) -> InvestigationWorkflowService:
+    # The application boundary already resolved task-to-model policy. The HTTP
+    # route only passes those provider-neutral typed clients into the workflow;
+    # it never receives a provider key, URL, or model-selection decision.
     return InvestigationWorkflowService(
         run_repository,
-        request.app.state.investigation_llm_client,
+        request.app.state.investigation_hypothesis_client,
+        planner_client=request.app.state.investigation_planner_client,
         github_code_source=request.app.state.github_code_source,
         jira_connector=request.app.state.jira_connector,
     )

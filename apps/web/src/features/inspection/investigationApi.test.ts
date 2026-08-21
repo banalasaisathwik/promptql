@@ -20,7 +20,7 @@ test('submits structured investigation input through the live-start API', async 
   const request = {
     repository_owner: 'octo-org',
     repository_name: 'analytics',
-    incident_summary: 'Checkout failed.',
+    question: 'Why did checkout fail?',
     incident_reference: 'incident:checkout-500',
   }
   await startInvestigationRun(request)
@@ -41,7 +41,7 @@ test('parses a pending investigation snapshot through the shared run route', asy
     request: {
       repository_owner: 'octo-org',
       repository_name: 'analytics',
-      incident_summary: 'Checkout failed.',
+      question: 'Why did checkout fail?',
     },
     error: null,
     state: null,

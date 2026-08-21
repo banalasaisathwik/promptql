@@ -33,6 +33,44 @@ class LLMProvider(StrEnum):
     GEMINI = "gemini"
     GROQ = "groq"
     OPENAI = "openai"
+    OPENROUTER = "openrouter"
+
+
+class LLMTask(StrEnum):
+    """Stable, deterministic names for the small set of model-owned workloads."""
+
+    PLANNING = "planning"
+    HYPOTHESIS_GENERATION = "hypothesis_generation"
+    CODE_DIAGNOSIS = "code_diagnosis"
+
+
+# PURPOSE: Map each bounded LLM task to configuration, without inspecting the
+# request or introducing a probabilistic router.
+#
+# FLOW: Prefer the task-specific model -> fall back to the shared default -> fail
+# startup when neither exists. The returned string is still only a requested
+# model; the provider may report a separate resolved serving model.
+@dataclass(frozen=True)
+class ModelPolicy:
+    """Resolve a configured model without interpreting request content."""
+
+    default_model: str | None
+    planner_model: str | None
+    hypothesis_model: str | None
+    code_diagnosis_model: str | None
+
+    def model_for(self, task: LLMTask) -> str:
+        task_model = {
+            LLMTask.PLANNING: self.planner_model,
+            LLMTask.HYPOTHESIS_GENERATION: self.hypothesis_model,
+            LLMTask.CODE_DIAGNOSIS: self.code_diagnosis_model,
+        }[task]
+        model = task_model or self.default_model
+        if model is None:
+            raise LLMConfigurationError(
+                f"No configured model is available for LLM task {task.value}."
+            )
+        return model
 
 
 class LLMConfigurationError(RuntimeError):
@@ -334,6 +372,12 @@ class LLMSettings:
     model: str | None
     request_timeout_seconds: float
     max_output_tokens: int
+    model_policy: ModelPolicy | None = None
+
+    def model_for(self, task: LLMTask) -> str:
+        if self.model_policy is None:
+            raise LLMConfigurationError("Fake LLM mode does not select configured models.")
+        return self.model_policy.model_for(task)
 
     @classmethod
     def from_environment(cls) -> "LLMSettings":
@@ -342,28 +386,43 @@ class LLMSettings:
             provider = LLMProvider(raw_provider)
         except ValueError:
             raise LLMConfigurationError(
-                "PROMPTQL_LLM_PROVIDER must be fake, gemini, groq, or openai."
+                "PROMPTQL_LLM_PROVIDER must be fake, gemini, groq, openai, or openrouter."
             ) from None
 
         if provider is LLMProvider.GEMINI:
             variable_prefix = "GEMINI"
         elif provider is LLMProvider.GROQ:
             variable_prefix = "GROQ"
+        elif provider is LLMProvider.OPENROUTER:
+            variable_prefix = "OPENROUTER"
         else:
             variable_prefix = "OPENAI"
 
         api_key = os.environ.get(f"{variable_prefix}_API_KEY", "").strip() or None
-        model = os.environ.get(f"{variable_prefix}_MODEL", "").strip() or None
+        # PROMPTQL_DEFAULT_MODEL is provider-neutral. The older provider-specific
+        # setting remains a compatibility fallback for existing V1 deployments.
+        model = (
+            os.environ.get("PROMPTQL_DEFAULT_MODEL", "").strip()
+            or os.environ.get(f"{variable_prefix}_MODEL", "").strip()
+            or None
+        )
+        planner_model = os.environ.get("PROMPTQL_PLANNER_MODEL", "").strip() or None
+        hypothesis_model = (
+            os.environ.get("PROMPTQL_HYPOTHESIS_MODEL", "").strip() or None
+        )
+        code_diagnosis_model = (
+            os.environ.get("PROMPTQL_CODE_DIAGNOSIS_MODEL", "").strip() or None
+        )
         if provider is not LLMProvider.FAKE:
             if api_key is None:
                 raise LLMConfigurationError(
                     f"{variable_prefix}_API_KEY is required when the LLM "
                     f"provider is {provider.value}."
                 )
-            if model is None:
+            if model is None and planner_model is None and hypothesis_model is None:
                 raise LLMConfigurationError(
-                    f"{variable_prefix}_MODEL is required when the LLM "
-                    f"provider is {provider.value}."
+                    "PROMPTQL_DEFAULT_MODEL or a planning/hypothesis task model "
+                    f"is required when the LLM provider is {provider.value}."
                 )
 
         timeout_name = f"{variable_prefix}_REQUEST_TIMEOUT_SECONDS"
@@ -380,6 +439,16 @@ class LLMSettings:
             max_output_tokens=_parse_llm_max_output_tokens(
                 os.environ.get(token_limit_name, "512"),
                 token_limit_name,
+            ),
+            model_policy=(
+                None
+                if provider is LLMProvider.FAKE
+                else ModelPolicy(
+                    default_model=model,
+                    planner_model=planner_model,
+                    hypothesis_model=hypothesis_model,
+                    code_diagnosis_model=code_diagnosis_model,
+                )
             ),
         )
 

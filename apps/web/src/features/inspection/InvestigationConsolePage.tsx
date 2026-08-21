@@ -4,6 +4,7 @@ import { startInvestigationRun } from './api'
 import { ConnectorApiError } from './apiError'
 import {
   buildInvestigationRequest,
+  CHECKOUT_500_PRESET,
   EMPTY_INVESTIGATION_FORM,
 } from './investigationRequest'
 
@@ -19,6 +20,12 @@ export function InvestigationConsolePage({
 
   function update(field: keyof typeof EMPTY_INVESTIGATION_FORM, value: string) {
     setForm((current) => ({ ...current, [field]: value }))
+    setError(null)
+  }
+
+  function selectPreset(value: string) {
+    // Resetting to a fresh object preserves normal editing after a preset choice.
+    setForm(value === 'checkout-500' ? CHECKOUT_500_PRESET : EMPTY_INVESTIGATION_FORM)
     setError(null)
   }
 
@@ -57,27 +64,46 @@ export function InvestigationConsolePage({
       <section className="workspace" aria-labelledby="investigation-title">
         <div className="intro">
           <p className="eyebrow">Grounded investigation</p>
-          <h1 id="investigation-title">Investigate an incident</h1>
+          <h1 id="investigation-title">Investigate an engineering issue</h1>
           <p className="intro-copy">
-            Submit structured context, watch the live execution snapshot, and
-            review a conclusion grounded in validated Facts.
+            Ask about an incident, deployment, or code change. PromptQL uses
+            your question as the investigation goal and grounds results in validated Facts.
           </p>
         </div>
         <form className="investigation-form" onSubmit={submit}>
-          <div className="form-grid">
-            <label>Repository owner<input value={form.repository_owner} onChange={(event) => update('repository_owner', event.target.value)} /></label>
-            <label>Repository name<input value={form.repository_name} onChange={(event) => update('repository_name', event.target.value)} /></label>
-            <label>Incident ID<input value={form.incident_reference} onChange={(event) => update('incident_reference', event.target.value)} placeholder="incident:checkout-500" /></label>
-            <label>Service<input value={form.service} onChange={(event) => update('service', event.target.value)} /></label>
-            <label>Environment<input value={form.environment} onChange={(event) => update('environment', event.target.value)} placeholder="production" /></label>
-            <label>Deployment ID<input value={form.deployment_reference} onChange={(event) => update('deployment_reference', event.target.value)} /></label>
-            <label>Pull request number<input inputMode="numeric" value={form.pull_request_number} onChange={(event) => update('pull_request_number', event.target.value)} /></label>
-          </div>
-          <label>Incident summary<textarea value={form.incident_summary} onChange={(event) => update('incident_summary', event.target.value)} rows={4} /></label>
-          {error && <p className="inline-alert" role="alert">{error}</p>}
+          <label className="investigation-question">
+            <span>What do you want to investigate?</span>
+            <textarea
+              value={form.question}
+              onChange={(event) => update('question', event.target.value)}
+              placeholder="Why did checkout start returning 500s after the latest deployment?"
+              rows={5}
+              aria-invalid={error?.includes('What do you want') || undefined}
+            />
+          </label>
           <button className="primary-action" type="submit" disabled={submitting}>
-            {submitting ? 'Starting investigation…' : 'Investigate'}
+            {submitting ? 'Starting investigation…' : 'Investigate →'}
           </button>
+          <label className="demo-scenario">
+            <span>Demo scenario</span>
+            <select onChange={(event) => selectPreset(event.target.value)} defaultValue="custom">
+              <option value="custom">Custom investigation</option>
+              <option value="checkout-500">Checkout 500 after deployment</option>
+            </select>
+          </label>
+          <details className="investigation-context">
+            <summary>Optional investigation context <small>Repository details are required for GitHub evidence.</small></summary>
+            <div className="form-grid">
+              <label>Repository owner<input value={form.repository_owner} onChange={(event) => update('repository_owner', event.target.value)} /></label>
+              <label>Repository name<input value={form.repository_name} onChange={(event) => update('repository_name', event.target.value)} /></label>
+              <label>Incident ID<input value={form.incident_reference} onChange={(event) => update('incident_reference', event.target.value)} placeholder="incident:checkout-500" /></label>
+              <label>Service<input value={form.service} onChange={(event) => update('service', event.target.value)} /></label>
+              <label>Environment<input value={form.environment} onChange={(event) => update('environment', event.target.value)} placeholder="production" /></label>
+              <label>Deployment ID<input value={form.deployment_reference} onChange={(event) => update('deployment_reference', event.target.value)} /></label>
+              <label>Pull request number<input inputMode="numeric" value={form.pull_request_number} onChange={(event) => update('pull_request_number', event.target.value)} /></label>
+            </div>
+          </details>
+          {error && <p className="inline-alert" role="alert">{error}</p>}
         </form>
       </section>
     </main>

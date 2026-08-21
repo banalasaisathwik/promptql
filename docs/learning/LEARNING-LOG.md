@@ -1,5 +1,47 @@
 # Learning log
 
+## 2026-08-21 — Live typed planning needs contract parity and runtime proof
+
+- **Concept:** A passing isolated LLM diagnostic proves only that a provider can
+  parse one schema. The production workflow also depends on the exact
+  `PlannerInput`, deterministic plan validation, configured evidence sources,
+  process lifetime, provider token/time budgets, and the later hypothesis call.
+- **Important syntax:** `WithJsonSchema({"type": "number"})` gives an `int |
+  float` local union one non-overlapping provider schema. Typed request context
+  and tool `model_json_schema()` values cross the boundary as validated Pydantic
+  fields. Provider errors carry an allowlisted dataclass instead of a raw SDK
+  response.
+- **Implementation location:** `planning/models.py`, `planning/prompt.py`, and
+  `replanning.py` align real planner context and diagnostics;
+  `groq_client.py`/`openrouter_client.py` normalize structured-output failures;
+  `hypotheses/errors.py`, `hypotheses/service.py`, and
+  `workflows/investigation.py` preserve the same safe failure categories through
+  final hypothesis generation.
+- **Design decision:** Keep structured outputs and deterministic validators
+  strict. Supply the model with the exact existing request/tool contracts, and
+  correct runtime configuration, rather than accepting invented fields,
+  bypassing validation, adding retries, or changing executor/fact/evidence logic.
+- **Invariant or failure behavior:** Provider output remains untrusted. Logs may
+  contain counts, stable tool/model/prompt identifiers, status/category/code,
+  and failed-generation length, but never prompts, Evidence/Facts payloads,
+  headers, credentials, or raw responses. Fake UI presets must run with fake
+  connectors; live connectors require real repository identities.
+- **Trade-off learned:** `openai/gpt-oss-120b` improves structured planning but
+  needs more latency and reasoning-token allowance. A 120-second/4096-token
+  OpenRouter budget reduces false `length_finish_reason` failures at higher cost
+  and latency; it does not guarantee provider availability and does not add a
+  second request.
+- **Validation evidence:** Three realistic OpenRouter plans matched request
+  values and executed successfully against fake tools. Direct HTTP run
+  `6681341f-9c73-4155-a17b-5478b297209d` completed with 3 rounds, 7 tool calls,
+  7 Evidence records, 5 Facts, and 1 accepted grounded hypothesis. The focused
+  final 65-test provider/workflow suite passed; full discovery passed 374 tests with
+  six environment-guarded PostgreSQL skips. Python compilation and
+  `git diff --check` passed; Ruff was not installed in the project environment.
+- **Unresolved question:** Provider latency/cost distributions should be measured
+  before selecting a smaller production model or introducing an explicit retry
+  policy. This task intentionally changes neither.
+
 ## 2026-08-19 — V2.16 bounded replanning
 
 `AdaptiveInvestigationRuntime` in `services/api/app/investigations/replanning.py`
@@ -2066,3 +2108,173 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   adaptive planner remains available as a separate capability. Checkpoint
   recovery, event replay, live provider verification, and dependency-specific
   hypothesis predicates remain deferred.
+
+### 2026-08-20 - Make investigation creation question-first without interpreting the question
+
+- **V2 milestone:** V2.19 investigation console refinement.
+- **Engineering concept and syntax:** `InvestigationRequest.question` is a required `NonEmptyString` that replaces `incident_summary`, because the old field only supplied planner/hypothesis goal prose. The TypeScript builder trims browser-input strings before serializing the matching snake_case API contract; a `<details>` element keeps supporting context available without visually competing with the primary textarea.
+- **Implementation locations:** `investigations/models.py` owns the strict request contract; `planning/prompt.py`, `hypotheses/prompt.py`, and `workflows/investigation.py` pass the exact question to the existing runtime. The React console, builder, API response validator, and dashboard live in `apps/web/src/features/inspection/`.
+- **Decision and invariant:** The application does not classify, extract, or rewrite natural language. `question` is the sole user-owned goal; repository owner/name remain required explicit GitHub context, while incident, deployment, service, environment, and PR values stay optional evidence context. A preset only fills an editable draft and has no backend meaning.
+- **Fixture and failure behavior:** The sole preset uses the coherent fake combination `octo-org/analytics`, PR `42`, `incident:checkout-500`, `deployment:1042`, `checkout-api`, and `production`. An empty question and an invalid PR are rejected in the browser before submission; the normal API error path still reports sanitized backend failure text.
+- **Trade-off and validation:** Requiring repository details preserves the current GitHub tool contract, so the supporting section cannot be completely optional for custom runs. Focused frontend tests and 31 backend model/planner/workflow/API tests passed before the final comment pass; full build, lint, and discovery validation remain part of this task's final verification.
+
+### 2026-08-20 - Fail startup for a stale investigation persistence schema
+
+- **Engineering concept:** Readiness checks must validate the schema features a
+  live write path needs, not only that a table exists. `workflow_runs` gained
+  the nullable JSONB `investigation_state` column in migration `20260819_0004`.
+- **Implementation and decision:** `database/engine.py` now verifies that
+  column during application startup. This preserves the existing rule that an
+  unavailable repository never silently becomes in-memory storage, while moving
+  an otherwise delayed first-save 503 to a clear startup failure.
+- **Invariant and validation:** `test_database_config.py` supplies a small fake
+  SQLAlchemy inspector missing the column and proves `RunPersistenceError` is
+  raised. The real database must still be migrated with Alembic; code cannot
+  safely alter a deployment database as a side effect of application startup.
+
+### 2026-08-20 - Route typed investigation workloads to configured models
+
+- **V2 milestone:** Investigation runtime provider support.
+- **Engineering concept and syntax:** `LLMTask` is a small `StrEnum`; frozen
+  `ModelPolicy.model_for()` is a deterministic lookup, not an LLM classifier.
+  It maps planning and hypothesis generation independently, with an explicit
+  `PROMPTQL_DEFAULT_MODEL` fallback and a configuration-ready code-diagnosis key.
+- **Implementation locations:** `config.py` owns settings and the policy;
+  `explanations/factory.py` constructs the selected provider/model client;
+  `openrouter_client.py` reuses the established OpenAI-compatible structured
+  adapter; `main.py` and `connector_router.py` inject separate task clients.
+- **Decision and invariant:** PromptQL owns task-to-requested-model choice;
+  OpenRouter owns downstream provider routing/failover. The typed prompt,
+  schema validation, deterministic plan validation, and hypothesis grounding do
+  not import provider URLs, keys, or model IDs. SDK retries stay disabled so the
+  existing runtime retry authority is not multiplied.
+- **Failure behavior and trade-off:** Missing task/default configuration fails
+  before a request, while OpenRouter 429s remain the existing sanitized
+  `rate_limit` category. Two clients add small startup resource cost but make
+  planning and hypothesis models independently auditable and configurable.
+- **Validation evidence:** Focused factory, typed planner, hypothesis, and
+  investigation workflow tests initially ran with injected SDK doubles only;
+  the later provider-boundary entry records the approved live verification.
+
+### 2026-08-20 - Preserve the credential-free fake startup path
+
+- **Engineering concept and syntax:** Python evaluates the right operand of
+  `left or right` when `left` is falsy. `LLMSettings.model` is intentionally
+  `None` in fake mode, so using `settings.model or settings.model_for(...)`
+  incorrectly called the non-fake model-policy lookup during application
+  construction.
+- **Implementation locations:** `services/api/app/main.py` now constructs one
+  `FakeLLMClient` before any task-model lookup. The regression test in
+  `services/api/tests/unit/test_application_startup_logging.py` asserts that
+  the explanation, planning, and hypothesis paths reuse that credential-free
+  client.
+- **Decision and invariant:** Fake mode is a fully runnable local/test mode,
+  not an incomplete live-provider configuration. It must not require a model
+  name or a `ModelPolicy`; non-fake modes still resolve task models explicitly.
+- **Failure behavior and trade-off:** This preserves early configuration
+  failures for live providers while avoiding an import-time API crash for the
+  safe default. It does not mask an OpenRouter/provider failure with fake
+  output, because that would make a failed external boundary appear successful.
+- **Validation evidence:** The focused 44-test provider/planner/workflow suite
+  and full backend discovery passed (362 tests; six PostgreSQL tests skipped
+  because `TEST_DATABASE_URL` is unset). Frontend tests (38) and production
+  build also passed. Live-provider behavior is covered by the later dedicated
+  provider-boundary diagnosis.
+
+### 2026-08-20 - Diagnose and fix the OpenRouter planner schema boundary
+
+- **V2 milestone:** Typed investigation planner provider compatibility.
+- **Engineering concept and syntax:** Pydantic's discriminated union annotation
+  emitted JSON Schema `oneOf` for `PlanArgument.value`. Both Azure and OpenAI
+  upstream routes rejected that keyword with `invalid_json_schema`. Retaining
+  the `Literal | StepOutputRef` union without `Field(discriminator=...)` emits
+  `anyOf`; the serialized `value_kind` field and local Pydantic validation stay
+  unchanged.
+- **Implementation locations:** `investigations/planning/models.py` owns the
+  portable schema, `instructions.py` advances the prompt/schema identity to
+  `v2.7.2`, and `app/diagnostics/openrouter.py` isolates configuration, plain,
+  minimal typed, planner, and hypothesis calls without entering the runtime.
+- **Decision and invariant:** Provider schema enforcement is useful but never
+  replaces local Pydantic validation. Planner output remains untrusted and must
+  still pass the existing deterministic `PlanValidator` before execution. No
+  adaptive runtime, tool, Evidence, Fact, persistence, or UI code changed.
+- **Failure behavior and security:** Diagnostics require an explicit paid-call
+  acknowledgement and print only allowlisted, redacted fields. API keys,
+  authorization headers, prompts, evidence payloads, and raw responses remain
+  hidden. A 400 now exposes its sanitized upstream schema category locally
+  without changing the user-facing production error contract.
+- **Retry and trade-off:** The OpenAI SDK remains at `max_retries=0`; neither
+  adapter nor planner retries. OpenRouter may route or fail over among upstream
+  providers, while `AgentExecutor` retries only read-only investigation tools,
+  not LLM planning. Removing Pydantic's explicit discriminator may produce less
+  concise local validation errors, but preserves the wire contract and gains a
+  portable strict structured-output schema.
+- **Validation evidence:** Safe config resolution, plain Chat Completions, tiny
+  typed output, final planner generation, and final hypothesis generation all
+  passed live with the configured OpenRouter models. Before the fix, the direct
+  planner probe reproduced HTTP 400 from Azure and OpenAI with the same exact
+  `oneOf` rejection.
+
+### 2026-08-20 - Separate real planner runtime failure from input validation
+
+- **V2 milestone:** Adaptive investigation runtime observability, without a
+  runtime-behavior change.
+- **Engineering concept and syntax:** `AdaptiveInvestigationRuntime` catches
+  `InvestigationPlannerError` before it persists a planning round. A small
+  private helper reads only the typed planner's provider/model metadata with
+  `getattr`, then writes a JSON log record containing bounded counts and stable
+  tool IDs. This is analogous to logging request metadata in a Node service
+  without logging a request body.
+- **Implementation locations:** `investigations/replanning.py` now records
+  `investigation.planner.failed` beside the real `await planner.plan(...)`
+  boundary. `test_adaptive_investigation_runtime.py` proves the event includes
+  the round, budget, and failure code while excluding the investigation goal.
+- **Decision and invariant:** The runtime still stops with `planner_failure`;
+  it does not retry, change a plan, persist diagnostic data, or expose a new
+  API field. Diagnostics must never include prompts, goals, Evidence, provider
+  response bodies, headers, API keys, or credentials.
+- **Failure behavior and trade-off:** The real API reproduction reached
+  `APIConnectionError` before an HTTP response, while the isolated OpenRouter
+  probes had passed. The retained event exposes this execution-environment
+  difference but cannot recover the provider's discarded raw response. That
+  limits detail deliberately in exchange for preserving the existing
+  sanitization boundary.
+- **Validation evidence:** The focused adaptive runtime suite passed after the
+  event was added. A direct `POST /v1/investigations` followed by
+  `GET /v1/runs/{id}` reproduced zero rounds, zero tool calls, and
+  `planner_failure`; the safe event recorded provider `openrouter`, requested
+  model `openai/gpt-5.4`, prompt version `v2.7.2`, and no local schema error.
+
+### 2026-08-20 - Diagnose Groq strict planner generation without retaining provider output
+
+- **V2 milestone:** V2.7 typed planner provider boundary.
+- **Engineering concept and syntax:** `Annotated[Union, Field(discriminator=...)]`
+  makes `value_kind` a JSON Schema `oneOf` discriminator. This requires a model
+  to emit exactly one complete `PlanArgument.value` branch. `LLMProviderErrorDetails`
+  is a frozen allowlist of status/type/code, a fixed message, and
+  failed-generation presence/length; it deliberately has no raw-message or
+  response-body field.
+- **Implementation locations:** `planning/models.py` makes the existing
+  literal/reference tag explicit, and `planning/instructions.py` advances the
+  prompt to `v2.7.3` with the required top-level `steps` object shape.
+  `explanations/groq_client.py` sends low reasoning only to Groq and carries
+  allowlisted 400 metadata through `planning/service.py` to
+  `investigations/replanning.py`. `openrouter_client.py` explicitly omits the
+  Groq-only parameter.
+- **Decision and invariant:** The schema was strengthened rather than weakened;
+  strict structured output and local Pydantic validation both remain mandatory.
+  The planner/runtime still never logs prompts, code, Evidence, raw provider
+  messages/generations, headers, or keys. No executor, Fact derivation,
+  Evidence, persistence, or hypothesis logic changed.
+- **Failure behavior and trade-off:** Groq's 20B model generated malformed
+  later plan arguments and sometimes a bare array despite schema acceptance.
+  The configured Groq planner now uses `openai/gpt-oss-120b` with a 2048-token
+  cap; this increases latency/cost in exchange for a successful strict typed
+  plan. OpenRouter 120B also needs a 2048 output budget and is configured with
+  that provider-specific model/cap for an explicit provider switch.
+- **Validation evidence:** Unit tests cover the number-only literal schema,
+  discriminated plan union, Groq-only reasoning request, OpenRouter omission,
+  and secret-safe 400 details. Approved live calls returned valid five-step
+  plans through `PlannerInput -> TypedLLMPlanner -> adapter` for Groq 120B and
+  OpenRouter 120B. An OpenRouter 512-token probe instead ended with the typed
+  SDK's `LengthFinishReasonError`.

@@ -11,6 +11,8 @@ from app.config import (
     GitHubSettings,
     JiraConnectorMode,
     JiraSettings,
+    LLMProvider,
+    LLMSettings,
 )
 from app.main import create_app
 from app.observability import NoOpRuntimeTelemetry, Observability
@@ -18,6 +20,27 @@ from app.observability.structured_logging import StructuredEventLogger
 
 
 class ApplicationStartupLoggingTests(unittest.IsolatedAsyncioTestCase):
+    def test_fake_llm_settings_start_without_a_model_policy(self) -> None:
+        application = create_app(
+            llm_settings=LLMSettings(
+                provider=LLMProvider.FAKE,
+                api_key=None,
+                model=None,
+                request_timeout_seconds=30,
+                max_output_tokens=512,
+            )
+        )
+
+        self.assertEqual(application.state.investigation_llm_client.provider, "fake")
+        self.assertIs(
+            application.state.investigation_llm_client,
+            application.state.investigation_planner_client,
+        )
+        self.assertIs(
+            application.state.investigation_llm_client,
+            application.state.investigation_hypothesis_client,
+        )
+
     async def test_startup_logs_selected_github_and_jira_sources(self) -> None:
         log_stream = io.StringIO()
         logger = logging.Logger("promptql.startup.test")

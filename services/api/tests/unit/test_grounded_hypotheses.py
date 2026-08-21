@@ -1,6 +1,11 @@
 import unittest
 
-from app.explanations import FakeLLMClient, LLMProviderError, LLMProviderFailureCategory
+from app.explanations import (
+    FakeLLMClient,
+    LLMProviderError,
+    LLMProviderErrorDetails,
+    LLMProviderFailureCategory,
+)
 from app.investigations import (
     ChangedFileFact,
     ChangedFileMatchesFailureFileFact,
@@ -59,7 +64,7 @@ class HypothesisGeneratorTests(unittest.IsolatedAsyncioTestCase):
         generation_input = build_hypothesis_generation_input(
             InvestigationRequest(
                 repository_owner="octo-org", repository_name="analytics",
-                incident_summary="Investigate checkout failures.",
+                question="Investigate checkout failures.",
             ),
             AdaptiveInvestigationState(
                 rounds=(), evidence=(), facts=_facts(), missing_information=(),
@@ -85,6 +90,8 @@ class HypothesisGeneratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(generated.candidates), 1)
         self.assertEqual(generated.metadata.prompt_version, "v2.17.1")
         self.assertEqual(generated.metadata.provider, "fake")
+        self.assertEqual(generated.metadata.task, "hypothesis_generation")
+        self.assertEqual(generated.metadata.requested_model, "deterministic-fake-v1")
 
     async def test_zero_candidates_and_malformed_or_provider_failures_are_distinct(self):
         prompt_input = HypothesisGenerationInput(investigation_goal="Investigate checkout failures.", facts=_facts())
@@ -95,7 +102,13 @@ class HypothesisGeneratorTests(unittest.IsolatedAsyncioTestCase):
             model = "failure"
 
             async def generate_typed(self, request):
-                raise LLMProviderError(LLMProviderFailureCategory.CONNECTION)
+                raise LLMProviderError(
+                    LLMProviderFailureCategory.INVALID_STRUCTURED_RESPONSE,
+                    LLMProviderErrorDetails(
+                        provider_code="length_finish_reason",
+                        provider_message="Provider ended at the output limit.",
+                    ),
+                )
 
         for client, expected in (
             (ProviderFailure(), HypothesisGenerationFailureCode.PROVIDER_FAILURE),
@@ -107,6 +120,15 @@ class HypothesisGeneratorTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(HypothesisGenerationError) as raised:
                     await TypedLLMHypothesisGenerator(client).generate(prompt_input)
                 self.assertEqual(raised.exception.code, expected)
+                if client.__class__.__name__ == "ProviderFailure":
+                    self.assertEqual(
+                        raised.exception.provider_failure_category,
+                        "invalid_structured_response",
+                    )
+                    self.assertEqual(
+                        raised.exception.provider_details.provider_code,
+                        "length_finish_reason",
+                    )
 
     async def test_prompt_forbids_authoritative_prose_and_numeric_confidence(self):
         class RecordingClient:

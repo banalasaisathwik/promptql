@@ -6,7 +6,12 @@ from app.connectors.github_code_fakes import (
     CHANGED_FILE_EVIDENCE_FIXTURES,
     FIXTURE_PULL_REQUEST,
 )
-from app.explanations import FakeLLMClient, LLMProviderError, LLMProviderFailureCategory
+from app.explanations import (
+    FakeLLMClient,
+    LLMProviderError,
+    LLMProviderErrorDetails,
+    LLMProviderFailureCategory,
+)
 from app.investigations import InvestigationRequest, InvestigationResult
 from app.investigations.planning import (
     InvestigationPlan,
@@ -38,7 +43,7 @@ def _request():
     return InvestigationRequest(
         repository_owner="octo-org",
         repository_name="analytics",
-        incident_summary="Investigate checkout failures after deployment.",
+        question="Investigate checkout failures after deployment.",
     )
 
 
@@ -88,6 +93,27 @@ class PlannerContractTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             InvestigationPlan(steps=(_plan().steps[0],) * 6)
 
+    def test_provider_schema_discriminates_argument_values_and_uses_number_literals(self) -> None:
+        schema = InvestigationPlan.model_json_schema()
+        value_schema = schema["$defs"]["PlanArgument"]["properties"]["value"]
+        literal_value_schema = schema["$defs"]["Literal"]["properties"]["value"]
+
+        self.assertIn("oneOf", value_schema)
+        self.assertNotIn("anyOf", value_schema)
+        self.assertEqual(value_schema["discriminator"]["propertyName"], "value_kind")
+        self.assertEqual(
+            sorted(value_schema["discriminator"]["mapping"]),
+            ["literal", "step_output_ref"],
+        )
+        self.assertEqual(
+            [item["type"] for item in literal_value_schema["anyOf"]],
+            ["string", "number", "boolean", "null"],
+        )
+        self.assertNotIn(
+            "integer",
+            [item["type"] for item in literal_value_schema["anyOf"]],
+        )
+
 
 class PlannerPromptTests(unittest.TestCase):
     def test_builder_orders_tools_and_excludes_raw_diff_lines(self) -> None:
@@ -97,9 +123,15 @@ class PlannerPromptTests(unittest.TestCase):
             [tool.tool_id.value for tool in planner_input.allowed_tools],
             sorted(tool.tool_id.value for tool in TOOL_DEFINITIONS),
         )
+        self.assertEqual(planner_input.request_context, _request())
+        get_commit = next(
+            tool for tool in planner_input.allowed_tools if tool.tool_id == "get_commit"
+        )
+        self.assertIn("repository_owner", get_commit.input_schema["properties"])
+        self.assertIn("commit_sha", get_commit.output_schema["properties"])
         prompt_json = planner_input.model_dump_json()
         self.assertIn("allowed_tools", prompt_json)
-        self.assertIn(_request().incident_summary, prompt_json)
+        self.assertIn(_request().question, prompt_json)
         self.assertNotIn("lines", prompt_json)
         self.assertNotIn("root_cause", prompt_json)
 
@@ -113,8 +145,10 @@ class TypedPlannerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(proposed.plan, _plan())
-        self.assertEqual(proposed.metadata.prompt_version, "v2.7.1")
+        self.assertEqual(proposed.metadata.prompt_version, "v2.7.6")
         self.assertEqual(proposed.metadata.provider, "fake")
+        self.assertEqual(proposed.metadata.task, "planning")
+        self.assertEqual(proposed.metadata.requested_model, "deterministic-fake-v1")
 
     async def test_provider_invalid_response_and_schema_failures_are_distinguishable(self) -> None:
         planner_input = build_planner_input(_request(), _result(), TOOL_DEFINITIONS)
@@ -142,6 +176,37 @@ class TypedPlannerTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(InvestigationPlannerError) as raised:
                     await TypedLLMPlanner(client).plan(planner_input)
                 self.assertEqual(raised.exception.code, expected)
+
+    async def test_provider_failure_preserves_safe_diagnostic_details(self) -> None:
+        planner_input = build_planner_input(_request(), _result(), TOOL_DEFINITIONS)
+        details = LLMProviderErrorDetails(
+            http_status=400,
+            provider_type="invalid_request_error",
+            provider_code="json_validate_failed",
+            provider_message="Groq rejected generated structured output.",
+            failed_generation_present=True,
+            failed_generation_length=123,
+        )
+
+        class ProviderFailure:
+            provider = FakeLLMClient.provider
+            model = "failure"
+
+            async def generate_typed(self, request):
+                raise LLMProviderError(
+                    LLMProviderFailureCategory.INVALID_REQUEST,
+                    details,
+                )
+
+        with self.assertRaises(InvestigationPlannerError) as raised:
+            await TypedLLMPlanner(ProviderFailure()).plan(planner_input)
+
+        self.assertEqual(raised.exception.code, PlannerFailureCode.PROVIDER_FAILURE)
+        self.assertEqual(raised.exception.provider_details, details)
+        self.assertEqual(
+            raised.exception.provider_failure_category,
+            LLMProviderFailureCategory.INVALID_REQUEST.value,
+        )
 
     async def test_planner_prompt_explicitly_forbids_truth_claims_and_execution(self) -> None:
         class RecordingClient:

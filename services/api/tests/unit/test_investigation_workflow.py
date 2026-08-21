@@ -1,12 +1,27 @@
 import unittest
 
-from app.explanations import FakeLLMClient, LLMStructuredResponse, LLMProviderName
-from app.investigations.hypotheses import CandidateHypothesis, HypothesisKind
+from app.explanations import (
+    FakeLLMClient,
+    LLMProviderErrorDetails,
+    LLMProviderName,
+    LLMStructuredResponse,
+)
+from app.investigations.hypotheses import (
+    CandidateHypothesis,
+    HypothesisGenerationError,
+    HypothesisGenerationFailureCode,
+    HypothesisGenerationInput,
+    HypothesisKind,
+    TypedLLMHypothesisGenerator,
+)
 from app.investigations.models import InvestigationRequest
 from app.investigations.planning import InvestigationPlan, Literal, PlanArgument, PlanStep
 from app.tools import InvestigationToolId
 from app.runtime import InMemoryRunRepository, RunStatus
-from app.workflows.investigation import InvestigationWorkflowService
+from app.workflows.investigation import (
+    InvestigationWorkflowService,
+    _hypothesis_failure_diagnostics,
+)
 
 
 class SequentialPlannerClient:
@@ -44,6 +59,32 @@ def hypothesis_plan() -> InvestigationPlan:
 
 
 class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    def test_hypothesis_failure_diagnostics_are_allowlisted(self):
+        diagnostics = _hypothesis_failure_diagnostics(
+            TypedLLMHypothesisGenerator(FakeLLMClient()),
+            HypothesisGenerationInput(
+                investigation_goal="private investigation goal",
+                facts=(),
+            ),
+            HypothesisGenerationError(
+                HypothesisGenerationFailureCode.PROVIDER_FAILURE,
+                provider_details=LLMProviderErrorDetails(
+                    http_status=400,
+                    provider_code="json_validate_failed",
+                    provider_message="Sanitized provider message.",
+                    failed_generation_present=True,
+                    failed_generation_length=123,
+                ),
+                provider_failure_category="invalid_structured_response",
+            ),
+        )
+
+        self.assertEqual(diagnostics["event"], "investigation.hypothesis.failed")
+        self.assertEqual(diagnostics["http_status"], 400)
+        self.assertEqual(diagnostics["provider_code"], "json_validate_failed")
+        self.assertEqual(diagnostics["failed_generation_length"], 123)
+        self.assertNotIn("private investigation goal", str(diagnostics))
+
     async def test_validated_hypothesis_reaches_only_deterministic_grounded_result(self):
         class HypothesisClient(FakeLLMClient):
             async def generate_typed(self, request):
@@ -75,7 +116,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             InvestigationRequest(
                 repository_owner="octo-org",
                 repository_name="analytics",
-                incident_summary="Checkout failures increased.",
+                question="Why did checkout failures increase?",
                 incident_reference="incident:checkout-500",
                 pull_request_number=42,
             )
@@ -98,7 +139,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         request = InvestigationRequest(
             repository_owner="octo-org",
             repository_name="analytics",
-            incident_summary="Checkout failures increased.",
+            question="Why did checkout failures increase?",
             incident_reference="incident:checkout-500",
             deployment_reference="deployment:1042",
             pull_request_number=42,
@@ -131,7 +172,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             InvestigationRequest(
                 repository_owner="octo-org",
                 repository_name="analytics",
-                incident_summary="Checkout failures increased.",
+                question="Why did checkout failures increase?",
                 incident_reference="incident:checkout-500",
             )
         )
@@ -139,6 +180,10 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         completed = await workflow.continue_persisted_run(pending)
 
         self.assertEqual([item.planning_round for item in planner.inputs], [1, 2])
+        self.assertEqual(
+            planner.inputs[0].investigation_goal,
+            "Why did checkout failures increase?",
+        )
         self.assertEqual(planner.inputs[0].facts, ())
         self.assertEqual(planner.inputs[0].evidence, ())
         self.assertGreater(len(planner.inputs[1].facts), 0)
@@ -164,7 +209,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             InvestigationRequest(
                 repository_owner="octo-org",
                 repository_name="analytics",
-                incident_summary="Checkout failures increased.",
+                question="Why did checkout failures increase?",
                 incident_reference="incident:checkout-500",
             )
         )
@@ -191,7 +236,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             InvestigationRequest(
                 repository_owner="octo-org",
                 repository_name="analytics",
-                incident_summary="Checkout failures increased.",
+                question="Why did checkout failures increase?",
                 incident_reference="incident:checkout-500",
             )
         )
@@ -211,7 +256,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             InvestigationRequest(
                 repository_owner="octo-org",
                 repository_name="analytics",
-                incident_summary="The service is unhealthy.",
+                question="Why is the service unhealthy?",
             )
         )
 

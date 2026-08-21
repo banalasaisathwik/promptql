@@ -37,6 +37,8 @@ def _tool_context(definition: ToolDefinition) -> PlannerToolDefinition:
             PlannerToolInputField(name=name, required=name in required)
             for name in sorted(properties)
         ),
+        input_schema=schema,
+        output_schema=definition.plan_output_model.model_json_schema(),
     )
 
 
@@ -61,9 +63,11 @@ class ContextBuilder:
         remaining_tool_calls: int = 0,
         planning_round: int = 1,
         max_planning_rounds: int = 1,
+        request_context: InvestigationRequest | None = None,
     ) -> PlannerInput:
         return PlannerInput(
             investigation_goal=investigation_goal,
+            request_context=request_context,
             facts=tuple(sorted(facts, key=lambda fact: fact.fact_id)),
             missing_information=tuple(sorted(missing_information, key=lambda item: item.missing_information_id)),
             evidence=tuple(
@@ -97,10 +101,10 @@ def build_planner_input(
     # FLOW: Sort stable domain identifiers -> reduce Evidence to safe summaries ->
     # expose only the caller-approved tool subset. This deterministic boundary
     # makes equivalent state produce equivalent prompt data for review and replay.
-    # The goal remains the user's typed incident summary, not inferred model prose.
+    # The goal remains the user's typed question, not inferred model prose.
     """Compress normalized investigation state before it crosses the LLM boundary."""
     return ContextBuilder().build(
-        request.incident_summary,
+        request.question,
         result.facts,
         result.missing_information,
         result.evidence,
@@ -109,4 +113,5 @@ def build_planner_input(
         remaining_tool_calls=remaining_tool_calls,
         planning_round=planning_round,
         max_planning_rounds=max_planning_rounds,
+        request_context=request,
     )

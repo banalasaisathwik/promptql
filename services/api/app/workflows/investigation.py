@@ -1,5 +1,7 @@
 """User-facing V2 investigation workflow built on the existing run repository."""
 
+import json
+import logging
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -28,10 +30,12 @@ from app.investigations.hypotheses import (
     DeterministicHypothesisValidator,
     GroundedTerminationReason,
     HypothesisGenerationError,
+    HypothesisGenerationInput,
     TypedLLMHypothesisGenerator,
     build_hypothesis_generation_input,
     render_grounded_result,
 )
+from app.investigations.hypotheses.instructions import HYPOTHESIS_PROMPT_VERSION
 from app.investigations.execution import InvestigationExecutionState
 from app.investigations.replanning import AdaptiveInvestigationRuntime, AdaptiveInvestigationState, ContinuationReason
 from app.runtime import (
@@ -53,6 +57,52 @@ from app.tools import build_tool_adapters, build_tool_registry
 INVESTIGATION_WORKFLOW_NAME = "investigation"
 INVESTIGATION_WORKFLOW_VERSION = "2.19"
 DEFAULT_TOOL_CALL_BUDGET = 10
+_HYPOTHESIS_DIAGNOSTIC_LOGGER = logging.getLogger("promptql.runtime")
+
+
+# PURPOSE: Make the final probabilistic boundary as observable as planning.
+#
+# FLOW: Read already-sanitized error metadata -> combine it with counts and
+# prompt/model identity -> return a JSON-safe event for the runtime logger.
+#
+# SECURITY: Facts, missing-information details, prompts, provider responses,
+# headers, and credentials are deliberately absent from the returned mapping.
+def _hypothesis_failure_diagnostics(
+    generator: TypedLLMHypothesisGenerator,
+    generation_input: HypothesisGenerationInput,
+    error: HypothesisGenerationError,
+) -> dict[str, object]:
+    """Allowlist failure metadata without retaining Facts, prompts, or responses."""
+
+    client = getattr(generator, "_client", None)
+    provider = getattr(client, "provider", None)
+    details = error.provider_details
+    return {
+        "event": "investigation.hypothesis.failed",
+        "provider": getattr(provider, "value", provider),
+        "requested_model": getattr(client, "model", None),
+        "prompt_version": HYPOTHESIS_PROMPT_VERSION,
+        "facts_count": len(generation_input.facts),
+        "missing_information_count": len(generation_input.missing_information),
+        "exception_class": type(error).__name__,
+        "failure_code": error.code.value,
+        "provider_failure_category": error.provider_failure_category,
+        "http_status": details.http_status if details is not None else None,
+        "provider_type": details.provider_type if details is not None else None,
+        "provider_code": details.provider_code if details is not None else None,
+        "provider_message": details.provider_message if details is not None else str(error),
+        "failed_generation_present": (
+            details.failed_generation_present if details is not None else False
+        ),
+        "failed_generation_length": (
+            details.failed_generation_length if details is not None else None
+        ),
+        "local_schema_error": (
+            error.code.value
+            if error.code.value in {"invalid_response", "candidate_schema_invalid"}
+            else None
+        ),
+    }
 
 
 class InvestigationWorkflowService:
@@ -160,12 +210,15 @@ class InvestigationWorkflowService:
             # The planner may propose work, but the existing adaptive runtime
             # remains the authority for validation, shared budget accounting,
             # round termination, and accumulated Evidence/Facts.
+            # The question and its typed request context cross unchanged. This
+            # layer does not infer intent or invent tool arguments.
             adaptive_state = await AdaptiveInvestigationRuntime(
                 TypedLLMPlanner(self._planner_client), PlanValidator(registry), executor
             ).investigate(
-                running.request.incident_summary,
+                running.request.question,
                 registry.list(),
                 budget=ExecutionBudget(max_tool_calls=DEFAULT_TOOL_CALL_BUDGET),
+                request_context=running.request,
                 on_round_planned=save_planned_round,
                 on_round_completed=save_completed_round,
             )
@@ -201,15 +254,25 @@ class InvestigationWorkflowService:
                     continuation_reason=adaptive_state.continuation_reason,
                 ),
             )
-            generated = await TypedLLMHypothesisGenerator(self._llm_client).generate(
-                hypothesis_input
-            )
+            hypothesis_generator = TypedLLMHypothesisGenerator(self._llm_client)
+            generated = await hypothesis_generator.generate(hypothesis_input)
             validation_result = DeterministicHypothesisValidator().validate(
                 generated.candidates, adaptive_state.facts
             )
             validated_hypotheses = validation_result.accepted_hypotheses
             rejected_count = len(validation_result.rejected_candidates)
-        except HypothesisGenerationError:
+        except HypothesisGenerationError as error:
+            _HYPOTHESIS_DIAGNOSTIC_LOGGER.error(
+                json.dumps(
+                    _hypothesis_failure_diagnostics(
+                        hypothesis_generator,
+                        hypothesis_input,
+                        error,
+                    ),
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
             termination_reason = GroundedTerminationReason.PROVIDER_FAILURE
 
         state = state.model_copy(

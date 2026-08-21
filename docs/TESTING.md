@@ -173,6 +173,41 @@ JSONL omit per-case IDs and expected/observed claims. The debug flag reveals
 those details locally and permanently spends the holdout for future unbiased
 evaluation.
 
+## OpenRouter provider-boundary diagnostics
+
+The diagnostic module proves provider connectivity and typed generation without
+starting FastAPI, an investigation workflow, a tool, or PostgreSQL. Configuration
+output includes only provider/model names, the fixed endpoint, and whether a key
+is present:
+
+```powershell
+uv run --env-file .env python -m app.diagnostics.openrouter --stage config
+```
+
+Network stages require explicit paid-call acknowledgement. Run them in order and
+stop at the first failure:
+
+```powershell
+uv run --env-file .env python -m app.diagnostics.openrouter --stage plain --acknowledge-paid-call
+uv run --env-file .env python -m app.diagnostics.openrouter --stage typed --acknowledge-paid-call
+uv run --env-file .env python -m app.diagnostics.openrouter --stage planner --acknowledge-paid-call
+uv run --env-file .env python -m app.diagnostics.openrouter --stage hypothesis --acknowledge-paid-call
+```
+
+Failures report only the exception class, HTTP status, provider error code/type,
+sanitized provider message, requested model, endpoint/method, and any nested
+upstream provider fields. The API key, authorization headers, request prompt,
+evidence payload, and raw response are never printed. The optional
+`planner-routing` stage probes OpenRouter's `require_parameters=true` routing
+without changing production routing policy.
+
+For `openai/gpt-oss-120b`, use the configured upper bounds shown in `.env.example`
+(`OPENROUTER_REQUEST_TIMEOUT_SECONDS=120` and
+`OPENROUTER_MAX_OUTPUT_TOKENS=4096`). Reasoning tokens count against the output
+allowance, so a small final JSON object can still end with
+`length_finish_reason` under a 512- or 2048-token cap. This is a configuration
+choice, not an SDK retry; production adapters still make one provider attempt.
+
 Use `--save-baseline <path>` only for a completed formal run. A later run can
 pass `--baseline <path>`; prompt, dataset, provider, configured model, model
 settings, and sample count must be compatible. The report is written before a
@@ -197,7 +232,7 @@ output.
 | LLM explanation harness | `services/api/tests/unit/test_merge_readiness_explanations.py` | Minimized input, generated/validated trust separation, grounded code completeness, deterministic rendering, sanitized failures, persistence isolation, and safe telemetry | Internal fake/recording clients only; no real provider calls |
 | OpenAI adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_openai_llm_client.py` | Configuration, one-attempt SDK construction, Structured Output request shape, provider error normalization, token telemetry, validator preservation, and secret exclusion | Injected SDK boundary only; no external requests |
 | Gemini compatibility adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_gemini_llm_client.py` | Gemini-specific configuration, fixed Google endpoint, Chat Completions structured parsing, token mapping, validator preservation, and sanitized failures | Injected OpenAI SDK boundary only; no external requests |
-| Groq compatibility adapter | `services/api/tests/unit/test_llm_provider_factory.py`, `test_groq_llm_client.py` | Groq-specific configuration, fixed endpoint, strict-schema request, token mapping, validator preservation, sanitized failures, and safe telemetry | Injected OpenAI SDK boundary only; no external requests |
+| Groq/OpenRouter compatibility adapters | `services/api/tests/unit/test_llm_provider_factory.py`, `test_groq_llm_client.py` | Provider-specific configuration, fixed endpoints, strict-schema request shape, Groq-only reasoning control, sanitized structured-generation failures, validator preservation, and safe telemetry | Injected OpenAI SDK boundary only; no external requests |
 | Versioned explanation evals | `services/api/tests/unit/test_explanation_eval_*.py` | Development/holdout versioning, repeated samples, separate denominators, deterministic graders, pacing without retry, thresholds, safe artifacts, baselines, and paid-call gates | Automated tests use only fake/injected clients; real runs require approval |
 | PostgreSQL integration | `services/api/tests/integration/test_postgres_runtime_persistence.py` | Alembic schema, durable reconstruction, ordering, provenance, legacy nullable rows, failures, and conflicts | Opt-in; skipped unless guarded test credentials are configured |
 | Cross-layer/end-to-end | Future repository-level area | Browser-to-API journeys | Planned; tooling not selected |

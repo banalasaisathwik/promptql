@@ -64,7 +64,7 @@ class DeterministicBaselineTests(unittest.IsolatedAsyncioTestCase):
         result = await baseline(FakeIncidentSource(), github).investigate(
             InvestigationRequest(
                 repository_owner="octo-org", repository_name="analytics",
-                incident_summary="Checkout failures", incident_reference=INCIDENT_REQUEST.incident_reference,
+                question="Why are checkout requests failing?", incident_reference=INCIDENT_REQUEST.incident_reference,
                 deployment_reference=DEPLOYMENT_REQUEST.deployment_reference,
                 pull_request_number=42, telemetry_window=TELEMETRY_REQUEST,
             )
@@ -82,12 +82,12 @@ class DeterministicBaselineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.hypotheses, ())
         self.assertEqual(result.missing_information, ())
         self.assertEqual(result, await baseline(FakeIncidentSource(), github).investigate(
-            InvestigationRequest(repository_owner="octo-org", repository_name="analytics", incident_summary="Checkout failures", incident_reference=INCIDENT_REQUEST.incident_reference, deployment_reference=DEPLOYMENT_REQUEST.deployment_reference, pull_request_number=42, telemetry_window=TELEMETRY_REQUEST)
+            InvestigationRequest(repository_owner="octo-org", repository_name="analytics", question="Why are checkout requests failing?", incident_reference=INCIDENT_REQUEST.incident_reference, deployment_reference=DEPLOYMENT_REQUEST.deployment_reference, pull_request_number=42, telemetry_window=TELEMETRY_REQUEST)
         ))
 
     async def test_missing_deployment_keeps_incident_evidence_and_does_not_crash(self) -> None:
         result = await baseline(FakeIncidentSource()).investigate(
-            InvestigationRequest(repository_owner="octo-org", repository_name="analytics", incident_summary="Checkout failures", incident_reference=INCIDENT_REQUEST.incident_reference)
+            InvestigationRequest(repository_owner="octo-org", repository_name="analytics", question="Why are checkout requests failing?", incident_reference=INCIDENT_REQUEST.incident_reference)
         )
 
         self.assertTrue(result.evidence)
@@ -95,7 +95,7 @@ class DeterministicBaselineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_source_failure_is_missing_information_not_fake_evidence(self) -> None:
         result = await baseline(FakeIncidentSource(incident_fixtures={})).investigate(
-            InvestigationRequest(repository_owner="octo-org", repository_name="analytics", incident_summary="Checkout failures", incident_reference=INCIDENT_REQUEST.incident_reference)
+            InvestigationRequest(repository_owner="octo-org", repository_name="analytics", question="Why are checkout requests failing?", incident_reference=INCIDENT_REQUEST.incident_reference)
         )
 
         self.assertNotIn("incident", [item.kind.value for item in result.evidence])
@@ -103,11 +103,9 @@ class DeterministicBaselineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(MissingInformationKind.SOURCE_DATA_UNAVAILABLE, [item.kind for item in result.missing_information])
 
     async def test_fixed_tool_order_and_conditional_deployment_branch_are_explicit(self) -> None:
-        # Recording adapters prove orchestration order without changing the
-        # production adapters or making network calls.
         calls: list[str] = []
         request = InvestigationRequest(
-            repository_owner="octo-org", repository_name="analytics", incident_summary="Checkout failures",
+            repository_owner="octo-org", repository_name="analytics", question="Why are checkout requests failing?",
             incident_reference=INCIDENT_REQUEST.incident_reference, deployment_reference=DEPLOYMENT_REQUEST.deployment_reference,
             pull_request_number=42, telemetry_window=TELEMETRY_REQUEST,
         )
@@ -120,8 +118,6 @@ class DeterministicBaselineTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FactDerivationTests(unittest.TestCase):
-    # These unit cases keep relationship predicates separate from source calls,
-    # so a failed assertion identifies a derivation rule rather than a fixture lookup.
     def setUp(self) -> None:
         self.incident = INCIDENT_EVIDENCE_FIXTURES[INCIDENT_REQUEST]
         self.deployment = DEPLOYMENT_EVIDENCE_FIXTURES[DEPLOYMENT_REQUEST]
@@ -138,7 +134,7 @@ class FactDerivationTests(unittest.TestCase):
         self.assertEqual(derive_facts((self.incident, equal)), ())
 
     def test_deployment_commit_and_pr_require_exact_sha_association(self) -> None:
-        pull_request = CHANGED_FILE_EVIDENCE_FIXTURES[FIXTURE_PULL_REQUEST]  # Preserve fixture ordering context.
+        pull_request = CHANGED_FILE_EVIDENCE_FIXTURES[FIXTURE_PULL_REQUEST]
         from app.connectors.github_code_fakes import PULL_REQUEST_EVIDENCE_FIXTURES
         pr = PULL_REQUEST_EVIDENCE_FIXTURES[FIXTURE_PULL_REQUEST]
         mismatch = self.commit.model_copy(update={"content": self.commit.content.model_copy(update={"commit_sha": "d" * 40})})

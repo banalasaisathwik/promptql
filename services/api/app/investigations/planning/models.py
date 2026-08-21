@@ -2,6 +2,7 @@ from enum import StrEnum
 from typing import Annotated, Literal as TypingLiteral, Self
 
 from pydantic import Field, StringConstraints, model_validator
+from pydantic import WithJsonSchema
 
 from app.connectors.models import ContractModel, NonEmptyString
 from app.investigations.models import (
@@ -9,6 +10,7 @@ from app.investigations.models import (
     EvidenceSource,
     FactSet,
     InvestigationIdentifier,
+    InvestigationRequest,
     MissingInformation,
 )
 from app.tools.models import InvestigationToolId, ToolOutcome
@@ -37,7 +39,15 @@ PlanReason = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
 ]
-LiteralValue = str | int | float | bool | None
+# Pydantic still validates Python `int | float` values locally. `WithJsonSchema`
+# changes only the schema sent to providers, preventing overlapping `integer` and
+# `number` branches that strict structured-output APIs treat as ambiguous.
+NumericLiteral = Annotated[
+    int | float,
+    WithJsonSchema({"type": "number"}),
+]
+
+LiteralValue = str | NumericLiteral | bool | None
 MAX_PLAN_STEPS = 5
 # Adaptive execution uses a narrower horizon without changing the established
 # V2.7/V2.8 contract for callers that still validate a five-step plan.
@@ -49,10 +59,15 @@ class PlannerToolInputField(ContractModel):
     required: bool
 
 
+# The compact field list remains useful to readers, while the exact schemas give
+# the model the same argument and step-output vocabulary enforced later by
+# `PlanValidator`. These are backend-owned capabilities, never model proposals.
 class PlannerToolDefinition(ContractModel):
     tool_id: InvestigationToolId
     description: NonEmptyString
     input_fields: tuple[PlannerToolInputField, ...] = ()
+    input_schema: dict[str, object] = Field(default_factory=dict)
+    output_schema: dict[str, object] = Field(default_factory=dict)
 
 
 class CompactEvidenceContext(ContractModel):
@@ -76,6 +91,7 @@ class PlannerInput(ContractModel):
     # PURPOSE: Bound what untrusted model reasoning can see to the state needed
     # for choosing evidence work; it is not an InvestigationResult replacement.
     investigation_goal: NonEmptyString
+    request_context: InvestigationRequest | None = None
     facts: FactSet = ()
     missing_information: tuple[MissingInformation, ...] = ()
     evidence: tuple[CompactEvidenceContext, ...] = ()
@@ -97,6 +113,9 @@ class StepOutputRef(ContractModel):
     field: PlanFieldName
 
 
+# The value tag is part of the plan contract, not advisory model prose. Emit it
+# as a JSON Schema discriminator so a provider must choose one complete branch
+# instead of mixing fields from literal and step-output-reference values.
 PlanArgumentValue = Annotated[
     Literal | StepOutputRef,
     Field(discriminator="value_kind"),
@@ -138,8 +157,11 @@ class PlannerFailureCode(StrEnum):
 
 
 class PlannerMetadata(ContractModel):
+    task: NonEmptyString = "planning"
     provider: NonEmptyString
     model: NonEmptyString
+    requested_model: NonEmptyString | None = None
+    resolved_model: NonEmptyString | None = None
     prompt_id: NonEmptyString
     prompt_version: NonEmptyString
 

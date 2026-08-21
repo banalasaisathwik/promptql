@@ -42,9 +42,11 @@ class TypedLLMHypothesisGenerator:
                     output_model=HypothesisGenerationOutput,
                 )
             )
-        except LLMProviderError:
+        except LLMProviderError as error:
             raise HypothesisGenerationError(
-                HypothesisGenerationFailureCode.PROVIDER_FAILURE
+                HypothesisGenerationFailureCode.PROVIDER_FAILURE,
+                provider_details=error.details,
+                provider_failure_category=error.category.value,
             ) from None
         except Exception:
             raise HypothesisGenerationError(
@@ -69,8 +71,10 @@ class TypedLLMHypothesisGenerator:
         return GeneratedHypotheses(
             candidates=output.candidates,
             metadata=HypothesisGenerationMetadata(
+                task="hypothesis_generation",
                 provider=self._client.provider.value,
                 model=self._client.model,
+                requested_model=self._client.model,
                 prompt_id=HYPOTHESIS_PROMPT_ID,
                 prompt_version=HYPOTHESIS_PROMPT_VERSION,
             ),

@@ -52,8 +52,11 @@ class HypothesisGenerationOutput(ContractModel):
 
 
 class HypothesisGenerationMetadata(ContractModel):
+    task: NonEmptyString = "hypothesis_generation"
     provider: NonEmptyString
     model: NonEmptyString
+    requested_model: NonEmptyString | None = None
+    resolved_model: NonEmptyString | None = None
     prompt_id: NonEmptyString
     prompt_version: NonEmptyString
 

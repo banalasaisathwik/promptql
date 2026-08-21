@@ -1,5 +1,3 @@
-pass
-
 from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
@@ -9,8 +7,6 @@ from app.runtime import RunPersistenceError
 
 
 def create_database_engine(settings: DatabaseSettings) -> Engine:
-    pass
-
     return create_engine(
         settings.database_url,
         pool_size=5,
@@ -25,14 +21,10 @@ def create_database_engine(settings: DatabaseSettings) -> Engine:
 
 
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:
-    pass
-
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 
 def verify_database_ready(engine: Engine) -> None:
-    pass
-
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
@@ -42,9 +34,17 @@ def verify_database_ready(engine: Engine) -> None:
             raise RunPersistenceError(
                 "Runtime database migrations have not been applied."
             )
+
+
+        workflow_run_columns = {
+            column["name"]
+            for column in database_inspector.get_columns("workflow_runs")
+        }
+        if "investigation_state" not in workflow_run_columns:
+            raise RunPersistenceError(
+                "Runtime database migrations have not been applied."
+            )
     except RunPersistenceError:
         raise
     except SQLAlchemyError:
-
-
         raise RunPersistenceError("Runtime persistence is unavailable.") from None
