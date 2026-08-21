@@ -203,4 +203,75 @@ def _default_investigation_output(request: TypedLLMRequest) -> object | None:
                 )
         return HypothesisGenerationOutput()
 
+    if request.output_model.__name__ == "CodeDiagnosisOutput":
+        from app.investigations.code_diagnosis import (
+            CodeContextKind,
+            CodeDiagnosisOutput,
+            CodeFindingCategory,
+            SuspectedCodeFinding,
+        )
+
+        # The fake copies the backend-built support bundle and selects a real
+        # stack-frame Evidence ID. It still returns an untrusted candidate that
+        # must pass the same validator used for a live provider.
+        hypotheses = getattr(request.input, "hypotheses", ())
+        locations = getattr(request.input, "locations", ())
+        support_bundles = getattr(request.input, "support_bundles", ())
+        if not hypotheses or not support_bundles:
+            return CodeDiagnosisOutput()
+        hypothesis = hypotheses[0]
+        support = next(
+            (
+                item
+                for item in support_bundles
+                if item.hypothesis_id == hypothesis.hypothesis_id
+            ),
+            None,
+        )
+        stack_location = next(
+            (
+                location
+                for location in locations
+                if location.kind is CodeContextKind.STACK_FRAME
+                and location.file_path == hypothesis.subject
+            ),
+            None,
+        )
+        changed_location = next(
+            (
+                location
+                for location in locations
+                if location.kind is CodeContextKind.CHANGED_FILE
+                and location.file_path == hypothesis.subject
+            ),
+            None,
+        )
+        if stack_location is None or changed_location is None:
+            return CodeDiagnosisOutput()
+        if support is None:
+            return CodeDiagnosisOutput()
+        category = (
+            CodeFindingCategory.ERROR_HANDLING_OR_NULL_PATH
+            if stack_location.error_category is not None
+            and "null" in stack_location.error_category.lower()
+            else CodeFindingCategory.CHANGED_CODE_NEAR_FAILURE
+        )
+        return CodeDiagnosisOutput(
+            candidates=(
+                SuspectedCodeFinding(
+                    finding_id="finding:fake-code-location",
+                    hypothesis_id=hypothesis.hypothesis_id,
+                    file_path=hypothesis.subject,
+                    location_evidence_id=stack_location.evidence_id,
+                    category=category,
+                    supporting_fact_ids=support.supporting_fact_ids,
+                    supporting_evidence_ids=support.supporting_evidence_ids,
+                    explanation=(
+                        "The changed file and observed stack frame identify a "
+                        "bounded location for further investigation."
+                    ),
+                ),
+            )
+        )
+
     return None

@@ -217,6 +217,10 @@ repeat affected checks.
   complete: backend 376/376 with six external-database skips, frontend 38/38,
   compile/lint/build/diff checks green, and the updated planner schema passed a
   live strict-routing probe with the configured OpenRouter model.
+- [x] 2026-08-21: Implemented the provider-neutral code-diagnosis component,
+  deterministic Evidence-ID location resolver, and grounded remediation
+  templates. Its live OpenRouter probe passed provider, schema, and grounding
+  gates; workflow/API/UI integration remains Milestone 3.
 
 ## Decisions and discoveries
 

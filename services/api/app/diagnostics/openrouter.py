@@ -8,14 +8,32 @@ from types import SimpleNamespace
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
-from app.config import LLMProvider, LLMSettings, LLMTask
+from app.config import LLMConfigurationError, LLMProvider, LLMSettings, LLMTask
+from app.connectors.github_code_fakes import (
+    CHANGED_FILE_EVIDENCE_FIXTURES,
+    FIXTURE_PULL_REQUEST,
+)
+from app.connectors.incident_fakes import (
+    FAILURE_LOCATION_EVIDENCE_FIXTURES,
+    FAILURE_LOCATION_REQUEST,
+)
 from app.explanations import LLMProviderError, LLMStructuredResponse, TypedLLMRequest
 from app.explanations.factory import OPENROUTER_OPENAI_BASE_URL
 from app.explanations.openrouter_client import OpenRouterLLMClient
 from app.investigations import InvestigationRequest, InvestigationResult
+from app.investigations.code_diagnosis import (
+    CodeContextBuilder,
+    CodeDiagnosisError,
+    DeterministicCodeFindingValidator,
+    TypedLLMCodeDiagnoser,
+)
+from app.investigations.fact_derivation import derive_facts
 from app.investigations.hypotheses import (
+    CandidateHypothesis,
+    DeterministicHypothesisValidator,
     HypothesisGenerationError,
     HypothesisGenerationInput,
+    HypothesisKind,
     TypedLLMHypothesisGenerator,
 )
 from app.investigations.planning import (
@@ -38,6 +56,7 @@ PAID_STAGES = (
     "planner",
     "planner-routing",
     "hypothesis",
+    "code-diagnosis",
     "all",
 )
 ALL_STAGES = ("config", *PAID_STAGES)
@@ -99,6 +118,14 @@ def resolved_configuration(settings: LLMSettings) -> dict[str, object]:
         "hypothesis_model": (
             settings.model_for(LLMTask.HYPOTHESIS_GENERATION)
             if is_openrouter
+            else None
+        ),
+        "code_diagnosis_model": (
+            (
+                settings.model_policy.code_diagnosis_model
+                or settings.model_policy.default_model
+            )
+            if is_openrouter and settings.model_policy is not None
             else None
         ),
         "default_model": settings.model,
@@ -452,6 +479,132 @@ async def run_hypothesis_call(settings: LLMSettings) -> dict[str, object]:
         await client.aclose()
 
 
+def _code_diagnosis_fixture():
+    # Build the diagnostic through the same Evidence -> Fact -> validated
+    # hypothesis -> bounded context path as production. No model-written value
+    # is pre-approved merely to make the live smoke pass.
+    evidence = (
+        *CHANGED_FILE_EVIDENCE_FIXTURES[FIXTURE_PULL_REQUEST],
+        FAILURE_LOCATION_EVIDENCE_FIXTURES[FAILURE_LOCATION_REQUEST],
+    )
+    facts = derive_facts(evidence)
+    changed_file_fact = next(
+        fact for fact in facts if fact.fact_type == "changed_file"
+    )
+    relationship_fact = next(
+        fact
+        for fact in facts
+        if fact.fact_type == "changed_file_matches_failure_file"
+    )
+    hypothesis = DeterministicHypothesisValidator().validate(
+        (
+            CandidateHypothesis(
+                hypothesis_id="hypothesis:diagnostic-code-change",
+                kind=HypothesisKind.CODE_CHANGE_MAY_HAVE_CONTRIBUTED,
+                subject="services/checkout.py",
+                supporting_fact_ids=(
+                    changed_file_fact.fact_id,
+                    relationship_fact.fact_id,
+                ),
+            ),
+        ),
+        facts,
+    ).accepted_hypotheses[0]
+    request = InvestigationRequest(
+        repository_owner="octo-org",
+        repository_name="analytics",
+        question="Identify a bounded suspected code location for the checkout incident.",
+        incident_reference="incident:checkout-500",
+        pull_request_number=42,
+    )
+    return (
+        CodeContextBuilder().build(request, (hypothesis,), facts, evidence),
+        (hypothesis,),
+        facts,
+        evidence,
+    )
+
+
+async def run_code_diagnosis_call(
+    settings: LLMSettings,
+) -> dict[str, object]:
+    # A schema-valid response is only the provider gate. Phase success also
+    # requires at least one candidate to cross deterministic grounding; output
+    # retains counts and stable rejection codes, never candidate/code content.
+    # Resolve configuration before constructing the SDK client, so an absent
+    # task model is a local, zero-cost failure rather than a network attempt.
+    try:
+        model = settings.model_for(LLMTask.CODE_DIAGNOSIS)
+    except LLMConfigurationError as error:
+        return {
+            "stage": "code-diagnosis",
+            "status": "FAIL",
+            "exception_class": type(error).__name__,
+            "provider_category": "configuration_error",
+            "provider_message": str(error),
+            "requested_model": None,
+            "endpoint": OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
+            "api_method": "not_called",
+        }
+    client, recording_client = _typed_client(settings, model)
+    diagnosis_input, hypotheses, facts, evidence = _code_diagnosis_fixture()
+    try:
+        generated = await TypedLLMCodeDiagnoser(client).generate(diagnosis_input)
+        validation = DeterministicCodeFindingValidator().validate(
+            generated.candidates,
+            hypotheses,
+            facts,
+            evidence,
+        )
+        if not validation.accepted_findings:
+            rejection_reasons = sorted(
+                {item.reason.value for item in validation.rejected_candidates}
+            )
+            return {
+                "stage": "code-diagnosis",
+                "status": "FAIL",
+                "provider_status": "PASS",
+                "schema_status": "PASS",
+                "grounding_status": "FAIL",
+                "requested_model": model,
+                "endpoint": OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
+                "api_method": "beta.chat.completions.parse",
+                "candidate_count": len(generated.candidates),
+                "accepted_finding_count": 0,
+                "rejected_finding_count": len(validation.rejected_candidates),
+                "rejection_reasons": rejection_reasons,
+                "prompt_id": generated.metadata.prompt_id,
+                "prompt_version": generated.metadata.prompt_version,
+            }
+        return {
+            "stage": "code-diagnosis",
+            "status": "PASS",
+            "provider_status": "PASS",
+            "schema_status": "PASS",
+            "grounding_status": "PASS",
+            "requested_model": model,
+            "endpoint": OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
+            "api_method": "beta.chat.completions.parse",
+            "candidate_count": len(generated.candidates),
+            "accepted_finding_count": len(validation.accepted_findings),
+            "rejected_finding_count": len(validation.rejected_candidates),
+            "prompt_id": generated.metadata.prompt_id,
+            "prompt_version": generated.metadata.prompt_version,
+        }
+    except CodeDiagnosisError as error:
+        provider_error = recording_client.completions.last_exception or error
+        return _failure_result(
+            stage="code-diagnosis",
+            error=provider_error,
+            settings=settings,
+            requested_model=model,
+            api_method="beta.chat.completions.parse",
+            provider_category=error.code.value,
+        )
+    finally:
+        await client.aclose()
+
+
 async def run_stage(stage: str, settings: LLMSettings) -> list[dict[str, object]]:
     if stage == "config":
         return [{"stage": "config", "status": "PASS", **resolved_configuration(settings)}]
@@ -462,9 +615,10 @@ async def run_stage(stage: str, settings: LLMSettings) -> list[dict[str, object]
         "planner": run_planner_call,
         "planner-routing": run_planner_routing_call,
         "hypothesis": run_hypothesis_call,
+        "code-diagnosis": run_code_diagnosis_call,
     }
     requested_stages = (
-        ("plain", "typed", "planner", "hypothesis")
+        ("plain", "typed", "planner", "hypothesis", "code-diagnosis")
         if stage == "all"
         else (stage,)
     )
