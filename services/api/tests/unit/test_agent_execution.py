@@ -1,5 +1,6 @@
 import unittest
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from app.investigations import (
     AgentExecutor,
@@ -31,6 +32,7 @@ from app.tools import (
     ToolRegistry,
     ToolResult,
 )
+from tests.telemetry_support import create_telemetry_harness
 
 
 class RecordingInvoker:
@@ -216,9 +218,27 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
         })
         sleeper = RecordingSleeper()
 
-        state = await AgentExecutor(self.registry, invoker, sleep=sleeper).execute(
-            plan, budget=ExecutionBudget(max_tool_calls=3)
-        )
+        harness = create_telemetry_harness()
+        try:
+            state = await AgentExecutor(
+                self.registry,
+                invoker,
+                sleep=sleeper,
+                telemetry=harness.telemetry,
+                run_id=uuid4(),
+            ).execute(
+                plan,
+                budget=ExecutionBudget(max_tool_calls=3),
+                round_number=1,
+            )
+
+            span_names = [
+                span.name for span in harness.span_exporter.get_finished_spans()
+            ]
+            self.assertEqual(span_names.count("investigation.tool_execution"), 2)
+            self.assertEqual(span_names.count("investigation.retry"), 1)
+        finally:
+            harness.shutdown()
 
         self.assertEqual(len(invoker.calls), 2)
         self.assertEqual(sleeper.delays, [1.0])

@@ -31,6 +31,29 @@ class LLMTokenType(StrEnum):
     TOTAL = "total"
 
 
+class InvestigationStage(StrEnum):
+    INVESTIGATION = "investigation"
+    PLANNING_ROUND = "planning_round"
+    PLANNER = "planner"
+    PLAN_VALIDATION = "plan_validation"
+    TOOL_EXECUTION = "tool_execution"
+    RETRY = "retry"
+    FACT_DERIVATION = "fact_derivation"
+    HYPOTHESIS_GENERATION = "hypothesis_generation"
+    HYPOTHESIS_VALIDATION = "hypothesis_validation"
+    CODE_DIAGNOSIS = "code_diagnosis"
+    CODE_VALIDATION = "code_validation"
+    RENDER = "render"
+    TERMINATION = "termination"
+
+
+class InvestigationStageResult(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    REJECTED = "rejected"
+    BLOCKED = "blocked"
+
+
 class StepOutcome(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
@@ -65,6 +88,9 @@ WORKFLOW_STEP_FAILURES_METRIC = "promptql.workflow.step.failures"
 PERSISTENCE_FAILURES_METRIC = "promptql.runtime.persistence.failures"
 LLM_EXPLANATION_DURATION_METRIC = "promptql.llm.explanation.duration"
 LLM_TOKEN_USAGE_METRIC = "promptql.llm.tokens"
+INVESTIGATION_STAGE_DURATION_METRIC = "promptql.investigation.stage.duration"
+INVESTIGATION_TOOL_CALLS_METRIC = "promptql.investigation.tool.calls"
+INVESTIGATION_PLANNING_ROUNDS_METRIC = "promptql.investigation.planning.rounds"
 
 METRIC_LABEL_ALLOWLISTS: dict[str, frozenset[str]] = {
     WORKFLOW_RUNS_METRIC: frozenset(
@@ -97,6 +123,15 @@ METRIC_LABEL_ALLOWLISTS: dict[str, frozenset[str]] = {
     ),
     LLM_TOKEN_USAGE_METRIC: frozenset(
         {"llm.operation", "llm.provider", "llm.token.type"}
+    ),
+    INVESTIGATION_STAGE_DURATION_METRIC: frozenset(
+        {"investigation.stage", "stage.result"}
+    ),
+    INVESTIGATION_TOOL_CALLS_METRIC: frozenset(
+        {"tool.id", "tool.outcome"}
+    ),
+    INVESTIGATION_PLANNING_ROUNDS_METRIC: frozenset(
+        {"termination.reason"}
     ),
 }
 

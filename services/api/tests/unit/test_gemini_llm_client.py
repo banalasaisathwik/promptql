@@ -99,6 +99,7 @@ class GeminiLLMClientTests(unittest.IsolatedAsyncioTestCase):
                     )
                 ),
             ),
+            model="provider-resolved-model",
             usage=SimpleNamespace(
                 prompt_tokens=31,
                 completion_tokens=11,
@@ -116,6 +117,7 @@ class GeminiLLMClientTests(unittest.IsolatedAsyncioTestCase):
             generated,
         )
         self.assertEqual(structured.token_usage.total_tokens, 42)
+        self.assertEqual(structured.resolved_model, "provider-resolved-model")
         request = completions.requests[0]
         self.assertEqual(request["model"], "gemini-2.5-flash")
         self.assertEqual(request["timeout"], 23)

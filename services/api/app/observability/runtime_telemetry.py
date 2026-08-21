@@ -1,5 +1,6 @@
 import logging
 from contextlib import contextmanager
+from time import perf_counter_ns
 from typing import Iterator
 from uuid import UUID
 
@@ -9,6 +10,9 @@ from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
 from app.observability.contracts import (
     METRIC_LABEL_ALLOWLISTS,
+    INVESTIGATION_PLANNING_ROUNDS_METRIC,
+    INVESTIGATION_STAGE_DURATION_METRIC,
+    INVESTIGATION_TOOL_CALLS_METRIC,
     LLM_EXPLANATION_DURATION_METRIC,
     LLM_TOKEN_USAGE_METRIC,
     PERSISTENCE_FAILURES_METRIC,
@@ -17,6 +21,8 @@ from app.observability.contracts import (
     WORKFLOW_STEP_DURATION_METRIC,
     WORKFLOW_STEP_FAILURES_METRIC,
     FailureCategory,
+    InvestigationStage,
+    InvestigationStageResult,
     LLMCallResult,
     LLMTokenType,
     PersistenceCheckpoint,
@@ -33,6 +39,9 @@ from app.observability.structured_logging import (
 from app.runtime.models import MergeReadinessRun, RunStatus, WorkflowStepName
 
 
+# SECURITY: Attribute names are closed before values reach an exporter. Adding
+# a new backend destination therefore cannot accidentally widen the data sent;
+# callers still cannot attach prompts, code, Evidence, or exception messages.
 SPAN_ATTRIBUTE_ALLOWLIST = frozenset(
     {
         "promptql.run.id",
@@ -63,11 +72,28 @@ SPAN_ATTRIBUTE_ALLOWLIST = frozenset(
         "promptql.llm.input_tokens",
         "promptql.llm.output_tokens",
         "promptql.llm.total_tokens",
+        "promptql.llm.requested_model",
+        "promptql.llm.resolved_model",
+        "promptql.investigation.stage",
+        "promptql.investigation.round",
+        "promptql.investigation.tool.id",
+        "promptql.investigation.tool.attempt",
+        "promptql.investigation.tool.count",
+        "promptql.investigation.round.count",
+        "promptql.investigation.termination_reason",
+        "promptql.stage.result",
+        "langfuse.trace.name",
+        "langfuse.observation.type",
+        "langfuse.observation.model.name",
+        "gen_ai.request.model",
+        "gen_ai.response.model",
+        "gen_ai.usage.input_tokens",
+        "gen_ai.usage.output_tokens",
         "error.type",
     }
 )
-SUPPORTED_WORKFLOWS = frozenset({("merge_readiness", "1")})
-SUPPORTED_LLM_PROVIDERS = frozenset({"fake", "gemini", "groq", "openai"})
+SUPPORTED_WORKFLOWS = frozenset({("merge_readiness", "1"), ("investigation", "2.19.2")})
+SUPPORTED_LLM_PROVIDERS = frozenset({"fake", "gemini", "groq", "openai", "openrouter"})
 SUPPORTED_LLM_FAILURE_CATEGORIES = frozenset(
     {
         "authentication",
@@ -87,6 +113,7 @@ SUPPORTED_LLM_FAILURE_CATEGORIES = frozenset(
 class SpanObservation:
     def __init__(self, span: Span) -> None:
         self._span = span
+        self._stage_result = InvestigationStageResult.SUCCEEDED
 
     def set_attributes(self, **attributes: str | int) -> None:
         try:
@@ -103,6 +130,14 @@ class SpanObservation:
             self._span.set_status(Status(StatusCode.ERROR))
         except Exception:
             return
+
+    def set_stage_result(self, result: InvestigationStageResult) -> None:
+        self._stage_result = result
+        self.set_attributes(**{"promptql.stage.result": result.value})
+
+    @property
+    def stage_result(self) -> InvestigationStageResult:
+        return self._stage_result
 
 
 class RuntimeTelemetry:
@@ -148,6 +183,21 @@ class RuntimeTelemetry:
             LLM_TOKEN_USAGE_METRIC,
             unit="1",
             description="Provider-reported tokens for internal explanations.",
+        )
+        self._investigation_stage_duration = meter.create_histogram(
+            INVESTIGATION_STAGE_DURATION_METRIC,
+            unit="s",
+            description="Duration of bounded investigation stages.",
+        )
+        self._investigation_tool_calls = meter.create_counter(
+            INVESTIGATION_TOOL_CALLS_METRIC,
+            unit="1",
+            description="Physical read-only investigation tool attempts.",
+        )
+        self._investigation_planning_rounds = meter.create_counter(
+            INVESTIGATION_PLANNING_ROUNDS_METRIC,
+            unit="1",
+            description="Planning rounds completed by terminal investigations.",
         )
 
     @staticmethod
@@ -282,6 +332,120 @@ class RuntimeTelemetry:
                 "promptql.llm.model.fingerprint": model_fingerprint,
             },
         )
+
+    @contextmanager
+    def observe_investigation_stage(
+        self,
+        stage: InvestigationStage,
+        run_id: UUID,
+        *,
+        round_number: int | None = None,
+        tool_id: str | None = None,
+        attempt: int | None = None,
+        task: str | None = None,
+        provider: str | None = None,
+        requested_model: str | None = None,
+        resolved_model: str | None = None,
+        prompt_version: str | None = None,
+    ) -> Iterator[SpanObservation]:
+        # FLOW: Build bounded correlation metadata -> open the child span -> let
+        # domain code run -> convert uncategorized exceptions -> always record
+        # duration. The context manager observes; it never decides or recovers.
+        attributes: dict[str, str | int] = {
+            "promptql.run.id": str(run_id),
+            "promptql.workflow.name": "investigation",
+            "promptql.workflow.version": "2.19.2",
+            "promptql.investigation.stage": stage.value,
+        }
+        optional_attributes = {
+            "promptql.investigation.round": round_number,
+            "promptql.investigation.tool.id": tool_id,
+            "promptql.investigation.tool.attempt": attempt,
+            "promptql.llm.operation": task,
+            "promptql.llm.provider": provider,
+            "promptql.llm.requested_model": requested_model,
+            "promptql.llm.resolved_model": resolved_model,
+            "promptql.llm.prompt.version": prompt_version,
+            "gen_ai.request.model": requested_model,
+            "gen_ai.response.model": resolved_model,
+        }
+        attributes.update(
+            {name: value for name, value in optional_attributes.items() if value is not None}
+        )
+        if stage is InvestigationStage.INVESTIGATION:
+            attributes["langfuse.trace.name"] = "promptql-investigation"
+        if task is not None:
+            attributes["langfuse.observation.type"] = "generation"
+            if resolved_model or requested_model:
+                attributes["langfuse.observation.model.name"] = (
+                    resolved_model or requested_model or "unknown"
+                )
+
+        started_at_ns = perf_counter_ns()
+        with self._observe_span(f"investigation.{stage.value}", attributes) as observation:
+            try:
+                yield observation
+            except Exception:
+                if observation.stage_result is not InvestigationStageResult.FAILED:
+                    observation.set_stage_result(InvestigationStageResult.FAILED)
+                    observation.mark_error(FailureCategory.SYSTEM_FAILURE)
+                raise
+            finally:
+                observation.set_stage_result(observation.stage_result)
+                self._record_investigation_stage_duration(
+                    stage,
+                    observation.stage_result,
+                    perf_counter_ns() - started_at_ns,
+                )
+
+    def _record_investigation_stage_duration(
+        self,
+        stage: InvestigationStage,
+        result: InvestigationStageResult,
+        duration_ns: int,
+    ) -> None:
+        try:
+            labels = {
+                "investigation.stage": stage.value,
+                "stage.result": result.value,
+            }
+            validate_metric_labels(INVESTIGATION_STAGE_DURATION_METRIC, labels)
+            self._investigation_stage_duration.record(
+                max(0, duration_ns) / 1_000_000_000,
+                labels,
+            )
+        except Exception:
+            self._warn_telemetry_failure("metrics")
+
+    def record_investigation_tool_call(self, tool_id: str, outcome: str) -> None:
+        try:
+            labels = {"tool.id": tool_id, "tool.outcome": outcome}
+            validate_metric_labels(INVESTIGATION_TOOL_CALLS_METRIC, labels)
+            self._investigation_tool_calls.add(1, labels)
+        except Exception:
+            self._warn_telemetry_failure("metrics")
+
+    def record_investigation_termination(
+        self,
+        observation: SpanObservation,
+        *,
+        planning_rounds: int,
+        tool_calls: int,
+        termination_reason: str,
+    ) -> None:
+        try:
+            observation.set_attributes(
+                **{
+                    "promptql.investigation.round.count": max(0, planning_rounds),
+                    "promptql.investigation.tool.count": max(0, tool_calls),
+                    "promptql.investigation.termination_reason": termination_reason,
+                }
+            )
+            labels = {"termination.reason": termination_reason}
+            validate_metric_labels(INVESTIGATION_PLANNING_ROUNDS_METRIC, labels)
+            self._investigation_planning_rounds.add(max(0, planning_rounds), labels)
+        except Exception:
+            self._warn_telemetry_failure("metrics")
 
     def record_llm_explanation(
         self,

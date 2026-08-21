@@ -5,6 +5,7 @@ from pydantic import Field, StringConstraints, model_validator
 from pydantic import WithJsonSchema
 
 from app.connectors.models import ContractModel, NonEmptyString
+from app.explanations.models import LLMTokenUsage
 from app.investigations.models import (
     EvidenceKind,
     EvidenceSource,
@@ -164,6 +165,7 @@ class PlannerMetadata(ContractModel):
     resolved_model: NonEmptyString | None = None
     prompt_id: NonEmptyString
     prompt_version: NonEmptyString
+    token_usage: LLMTokenUsage | None = None
 
 
 class PlannedInvestigation(ContractModel):

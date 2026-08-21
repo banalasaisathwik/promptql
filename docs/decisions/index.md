@@ -45,3 +45,4 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-025](ADR-025-investigation-console-snapshot-integration.md) | Accepted | Investigation console uses the existing persisted run snapshot and polling mechanism |
 | [ADR-026](ADR-026-budgeted-failure-location-evidence.md) | Accepted | Collect failure-location Evidence through the validated, budgeted read-only tool runtime |
 | [ADR-027](ADR-027-evidence-identified-code-diagnosis.md) | Accepted | Let models select an observed code-location Evidence ID while deterministic code resolves coordinates and remediation |
+| [ADR-028](ADR-028-passive-langfuse-otlp-generation-tracing.md) | Accepted | Export bounded investigation generation spans to optional Langfuse through a second failure-isolated OTLP trace exporter |

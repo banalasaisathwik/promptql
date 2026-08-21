@@ -75,7 +75,9 @@ class TypedLLMCodeDiagnoser:
                 provider=self._client.provider.value,
                 model=self._client.model,
                 requested_model=self._client.model,
+                resolved_model=structured.resolved_model,
                 prompt_id=CODE_DIAGNOSIS_PROMPT_ID,
                 prompt_version=CODE_DIAGNOSIS_PROMPT_VERSION,
+                token_usage=structured.token_usage,
             ),
         )

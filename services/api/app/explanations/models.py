@@ -43,8 +43,12 @@ class LLMTokenUsage(ContractModel):
 
 
 class LLMStructuredResponse(ContractModel):
+    # The configured model is the request; `resolved_model` is the provider's
+    # answer about what served it. Neither identity makes the output trusted.
+    # Token counts are provider measurements and may honestly be unavailable.
     output: object
     token_usage: LLMTokenUsage | None = None
+    resolved_model: str | None = None
 
 
 @dataclass(frozen=True)

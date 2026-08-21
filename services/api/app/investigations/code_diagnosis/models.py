@@ -6,6 +6,7 @@ from typing import Annotated, Self
 from pydantic import Field, StringConstraints, model_validator
 
 from app.connectors.models import ContractModel, NonEmptyString
+from app.explanations.models import LLMTokenUsage
 from app.investigations.models import (
     DiffLineKind,
     FactSet,
@@ -166,6 +167,7 @@ class CodeDiagnosisMetadata(ContractModel):
     resolved_model: NonEmptyString | None = None
     prompt_id: NonEmptyString
     prompt_version: NonEmptyString
+    token_usage: LLMTokenUsage | None = None
 
 
 class GeneratedCodeFindings(ContractModel):

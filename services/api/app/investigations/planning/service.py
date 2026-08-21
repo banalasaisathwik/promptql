@@ -75,7 +75,9 @@ class TypedLLMPlanner:
                 provider=self._client.provider.value,
                 model=self._client.model,
                 requested_model=self._client.model,
+                resolved_model=structured.resolved_model,
                 prompt_id=PLANNER_PROMPT_ID,
                 prompt_version=PLANNER_PROMPT_VERSION,
+                token_usage=structured.token_usage,
             ),
         )

@@ -39,6 +39,13 @@ from app.investigations.hypotheses import (
 )
 from app.investigations.hypotheses.instructions import HYPOTHESIS_PROMPT_VERSION
 from app.investigations.replanning import AdaptiveInvestigationRuntime, AdaptiveInvestigationState
+from app.observability import (
+    FailureCategory,
+    InvestigationStage,
+    InvestigationStageResult,
+    NoOpRuntimeTelemetry,
+    RuntimeTelemetry,
+)
 from app.runtime import (
     RunRepository,
     RunStatus,
@@ -167,6 +174,7 @@ class InvestigationWorkflowService:
         github_code_source: GitHubCodeEvidenceSource | None = None,
         incident_source: IncidentSource | None = None,
         jira_connector: JiraConnector | None = None,
+        telemetry: RuntimeTelemetry | None = None,
     ) -> None:
         self._repository = repository
         self._llm_client = llm_client
@@ -175,6 +183,7 @@ class InvestigationWorkflowService:
         self._github_code_source = github_code_source or FakeGitHubCodeEvidenceSource()
         self._incident_source = incident_source or FakeIncidentSource()
         self._jira_connector = jira_connector
+        self._telemetry = telemetry or NoOpRuntimeTelemetry()
 
     async def create_persisted_run(
         self, request: InvestigationRequest, run_id: UUID | None = None
@@ -195,6 +204,49 @@ class InvestigationWorkflowService:
         return pending
 
     async def continue_persisted_run(self, pending: InvestigationRun) -> InvestigationRun:
+        # FLOW: The root span surrounds the real persisted workflow. Termination
+        # is emitted only after a terminal snapshot exists, so its round/tool
+        # counts describe backend truth rather than an optimistic in-flight view.
+        with self._telemetry.observe_investigation_stage(
+            InvestigationStage.INVESTIGATION,
+            pending.run_id,
+        ) as investigation_observation:
+            terminal = await self._continue_persisted_run(pending)
+            state = terminal.state
+            termination_reason = (
+                terminal.result.termination_reason.value
+                if terminal.result is not None
+                else terminal.status.value
+            )
+            with self._telemetry.observe_investigation_stage(
+                InvestigationStage.TERMINATION,
+                pending.run_id,
+            ) as termination_observation:
+                self._telemetry.record_investigation_termination(
+                    termination_observation,
+                    planning_rounds=len(state.rounds) if state is not None else 0,
+                    tool_calls=state.used_tool_calls if state is not None else 0,
+                    termination_reason=termination_reason,
+                )
+                termination_observation.set_attributes(
+                    **{"promptql.run.status": terminal.status.value}
+                )
+                if terminal.status is RunStatus.FAILED:
+                    termination_observation.set_stage_result(
+                        InvestigationStageResult.FAILED
+                    )
+                    termination_observation.mark_error(FailureCategory.SYSTEM_FAILURE)
+            investigation_observation.set_attributes(
+                **{"promptql.run.status": terminal.status.value}
+            )
+            if terminal.status is RunStatus.FAILED:
+                investigation_observation.set_stage_result(
+                    InvestigationStageResult.FAILED
+                )
+                investigation_observation.mark_error(FailureCategory.SYSTEM_FAILURE)
+            return terminal
+
+    async def _continue_persisted_run(self, pending: InvestigationRun) -> InvestigationRun:
         # The first running save gives a refresh a real lifecycle state; the
         # later plan save exposes pending tool steps before external calls begin.
         started_at = datetime.now(UTC)
@@ -216,6 +268,8 @@ class InvestigationWorkflowService:
         executor = AgentExecutor(
             registry,
             ToolInvoker(registry, adapters),
+            telemetry=self._telemetry,
+            run_id=pending.run_id,
         )
 
         # These callbacks are invoked only at round boundaries. Keeping saves
@@ -240,7 +294,11 @@ class InvestigationWorkflowService:
             )
             self._repository.save(
                 running.model_copy(
-                    update={"state": snapshot.model_copy(update={"rounds": (*snapshot.rounds, pending_round)})}
+                    update={
+                        "state": snapshot.model_copy(
+                            update={"rounds": (*snapshot.rounds, pending_round)}
+                        )
+                    }
                 )
             )
 
@@ -256,7 +314,11 @@ class InvestigationWorkflowService:
             # The question and its typed request context cross unchanged. This
             # layer does not infer intent or invent tool arguments.
             adaptive_state = await AdaptiveInvestigationRuntime(
-                TypedLLMPlanner(self._planner_client), PlanValidator(registry), executor
+                TypedLLMPlanner(self._planner_client),
+                PlanValidator(registry),
+                executor,
+                telemetry=self._telemetry,
+                run_id=pending.run_id,
             ).investigate(
                 running.request.question,
                 registry.list(),
@@ -317,16 +379,31 @@ class InvestigationWorkflowService:
             # provider call is cheaper and keeps abstention deterministic.
             hypothesis_generator = TypedLLMHypothesisGenerator(self._llm_client)
             try:
-                generated = await hypothesis_generator.generate(hypothesis_input)
+                with self._telemetry.observe_investigation_stage(
+                    InvestigationStage.HYPOTHESIS_GENERATION,
+                    running.run_id,
+                    task="hypothesis_generation",
+                    provider=self._llm_client.provider.value,
+                    requested_model=self._llm_client.model,
+                    prompt_version=HYPOTHESIS_PROMPT_VERSION,
+                ) as generation_observation:
+                    try:
+                        generated = await hypothesis_generator.generate(hypothesis_input)
+                    except HypothesisGenerationError as error:
+                        generation_observation.set_stage_result(
+                            InvestigationStageResult.FAILED
+                        )
+                        generation_observation.mark_error(
+                            FailureCategory.LLM_PROVIDER_FAILURE
+                            if error.code.value == "provider_failure"
+                            else FailureCategory.LLM_INVALID_OUTPUT
+                        )
+                        raise
+                    _set_generation_span_attributes(
+                        generation_observation,
+                        generated.metadata,
+                    )
                 hypothesis_metadata = generated.metadata
-                validation_result = DeterministicHypothesisValidator().validate(
-                    generated.candidates,
-                    adaptive_state.facts,
-                )
-                validated_hypotheses = validation_result.accepted_hypotheses
-                rejected_hypothesis_count = len(
-                    validation_result.rejected_candidates
-                )
             except HypothesisGenerationError as error:
                 _HYPOTHESIS_DIAGNOSTIC_LOGGER.error(
                     json.dumps(
@@ -342,6 +419,23 @@ class InvestigationWorkflowService:
                 termination_reason = (
                     GroundedTerminationReason.HYPOTHESIS_GENERATION_FAILURE
                 )
+            else:
+                with self._telemetry.observe_investigation_stage(
+                    InvestigationStage.HYPOTHESIS_VALIDATION,
+                    running.run_id,
+                ) as validation_observation:
+                    validation_result = DeterministicHypothesisValidator().validate(
+                        generated.candidates,
+                        adaptive_state.facts,
+                    )
+                    validated_hypotheses = validation_result.accepted_hypotheses
+                    rejected_hypothesis_count = len(
+                        validation_result.rejected_candidates
+                    )
+                    if generated.candidates and not validated_hypotheses:
+                        validation_observation.set_stage_result(
+                            InvestigationStageResult.REJECTED
+                        )
 
         validated_code_findings = ()
         rejected_code_finding_count = 0
@@ -359,21 +453,33 @@ class InvestigationWorkflowService:
             )
             code_diagnoser = TypedLLMCodeDiagnoser(self._code_diagnosis_client)
             try:
-                generated_findings = await code_diagnoser.generate(diagnosis_input)
+                with self._telemetry.observe_investigation_stage(
+                    InvestigationStage.CODE_DIAGNOSIS,
+                    running.run_id,
+                    task="code_diagnosis",
+                    provider=self._code_diagnosis_client.provider.value,
+                    requested_model=self._code_diagnosis_client.model,
+                    prompt_version=CODE_DIAGNOSIS_PROMPT_VERSION,
+                ) as diagnosis_observation:
+                    try:
+                        generated_findings = await code_diagnoser.generate(
+                            diagnosis_input
+                        )
+                    except CodeDiagnosisError as error:
+                        diagnosis_observation.set_stage_result(
+                            InvestigationStageResult.FAILED
+                        )
+                        diagnosis_observation.mark_error(
+                            FailureCategory.LLM_PROVIDER_FAILURE
+                            if error.code.value == "provider_failure"
+                            else FailureCategory.LLM_INVALID_OUTPUT
+                        )
+                        raise
+                    _set_generation_span_attributes(
+                        diagnosis_observation,
+                        generated_findings.metadata,
+                    )
                 code_diagnosis_metadata = generated_findings.metadata
-                finding_validation = DeterministicCodeFindingValidator().validate(
-                    generated_findings.candidates,
-                    validated_hypotheses,
-                    adaptive_state.facts,
-                    adaptive_state.evidence,
-                )
-                validated_code_findings = finding_validation.accepted_findings
-                rejected_code_finding_count = len(
-                    finding_validation.rejected_candidates
-                )
-                developer_recommendations = build_developer_recommendations(
-                    validated_code_findings
-                )
             except CodeDiagnosisError as error:
                 # WATCH OUT: This is a partial-success result. Evidence and the
                 # grounded hypothesis stay useful even though the optional,
@@ -390,6 +496,28 @@ class InvestigationWorkflowService:
                     )
                 )
                 termination_reason = GroundedTerminationReason.CODE_DIAGNOSIS_FAILURE
+            else:
+                with self._telemetry.observe_investigation_stage(
+                    InvestigationStage.CODE_VALIDATION,
+                    running.run_id,
+                ) as validation_observation:
+                    finding_validation = DeterministicCodeFindingValidator().validate(
+                        generated_findings.candidates,
+                        validated_hypotheses,
+                        adaptive_state.facts,
+                        adaptive_state.evidence,
+                    )
+                    validated_code_findings = finding_validation.accepted_findings
+                    rejected_code_finding_count = len(
+                        finding_validation.rejected_candidates
+                    )
+                    if generated_findings.candidates and not validated_code_findings:
+                        validation_observation.set_stage_result(
+                            InvestigationStageResult.REJECTED
+                        )
+                developer_recommendations = build_developer_recommendations(
+                    validated_code_findings
+                )
 
         state = state.model_copy(
             update={
@@ -405,14 +533,18 @@ class InvestigationWorkflowService:
                 "termination_reason": adaptive_state.continuation_reason.value,
             }
         )
-        grounded_result = render_grounded_result(
-            state.facts,
-            validated_hypotheses,
-            state.missing_information,
-            termination_reason,
-            validated_code_findings,
-            developer_recommendations,
-        )
+        with self._telemetry.observe_investigation_stage(
+            InvestigationStage.RENDER,
+            running.run_id,
+        ):
+            grounded_result = render_grounded_result(
+                state.facts,
+                validated_hypotheses,
+                state.missing_information,
+                termination_reason,
+                validated_code_findings,
+                developer_recommendations,
+            )
         completed = running.model_copy(
             update={
                 "status": RunStatus.COMPLETED,
@@ -506,3 +638,25 @@ def _grounded_reason(reason: str) -> GroundedTerminationReason:
         "planner_failure": GroundedTerminationReason.PLANNER_FAILURE,
         "plan_validation_failure": GroundedTerminationReason.PLAN_VALIDATION_FAILURE,
     }.get(reason, GroundedTerminationReason.COMPLETED)
+
+
+def _set_generation_span_attributes(observation, metadata) -> None:
+    # Provider-reported usage and resolved identity are observability facts, not
+    # evidence about the incident. Missing values stay absent; cost is never
+    # guessed from local configuration.
+    attributes = {
+        "promptql.llm.provider": metadata.provider,
+        "promptql.llm.requested_model": metadata.requested_model or metadata.model,
+    }
+    if metadata.resolved_model is not None:
+        attributes["promptql.llm.resolved_model"] = metadata.resolved_model
+        attributes["langfuse.observation.model.name"] = metadata.resolved_model
+        attributes["gen_ai.response.model"] = metadata.resolved_model
+    if metadata.token_usage is not None:
+        attributes["promptql.llm.input_tokens"] = metadata.token_usage.input_tokens
+        attributes["promptql.llm.output_tokens"] = metadata.token_usage.output_tokens
+        attributes["gen_ai.usage.input_tokens"] = metadata.token_usage.input_tokens
+        attributes["gen_ai.usage.output_tokens"] = metadata.token_usage.output_tokens
+        if metadata.token_usage.total_tokens is not None:
+            attributes["promptql.llm.total_tokens"] = metadata.token_usage.total_tokens
+    observation.set_attributes(**attributes)

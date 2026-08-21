@@ -2399,3 +2399,43 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   plans through `PlannerInput -> TypedLLMPlanner -> adapter` for Groq 120B and
   OpenRouter 120B. An OpenRouter 512-token probe instead ended with the typed
   SDK's `LengthFinishReasonError`.
+
+### 2026-08-21 - Correlate bounded investigation telemetry without exporting investigation data
+
+- **V2 milestone:** V2.21 agent-level OpenTelemetry and optional Langfuse
+  generation tracing.
+- **Engineering concept and syntax:** A Python `@contextmanager` can own stage
+  timing and exception-safe final measurement while yielding a small
+  `SpanObservation` that callers use only for allowlisted attributes and typed
+  failure status. Multiple `BatchSpanProcessor` instances on one
+  `TracerProvider` fan the same trace out without duplicating instrumentation.
+- **Implementation locations:** `observability/contracts.py` defines closed
+  stage/result enums and exact metric-label sets;
+  `observability/runtime_telemetry.py` owns correlated stage spans and bounded
+  metrics; `investigations/execution.py`, `investigations/replanning.py`, and
+  `workflows/investigation.py` wrap the actual deterministic and probabilistic
+  boundaries. `observability/setup.py` optionally attaches an independent
+  Langfuse OTLP trace exporter, and provider adapters retain safe resolved-model
+  and token metadata through the planner, hypothesis, and diagnosis contracts.
+- **Decision and invariant:** OpenTelemetry remains the only instrumentation
+  API. Langfuse is a passive, traces-only destination and cannot influence a
+  plan, tool call, validation result, persisted snapshot, or HTTP response.
+  Spans must never contain questions, prompt text, source code, Evidence/Fact
+  payloads, candidates, raw provider responses, exception text, headers, or
+  credentials.
+- **Failure behavior and trade-off:** Each exporter is independently
+  failure-isolated and disables itself after a bounded warning. Direct OTLP
+  export avoids a new SDK/collector dependency, but hosted trace verification
+  remains unavailable without Langfuse project credentials. PromptQL reports
+  provider tokens and model identity; it leaves monetary cost unknown rather
+  than inventing pricing, while Langfuse may derive cost for recognized models.
+- **Validation evidence:** `python -m unittest` over investigation telemetry,
+  runtime observability, execution/replanning/workflow, API, and provider
+  adapter suites proves the complete offline trace hierarchy, retry visibility,
+  physical attempt and round metrics, resolved-model/token propagation,
+  redaction, and independent exporter setup. Frontend tests, Oxlint, TypeScript
+  compilation/Vite build, and Python `compileall` also passed after the metadata
+  contract changed.
+- **Unresolved question:** Should deployment later use an OpenTelemetry
+  collector for centralized sampling and fan-out? Keep direct exporters until
+  operational scale or policy demonstrates that need.

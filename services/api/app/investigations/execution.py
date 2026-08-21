@@ -1,9 +1,11 @@
 """Deterministic V2.9-V2.12 interpreter for an accepted investigation plan."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from enum import StrEnum
 from typing import Any, Awaitable, Callable
+from uuid import UUID
 
 from pydantic import Field
 
@@ -13,6 +15,12 @@ from app.investigations.baseline import ToolInvoker
 from app.investigations.fact_derivation import derive_facts
 from app.investigations.planning import Literal, PlanStep, StepOutputRef, ValidatedPlan
 from app.investigations.planning.models import PlanStepIdentifier
+from app.observability.contracts import (
+    FailureCategory,
+    InvestigationStage,
+    InvestigationStageResult,
+)
+from app.observability.runtime_telemetry import RuntimeTelemetry
 from app.tools import ToolFailure, ToolOutcome, ToolRegistry, ToolResult
 
 
@@ -118,10 +126,14 @@ class AgentExecutor:
         invoker: ToolInvoker,
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        telemetry: RuntimeTelemetry | None = None,
+        run_id: UUID | None = None,
     ) -> None:
         self._registry = registry
         self._invoker = invoker
         self._sleep = sleep
+        self._telemetry = telemetry
+        self._run_id = run_id
 
     async def execute(
         self,
@@ -130,9 +142,14 @@ class AgentExecutor:
         budget: ExecutionBudget,
         initial_evidence: tuple[Evidence, ...] = (),
         retry_policy: RetryPolicy | None = None,
+        round_number: int | None = None,
     ) -> InvestigationExecutionState:
         evidence = self._deduplicate_evidence(initial_evidence)
-        facts = derive_facts(evidence)
+        with self._observe_stage(
+            InvestigationStage.FACT_DERIVATION,
+            round_number=round_number,
+        ):
+            facts = derive_facts(evidence)
         steps_by_id = {step.step_id: step for step in validated_plan.plan.steps}
         step_states = {
             step_id: ExecutionStepState(step_id=step_id, status=ExecutionStepStatus.PENDING)
@@ -183,11 +200,17 @@ class AgentExecutor:
             step_states[step_id] = ExecutionStepState(
                 step_id=step_id, status=ExecutionStepStatus.RUNNING
             )
-            result, attempts, budget_state, retry_budget_exhausted = await self._invoke_with_retries(
+            (
+                result,
+                attempts,
+                budget_state,
+                retry_budget_exhausted,
+            ) = await self._invoke_with_retries(
                 step.tool_id,
                 typed_input.model_dump(),
                 budget_state,
                 resolved_retry_policy,
+                round_number,
             )
 
             if result.outcome is ToolOutcome.FAILED:
@@ -213,7 +236,11 @@ class AgentExecutor:
                 evidence = merged_evidence
                 # Rules may combine a new observation with an earlier one, so this
                 # intentionally replays deterministic derivation over the whole set.
-                facts = derive_facts(evidence)
+                with self._observe_stage(
+                    InvestigationStage.FACT_DERIVATION,
+                    round_number=round_number,
+                ):
+                    facts = derive_facts(evidence)
             outputs = self._runtime_outputs(definition.plan_output_model, result)
             runtime_outputs[step_id] = outputs
             step_states[step_id] = ExecutionStepState(
@@ -248,6 +275,7 @@ class AgentExecutor:
         arguments: Mapping[str, object],
         budget_state: BudgetState,
         retry_policy: RetryPolicy,
+        round_number: int | None,
     ) -> tuple[ToolResult, int, BudgetState, bool]:
         attempts = 0
         while True:
@@ -255,7 +283,30 @@ class AgentExecutor:
             # never allowed to make an unaccounted-for external attempt.
             budget_state = budget_state.consume_attempt()
             attempts += 1
-            result = await self._invoker.invoke(tool_id, arguments)
+            # FLOW: One span and one counter represent one physical adapter
+            # attempt. Retries therefore stay visible and cannot disappear
+            # behind the logical plan-step identity or shared budget.
+            with self._observe_stage(
+                InvestigationStage.TOOL_EXECUTION,
+                round_number=round_number,
+                tool_id=str(tool_id),
+                attempt=attempts,
+            ) as observation:
+                result = await self._invoker.invoke(tool_id, arguments)
+                if observation is not None:
+                    observation.set_attributes(
+                        **{"promptql.connector.result": result.outcome.value}
+                    )
+                    if result.outcome is ToolOutcome.FAILED:
+                        observation.set_stage_result(
+                            InvestigationStageResult.FAILED
+                        )
+                        observation.mark_error(FailureCategory.CONNECTOR_FAILURE)
+            if self._telemetry is not None:
+                self._telemetry.record_investigation_tool_call(
+                    str(tool_id),
+                    result.outcome.value,
+                )
             failure = result.failure
             can_retry = (
                 result.outcome is ToolOutcome.FAILED
@@ -267,7 +318,34 @@ class AgentExecutor:
                 return result, attempts, budget_state, False
             if budget_state.remaining_tool_calls == 0:
                 return result, attempts, budget_state, True
-            await self._sleep(retry_policy.delay_after_failure(attempts))
+            with self._observe_stage(
+                InvestigationStage.RETRY,
+                round_number=round_number,
+                tool_id=str(tool_id),
+                attempt=attempts + 1,
+            ):
+                await self._sleep(retry_policy.delay_after_failure(attempts))
+
+    @contextmanager
+    def _observe_stage(
+        self,
+        stage: InvestigationStage,
+        *,
+        round_number: int | None = None,
+        tool_id: str | None = None,
+        attempt: int | None = None,
+    ) -> Iterator[object | None]:
+        if self._telemetry is None or self._run_id is None:
+            yield None
+            return
+        with self._telemetry.observe_investigation_stage(
+            stage,
+            self._run_id,
+            round_number=round_number,
+            tool_id=tool_id,
+            attempt=attempt,
+        ) as observation:
+            yield observation
 
     @staticmethod
     def _block_remaining_steps(

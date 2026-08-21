@@ -8,7 +8,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from app.config import TelemetrySettings
+from app.config import TelemetryConfigurationError, TelemetrySettings
 from app.connectors.errors import ConnectorUnavailableError
 from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 from app.connectors.fixture_catalog import FAILED_CI_REQUEST, MERGE_READY_REQUEST
@@ -23,7 +23,10 @@ from app.observability.contracts import (
     WORKFLOW_STEP_FAILURES_METRIC,
     validate_metric_labels,
 )
-from app.observability.setup import create_observability
+from app.observability.setup import (
+    _langfuse_exporter_configuration,
+    create_observability,
+)
 from app.observability.setup import FailureIsolatingSpanExporter
 from app.observability.structured_logging import StructuredEventLogger
 from app.runtime import (
@@ -307,6 +310,54 @@ class RuntimeObservabilityTests(unittest.TestCase):
 
 
 class TelemetryConfigurationTests(unittest.TestCase):
+    def test_langfuse_requires_complete_secret_safe_configuration(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"PROMPTQL_LANGFUSE_ENABLED": "true"},
+            clear=True,
+        ):
+            with self.assertRaises(TelemetryConfigurationError):
+                TelemetrySettings.from_environment()
+
+        with patch.dict(
+            os.environ,
+            {
+                "PROMPTQL_LANGFUSE_ENABLED": "true",
+                "LANGFUSE_PUBLIC_KEY": "pk-test",
+                "LANGFUSE_SECRET_KEY": "sk-test",
+                "LANGFUSE_BASE_URL": "https://us.cloud.langfuse.com",
+            },
+            clear=True,
+        ):
+            settings = TelemetrySettings.from_environment()
+
+        self.assertTrue(settings.langfuse_enabled)
+        self.assertNotIn("pk-test", repr(settings))
+        self.assertNotIn("sk-test", repr(settings))
+
+    def test_langfuse_reuses_the_official_otlp_trace_contract(self) -> None:
+        settings = TelemetrySettings(
+            enabled=False,
+            console_enabled=False,
+            service_name="promptql-api",
+            otlp_endpoint=None,
+            otlp_headers={},
+            protocol="http/protobuf",
+            langfuse_enabled=True,
+            langfuse_base_url="https://cloud.langfuse.com",
+            langfuse_public_key="pk-test",
+            langfuse_secret_key="sk-test",
+        )
+
+        endpoint, headers = _langfuse_exporter_configuration(settings)
+
+        self.assertEqual(
+            endpoint,
+            "https://cloud.langfuse.com/api/public/otel/v1/traces",
+        )
+        self.assertEqual(headers["x-langfuse-ingestion-version"], "4")
+        self.assertTrue(headers["Authorization"].startswith("Basic "))
+
     def test_telemetry_and_console_export_are_disabled_by_default(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             settings = TelemetrySettings.from_environment()
@@ -371,5 +422,42 @@ class TelemetryConfigurationTests(unittest.TestCase):
         try:
             self.assertIsNotNone(observability.tracer_provider)
             self.assertIsNotNone(observability.meter_provider)
+            self.assertEqual(
+                len(
+                    observability.tracer_provider
+                    ._active_span_processor._span_processors
+                ),
+                1,
+            )
+            self.assertEqual(len(observability.meter_provider._metric_readers), 1)
+        finally:
+            observability.shutdown()
+
+    def test_langfuse_only_adds_one_trace_exporter_and_no_metric_exporter(
+        self,
+    ) -> None:
+        settings = TelemetrySettings(
+            enabled=False,
+            console_enabled=False,
+            service_name="promptql-api",
+            otlp_endpoint=None,
+            otlp_headers={},
+            protocol="http/protobuf",
+            langfuse_enabled=True,
+            langfuse_base_url="https://us.cloud.langfuse.com",
+            langfuse_public_key="pk-test",
+            langfuse_secret_key="sk-test",
+        )
+
+        observability = create_observability(settings)
+        try:
+            self.assertEqual(
+                len(
+                    observability.tracer_provider
+                    ._active_span_processor._span_processors
+                ),
+                1,
+            )
+            self.assertEqual(len(observability.meter_provider._metric_readers), 0)
         finally:
             observability.shutdown()

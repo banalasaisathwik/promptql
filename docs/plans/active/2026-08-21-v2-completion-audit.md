@@ -226,6 +226,11 @@ repeat affected checks.
   rendered only grounded structures, and projected the strict contract through
   API and UI. Focused backend tests passed 64/64; frontend tests passed 40/40
   with lint and production build green before the final teaching-comment pass.
+- [x] 2026-08-21: Milestone 4 added one correlated investigation trace with
+  bounded spans and metrics for every planning/execution/grounding stage, safe
+  provider-resolved model and token metadata, and independent general-OTLP and
+  Langfuse OTLP exporters. Hosted Langfuse verification is externally gated by
+  absent project credentials; offline instrumentation and redaction tests pass.
 
 ## Decisions and discoveries
 
@@ -249,6 +254,8 @@ repeat affected checks.
   established for a live read; discover one read-only or record the explicit gate.
 - Langfuse credentials are absent. Implement only an optional, failure-isolated
   boundary supported by current dependencies or an approved minimal dependency.
+  The dependency-free OTLP boundary is now implemented; only hosted export
+  verification remains gated.
 
 ## Completion
 

@@ -6,6 +6,7 @@ from typing import Annotated
 from pydantic import Field, StringConstraints
 
 from app.connectors.models import ContractModel, NonEmptyString
+from app.explanations.models import LLMTokenUsage
 from app.investigations.models import FactSet, InvestigationIdentifier, MissingInformation
 
 
@@ -59,6 +60,7 @@ class HypothesisGenerationMetadata(ContractModel):
     resolved_model: NonEmptyString | None = None
     prompt_id: NonEmptyString
     prompt_version: NonEmptyString
+    token_usage: LLMTokenUsage | None = None
 
 
 class GeneratedHypotheses(ContractModel):

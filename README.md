@@ -223,6 +223,25 @@ OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 The application appends `/v1/traces` and `/v1/metrics` to that base endpoint.
 Do not commit `.env`, API tokens, or rendered authorization headers.
 
+Langfuse generation tracing is independently opt-in and can run with or without
+the general OTLP exporter. It uses Langfuse's OTLP trace endpoint through the
+existing OpenTelemetry SDK; no Langfuse SDK is required:
+
+```text
+PROMPTQL_LANGFUSE_ENABLED=true
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_PUBLIC_KEY=<project public key>
+LANGFUSE_SECRET_KEY=<project secret key>
+```
+
+PromptQL exports run correlation, stage/task identity, requested and resolved
+model names, prompt version, provider-reported token counts, duration, and safe
+failure categories. Langfuse may calculate cost from model and token metadata
+when it recognizes the model. PromptQL does not calculate or export an invented
+cost, and it never exports raw prompts, code, Evidence, model output, provider
+responses, headers, or credentials. Missing or rejected Langfuse export cannot
+change an investigation result.
+
 Apply migrations explicitly, then start the API:
 
 ```bash
