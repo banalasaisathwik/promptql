@@ -630,8 +630,12 @@ a typed code-diagnosis model, deterministically resolves exact file/line/functio
 coordinates from Evidence, and derives read-only developer actions from accepted
 finding categories. These fields persist in the authoritative run snapshot and
 are projected by the API and console. Planner, hypothesis, and code-diagnosis
-schemas have current live OpenRouter evidence. V2 observability/evals and final
-release verification remain active completion work. Database verification is
+schemas have current live OpenRouter evidence. V2 component and adaptive-
+trajectory evals now measure provider/schema reliability, deterministic
+grounding, reference agreement, runtime controls, and baseline/adaptive recall
+over versioned development and holdout fixtures. The first catalog covers one
+checkout scenario and is not broad production-quality evidence. Final release
+verification remains active completion work. Database verification is
 externally gated by the currently rejected local Neon credentials. Crash
 recovery, replay, and high-fan-out streaming remain intentionally deferred.
 

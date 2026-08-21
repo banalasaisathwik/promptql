@@ -477,8 +477,10 @@ LLM-as-a-judge, production-traffic eval collection, dashboards, alerting, and
 OpenTelemetry log export are not implemented. Neon/Grafana resources and
 application deployment are not provisioned by this repository. Hosted Langfuse
 export has not been verified because project credentials are not configured.
-The V1 explanation eval harness exists, but V2 component and trajectory evals
-remain the next implementation milestone.
+V1 explanation evals and V2 component/trajectory evals are implemented locally.
+The V2 catalog currently contains one deterministic checkout fixture family;
+hosted eval services, production-traffic collection, and broader reference
+coverage remain deferred.
 
 ## Validated explanation response boundary
 
@@ -1911,22 +1913,29 @@ that can introduce new unsupported assertions.
 
 # V2 evaluation architecture
 
-Reuse the current eval harness rather than creating a second framework.
+The implemented V2 harness lives under `app/evals/investigations/`. It reuses
+the shared eval rates, latency/token summaries, provider safety gate, and typed
+LLM boundary while keeping investigation cases and observations separate from
+the single-call V1 explanation schema.
 
-V2 should eventually add component-level evaluation for:
+Each versioned development or holdout sample evaluates:
 
 ```text
-planner validity
-tool selection
-tool arguments
-evidence retrieval
-hypothesis quality
-grounding
-abstention
-final result
+planner validity and useful tool coverage
+deterministic Fact derivation and Evidence grounding
+hypothesis generation, reference agreement, and deterministic validation
+code diagnosis, Evidence-identified location grounding, and reference agreement
+deterministic recommendation grounding and reference agreement
+adversarial unsupported-claim rejection
+the complete production adaptive trajectory with fake connectors
 ```
 
-Target failure attribution:
+Trajectory graders check allowlisted tools, plan validation, shared budget and
+round limits, relevant Evidence discovery, grounded Facts/hypotheses/findings,
+grounded recommendations, and sensible termination. They compare Evidence and
+Fact recall with the deterministic baseline without requiring exact tool order.
+
+Implemented failure attribution:
 
 ```text
 wrong final result
@@ -1950,6 +1959,13 @@ ground-truth correctness
 ```
 
 Do not reduce them to one ambiguous "accuracy" metric.
+
+Repeated sampling reruns only probabilistic stages. A preflight reports the
+maximum possible provider calls; a real run requires explicit paid-call
+acknowledgement. Aggregate report artifacts omit the question, prompts, code,
+Evidence payloads, generated output, credentials, and exception text. The first
+development/holdout catalog intentionally covers one fixture family, so it is a
+regression and harness proof rather than broad incident-quality evidence.
 
 ---
 

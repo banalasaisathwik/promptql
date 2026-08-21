@@ -258,6 +258,17 @@ Run credential-free backend tests with:
 uv run python -m unittest discover -s tests -v
 ```
 
+Run the versioned V2 component and adaptive-trajectory eval on deterministic
+fixtures with:
+
+```bash
+uv run python -m app.evals.investigations.runner --fake-dry-run --dataset development --samples-per-case 3 --inter-request-delay-seconds 0
+```
+
+The V2 report separates provider execution, schema validity, component quality,
+and trajectory quality. See [TESTING.md](docs/TESTING.md) for holdout, preflight,
+paid-provider, artifact-safety, and current fixture-coverage details.
+
 PostgreSQL integration tests require a dedicated test branch and the explicit
 environment variables documented in [TESTING.md](docs/TESTING.md).
 
