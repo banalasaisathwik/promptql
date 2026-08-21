@@ -9,6 +9,7 @@ from pydantic import Field
 
 from app.connectors.models import ContractModel, NonEmptyString
 from app.investigations.execution import AgentExecutor, ExecutionBudget, InvestigationExecutionState
+from app.investigations.fact_derivation import derive_facts
 from app.investigations.models import Evidence, FactSet, InvestigationRequest, MissingInformation
 from app.investigations.planning import (
     ActionSummary,
@@ -18,6 +19,7 @@ from app.investigations.planning import (
     PlanValidator,
     PlannedInvestigation,
     PlannerInput,
+    PlannerMetadata,
     PlannerToolDefinition,
     PlannerToolInputField,
     TypedLLMPlanner,
@@ -45,6 +47,7 @@ class ContinuationReason(StrEnum):
 class PlanningRound(ContractModel):
     round_number: int = Field(ge=1)
     plan_id: str
+    planner_metadata: PlannerMetadata
     execution: InvestigationExecutionState
     evidence_delta_ids: tuple[str, ...] = ()
     fact_delta_ids: tuple[str, ...] = ()
@@ -172,7 +175,7 @@ class AdaptiveInvestigationRuntime:
     ) -> AdaptiveInvestigationState:
         definitions = tuple(sorted(allowed_tools, key=lambda item: item.tool_id))
         evidence = initial_evidence
-        facts: FactSet = ()
+        facts: FactSet = derive_facts(initial_evidence)
         missing_information = initial_missing_information
         history: list[ActionSummary] = []
         rounds: list[PlanningRound] = []
@@ -230,11 +233,28 @@ class AdaptiveInvestigationRuntime:
             # across rounds, including retries.
             execution = await self._executor.execute(validation.validated_plan, budget=ExecutionBudget(max_tool_calls=remaining), initial_evidence=evidence)
             evidence, facts = execution.evidence, execution.facts
-            missing_information = tuple((*missing_information, *execution.missing_information))
+            missing_information = self._merge_missing_information(
+                missing_information,
+                execution.missing_information,
+            )
             remaining = execution.budget.remaining_tool_calls
             evidence_delta = tuple(sorted({item.evidence_id for item in evidence} - before_evidence))
             fact_delta = tuple(sorted({item.fact_id for item in facts} - before_facts))
-            rounds.append(PlanningRound(round_number=round_number, plan_id=f"round-{round_number}", execution=execution, evidence_delta_ids=evidence_delta, fact_delta_ids=fact_delta))
+            rounds.append(
+                PlanningRound(
+                    round_number=round_number,
+                    plan_id=f"round-{round_number}",
+                    planner_metadata=planned.metadata,
+                    execution=execution,
+                    evidence_delta_ids=evidence_delta,
+                    fact_delta_ids=fact_delta,
+                )
+            )
+            new_facts_by_id = {
+                fact.fact_id: fact
+                for fact in facts
+                if fact.fact_id in fact_delta
+            }
             for step in execution.step_states:
                 if step.attempts == 0:
                     continue
@@ -242,7 +262,28 @@ class AdaptiveInvestigationRuntime:
                 result_evidence_ids = {
                     item.evidence_id for item in (step.tool_result.evidence if step.tool_result else ())
                 }
-                history.append(ActionSummary(tool_id=tool_id, outcome=step.tool_result.outcome if step.tool_result else ToolOutcome.FAILED, produced_new_evidence=bool(result_evidence_ids.intersection(evidence_delta)), produced_new_facts=bool(fact_delta and result_evidence_ids)))
+                # A round-level Fact delta does not prove that every step in
+                # that round produced a Fact. Attribute progress only when a
+                # new Fact cites Evidence returned by this exact step.
+                history.append(
+                    ActionSummary(
+                        tool_id=tool_id,
+                        outcome=(
+                            step.tool_result.outcome
+                            if step.tool_result
+                            else ToolOutcome.FAILED
+                        ),
+                        produced_new_evidence=bool(
+                            result_evidence_ids.intersection(evidence_delta)
+                        ),
+                        produced_new_facts=any(
+                            result_evidence_ids.intersection(
+                                fact.evidence_reference_ids
+                            )
+                            for fact in new_facts_by_id.values()
+                        ),
+                    )
+                )
             if on_round_completed is not None:
                 await on_round_completed(
                     self._state(rounds, evidence, facts, missing_information, history, remaining, ContinuationReason.COMPLETE)
@@ -258,3 +299,17 @@ class AdaptiveInvestigationRuntime:
     @staticmethod
     def _state(rounds, evidence, facts, missing_information, history, remaining, reason):
         return AdaptiveInvestigationState(rounds=tuple(rounds), evidence=evidence, facts=facts, missing_information=missing_information, action_history=tuple(history), remaining_tool_calls=remaining, continuation_reason=reason)
+
+    @staticmethod
+    def _merge_missing_information(
+        accumulated: tuple[MissingInformation, ...],
+        incoming: tuple[MissingInformation, ...],
+    ) -> tuple[MissingInformation, ...]:
+        # Stable IDs make this an idempotent accumulation boundary: replanning
+        # can observe the same absence repeatedly without inflating state.
+        items_by_id = {
+            item.missing_information_id: item for item in accumulated
+        }
+        for item in incoming:
+            items_by_id.setdefault(item.missing_information_id, item)
+        return tuple(items_by_id.values())

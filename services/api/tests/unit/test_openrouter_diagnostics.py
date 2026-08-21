@@ -1,8 +1,15 @@
+import asyncio
 import json
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.config import LLMProvider, LLMSettings, ModelPolicy
-from app.diagnostics.openrouter import _failure_result, resolved_configuration
+from app.diagnostics.openrouter import (
+    _failure_result,
+    resolved_configuration,
+    run_plain_call,
+)
 
 
 def _settings() -> LLMSettings:
@@ -22,6 +29,57 @@ def _settings() -> LLMSettings:
 
 
 class OpenRouterDiagnosticTests(unittest.TestCase):
+    def test_plain_gate_accepts_a_transport_response_with_a_choice(self) -> None:
+        class Completions:
+            async def create(self, **_request):
+                return SimpleNamespace(
+                    choices=(
+                        SimpleNamespace(
+                            message=SimpleNamespace(content="Okay, acknowledged."),
+                        ),
+                    ),
+                    model="resolved-provider-model",
+                )
+
+        class Client:
+            chat = SimpleNamespace(completions=Completions())
+
+            async def close(self):
+                return None
+
+        with patch(
+            "app.diagnostics.openrouter._sdk_client",
+            return_value=Client(),
+        ):
+            result = asyncio.run(run_plain_call(_settings()))
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["resolved_model"], "resolved-provider-model")
+
+    def test_plain_gate_accepts_reasoning_choice_without_visible_text(self) -> None:
+        class Completions:
+            async def create(self, **_request):
+                return SimpleNamespace(
+                    choices=(
+                        SimpleNamespace(message=SimpleNamespace(content=None)),
+                    ),
+                    model="resolved-provider-model",
+                )
+
+        class Client:
+            chat = SimpleNamespace(completions=Completions())
+
+            async def close(self):
+                return None
+
+        with patch(
+            "app.diagnostics.openrouter._sdk_client",
+            return_value=Client(),
+        ):
+            result = asyncio.run(run_plain_call(_settings()))
+
+        self.assertEqual(result["status"], "PASS")
+
     def test_resolved_configuration_reports_presence_without_exposing_key(self) -> None:
         configuration = resolved_configuration(_settings())
 

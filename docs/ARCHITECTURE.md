@@ -356,7 +356,7 @@ the observed file and its failure-location link. Renderer summaries also keep
 budget exhaustion, no progress, planning limits, provider unavailability, and
 plan-validation failure semantically distinct from a failed runtime snapshot.
 
-## V2.19 investigation console integration
+## V2 completion investigation runtime stabilization
 
 The user-facing V2 path now reuses the existing persisted snapshot mechanism:
 
@@ -370,8 +370,9 @@ structured InvestigationRequest
   -> React InvestigationDashboard
 ```
 
-`InvestigationRun.state` contains compact planning rounds, normalized Evidence,
-derived Facts, MissingInformation, validated hypotheses, tool-call budget
+`InvestigationRun.state` contains compact planning rounds, safe planner metadata,
+normalized Evidence, derived Facts, MissingInformation, compact action history,
+validated hypotheses, safe hypothesis-generation metadata, tool-call budget
 accounting, and a termination reason. The nullable `investigation_state` JSON
 column extends the existing workflow-run row; V1 merge-readiness rows continue
 to use their existing typed request/result and step table. The UI selects the
@@ -392,9 +393,19 @@ path. It obtains each bounded typed plan through the configured LLM client,
 validates it through the existing `PlanValidator`, and executes it through the
 existing `AgentExecutor`. A validated round plan and each completed round are
 persisted through the same snapshot row and polling path; completed prior
-rounds remain visible when the next plan is saved. The older static-plan helper remains only
-as a compatibility baseline, not as the user-facing route. No new SSE,
+rounds remain visible when the next plan is saved. Failure-location retrieval is
+registered as `get_failure_location`; it now crosses the same tool allowlist,
+plan validation, retry classification, global budget, step lifecycle, Evidence,
+Fact, and snapshot boundaries as every other planned source call. There is no
+hidden post-runtime connector lookup. No new SSE,
 WebSocket, event bus, Langfuse, or OpenTelemetry replacement is introduced.
+
+The deterministic fake provider is a real offline product adapter, not a
+transport-shape-only stub. For the checkout fixture it proposes bounded plans
+from explicit request fields, executes at least two adaptive rounds, and proposes
+one code-change hypothesis only when the derived changed-file and failure-file
+Facts agree. The same deterministic validator and renderer used for real
+providers remain authoritative.
 
 ```text
 redis-prod ----
@@ -1760,6 +1771,12 @@ tool calls, and round position. Facts answer what is known; history answers
 what was tried. The runtime owns legality and bounds; the LLM owns the next
 semantic investigation strategy.
 
+Every completed `PlanningRound` retains the planner's provider, requested model,
+prompt identity/version, execution snapshot, and Evidence/Fact deltas. The final
+runtime snapshot also retains compact action history and hypothesis-generation
+metadata. These are bounded audit fields, not chain-of-thought or raw provider
+content.
+
 ---
 
 # Hypothesis generation
@@ -2117,6 +2134,7 @@ V2.16 Dynamic replanning
 V2.17 Hypothesis generation
 V2.18 Claim/evidence validation
 V2.19 Grounded rendering and initial investigation console (implemented offline)
+V2 completion stabilization Budgeted failure-location tool, truthful fake trajectory, and persisted generation metadata
 V2.20 Component/trajectory evals
 V2.21 Agent-level OTel/Grafana
 V2.22 Replay

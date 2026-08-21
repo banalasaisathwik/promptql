@@ -616,14 +616,20 @@ V2.25
 Live verification and V2 release gates
 ```
 
-V2.19 grounded rendering and the initial investigation console are now
-implemented offline. The console accepts structured incident context, reuses
+V2.19 grounded rendering and the initial investigation console are implemented.
+The completion stabilization pass makes the default fake checkout scenario use
+the real adaptive planner/validator/executor path rather than completing after a
+typed-provider failure. Failure-location Evidence is now collected through a
+registered, budgeted read-only tool. The console accepts structured incident context, reuses
 the persisted live-run snapshot path, and shows Evidence, Facts, missing
 information, validated hypotheses, budget/termination state, and a
 deterministic grounded result. It does not expose raw model causal prose.
 
-Live provider/database verification, crash recovery, replay, and high-fan-out
-streaming remain future work.
+Planner and hypothesis schemas have current live OpenRouter evidence. Code
+diagnosis, V2 observability/evals, and final release verification remain active
+completion work. Database verification is externally gated by the currently
+rejected local Neon credentials. Crash recovery, replay, and high-fan-out
+streaming remain intentionally deferred.
 
 ---
 

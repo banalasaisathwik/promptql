@@ -82,6 +82,10 @@ class InvestigationApiTests(unittest.TestCase):
         self.assertEqual(completed.status, "completed")
         self.assertIsNotNone(completed.state)
         self.assertTrue(completed.state.evidence)
+        self.assertGreaterEqual(len(completed.state.rounds), 2)
+        self.assertTrue(completed.state.facts)
+        self.assertEqual(len(completed.state.validated_hypotheses), 1)
+        self.assertEqual(len(completed.result.supported_hypotheses), 1)
 
 
 if __name__ == "__main__":

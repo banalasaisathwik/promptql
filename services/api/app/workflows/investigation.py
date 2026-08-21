@@ -5,9 +5,7 @@ import logging
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from app.connectors.errors import ConnectorUnavailableError, FixtureNotFoundError
 from app.connectors.incident_fakes import FakeIncidentSource
-from app.connectors.models import FailureLocationEvidenceRequest
 from app.connectors.github_code_fakes import FakeGitHubCodeEvidenceSource
 from app.connectors.protocols import GitHubCodeEvidenceSource, IncidentSource, JiraConnector
 from app.explanations import LLMClient, TypedLLMClient
@@ -15,16 +13,9 @@ from app.investigations import (
     AgentExecutor,
     ExecutionBudget,
     ExecutionStepStatus,
-    InvestigationPlan,
     InvestigationRequest,
-    Literal,
-    PlanArgument,
-    PlanStep,
     ToolInvoker,
-    MissingInformation,
-    MissingInformationKind,
 )
-from app.investigations.fact_derivation import derive_facts
 from app.investigations.planning import PlanValidator, TypedLLMPlanner
 from app.investigations.hypotheses import (
     DeterministicHypothesisValidator,
@@ -36,8 +27,7 @@ from app.investigations.hypotheses import (
     render_grounded_result,
 )
 from app.investigations.hypotheses.instructions import HYPOTHESIS_PROMPT_VERSION
-from app.investigations.execution import InvestigationExecutionState
-from app.investigations.replanning import AdaptiveInvestigationRuntime, AdaptiveInvestigationState, ContinuationReason
+from app.investigations.replanning import AdaptiveInvestigationRuntime, AdaptiveInvestigationState
 from app.runtime import (
     RunRepository,
     RunStatus,
@@ -50,12 +40,11 @@ from app.runtime.investigation_models import (
     InvestigationRuntimeSnapshot,
     InvestigationStepSnapshot,
 )
-from app.tools import InvestigationToolId
 from app.tools import build_tool_adapters, build_tool_registry
 
 
 INVESTIGATION_WORKFLOW_NAME = "investigation"
-INVESTIGATION_WORKFLOW_VERSION = "2.19"
+INVESTIGATION_WORKFLOW_VERSION = "2.19.1"
 DEFAULT_TOOL_CALL_BUDGET = 10
 _HYPOTHESIS_DIAGNOSTIC_LOGGER = logging.getLogger("promptql.runtime")
 
@@ -185,6 +174,7 @@ class InvestigationWorkflowService:
                 round_number=round_number,
                 plan_id=f"round-{round_number}",
                 plan_validation_status="accepted",
+                planner_metadata=planned.metadata,
                 steps=tuple(
                     InvestigationStepSnapshot(
                         step_id=step.step_id,
@@ -228,11 +218,6 @@ class InvestigationWorkflowService:
                 started_at,
                 RuntimeErrorCode.INVESTIGATION_RUNTIME_FAILURE,
             )
-        # Compatibility boundary: failure-location evidence remains a bounded
-        # post-processing lookup in Pass A, rather than becoming a planner tool.
-        adaptive_state = await self._add_failure_location_to_adaptive_state(
-            adaptive_state, running.request
-        )
         # Execution state is converted to a compact API snapshot before any
         # hypothesis generation, so Facts remain the source of truth for both
         # observability and final rendering.
@@ -240,6 +225,7 @@ class InvestigationWorkflowService:
 
         validated_hypotheses = ()
         rejected_count = 0
+        hypothesis_metadata = None
         termination_reason = _grounded_reason(adaptive_state.continuation_reason.value)
         try:
             hypothesis_input = build_hypothesis_generation_input(
@@ -254,13 +240,17 @@ class InvestigationWorkflowService:
                     continuation_reason=adaptive_state.continuation_reason,
                 ),
             )
-            hypothesis_generator = TypedLLMHypothesisGenerator(self._llm_client)
-            generated = await hypothesis_generator.generate(hypothesis_input)
-            validation_result = DeterministicHypothesisValidator().validate(
-                generated.candidates, adaptive_state.facts
-            )
-            validated_hypotheses = validation_result.accepted_hypotheses
-            rejected_count = len(validation_result.rejected_candidates)
+            if adaptive_state.facts:
+                # An empty Fact set has no admissible causal support. Skipping
+                # the provider call is cheaper and keeps abstention deterministic.
+                hypothesis_generator = TypedLLMHypothesisGenerator(self._llm_client)
+                generated = await hypothesis_generator.generate(hypothesis_input)
+                hypothesis_metadata = generated.metadata
+                validation_result = DeterministicHypothesisValidator().validate(
+                    generated.candidates, adaptive_state.facts
+                )
+                validated_hypotheses = validation_result.accepted_hypotheses
+                rejected_count = len(validation_result.rejected_candidates)
         except HypothesisGenerationError as error:
             _HYPOTHESIS_DIAGNOSTIC_LOGGER.error(
                 json.dumps(
@@ -273,12 +263,15 @@ class InvestigationWorkflowService:
                     sort_keys=True,
                 )
             )
-            termination_reason = GroundedTerminationReason.PROVIDER_FAILURE
+            termination_reason = (
+                GroundedTerminationReason.HYPOTHESIS_GENERATION_FAILURE
+            )
 
         state = state.model_copy(
             update={
                 "validated_hypotheses": validated_hypotheses,
                 "rejected_hypothesis_count": rejected_count,
+                "hypothesis_generation_metadata": hypothesis_metadata,
                 # The snapshot reports the adaptive runtime's actual stopping
                 # condition; the rendered result may separately report that
                 # hypothesis generation was unavailable.
@@ -297,28 +290,6 @@ class InvestigationWorkflowService:
                 "completed_at": datetime.now(UTC),
                 "state": state,
                 "result": grounded_result,
-            }
-        )
-        self._repository.save(completed)
-        return completed
-
-    async def _complete_without_evidence(
-        self, running: InvestigationRun, started_at: datetime
-    ) -> InvestigationRun:
-        state = self._empty_state().model_copy(
-            update={
-                "termination_reason": GroundedTerminationReason.COMPLETED.value,
-            }
-        )
-        result = render_grounded_result(
-            (), (), (), GroundedTerminationReason.COMPLETED
-        )
-        completed = running.model_copy(
-            update={
-                "status": RunStatus.COMPLETED,
-                "completed_at": datetime.now(UTC),
-                "state": state,
-                "result": result,
             }
         )
         self._repository.save(completed)
@@ -361,123 +332,13 @@ class InvestigationWorkflowService:
         )
 
     @staticmethod
-    def _pending_state(plan: InvestigationPlan) -> InvestigationRuntimeSnapshot:
-        return InvestigationRuntimeSnapshot(
-            rounds=(
-                InvestigationPlanningRoundSnapshot(
-                    round_number=1,
-                    plan_id="round-1",
-                    plan_validation_status="accepted",
-                    steps=tuple(
-                        InvestigationStepSnapshot(
-                            step_id=step.step_id,
-                            tool_id=step.tool_id,
-                            status=ExecutionStepStatus.PENDING,
-                            attempts=0,
-                        )
-                        for step in plan.steps
-                    ),
-                    completed=False,
-                ),
-            ),
-            max_tool_calls=DEFAULT_TOOL_CALL_BUDGET,
-            used_tool_calls=0,
-            remaining_tool_calls=DEFAULT_TOOL_CALL_BUDGET,
-        )
-
-    async def _add_failure_location_evidence(
-        self,
-        execution: InvestigationExecutionState,
-        request: InvestigationRequest,
-    ) -> InvestigationExecutionState:
-        if request.incident_reference is None:
-            return execution
-        try:
-            failure_location = await self._incident_source.get_failure_location_evidence(
-                FailureLocationEvidenceRequest(
-                    incident_reference=request.incident_reference
-                )
-            )
-        except (ConnectorUnavailableError, FixtureNotFoundError):
-            return execution.model_copy(
-                update={
-                    "missing_information": (
-                        *execution.missing_information,
-                        MissingInformation(
-                            missing_information_id="missing:failure-location",
-                            kind=MissingInformationKind.SOURCE_DATA_UNAVAILABLE,
-                            detail="The incident failure location was unavailable.",
-                        ),
-                    )
-                }
-            )
-        evidence_by_id = {item.evidence_id: item for item in execution.evidence}
-        evidence_by_id.setdefault(failure_location.evidence_id, failure_location)
-        evidence = tuple(evidence_by_id.values())
-        return execution.model_copy(update={"evidence": evidence, "facts": derive_facts(evidence)})
-
-    async def _add_failure_location_to_adaptive_state(
-        self,
-        state: AdaptiveInvestigationState,
-        request: InvestigationRequest,
-    ) -> AdaptiveInvestigationState:
-        if request.incident_reference is None:
-            return state
-        try:
-            failure_location = await self._incident_source.get_failure_location_evidence(
-                FailureLocationEvidenceRequest(incident_reference=request.incident_reference)
-            )
-        except (ConnectorUnavailableError, FixtureNotFoundError):
-            return state.model_copy(update={"missing_information": (*state.missing_information, MissingInformation(missing_information_id="missing:failure-location", kind=MissingInformationKind.SOURCE_DATA_UNAVAILABLE, detail="The incident failure location was unavailable."))})
-        evidence_by_id = {item.evidence_id: item for item in state.evidence}
-        evidence_by_id.setdefault(failure_location.evidence_id, failure_location)
-        evidence = tuple(evidence_by_id.values())
-        return state.model_copy(update={"evidence": evidence, "facts": derive_facts(evidence)})
-
-    @staticmethod
-    def _snapshot_from_execution(
-        execution: InvestigationExecutionState,
-        plan: InvestigationPlan,
-    ) -> InvestigationRuntimeSnapshot:
-        tools_by_step = {step.step_id: step.tool_id for step in plan.steps}
-        steps = tuple(
-            InvestigationStepSnapshot(
-                step_id=step.step_id,
-                tool_id=tools_by_step[step.step_id],
-                status=step.status,
-                attempts=step.attempts,
-                failure_code=step.failure.code.value if step.failure else None,
-                failure_message=step.failure.message if step.failure else None,
-                block_reason=step.block_reason,
-            )
-            for step in execution.step_states
-        )
-        round_snapshot = InvestigationPlanningRoundSnapshot(
-            round_number=1,
-            plan_id="round-1",
-            plan_validation_status="accepted",
-            steps=steps,
-            evidence_delta_ids=tuple(item.evidence_id for item in execution.evidence),
-            fact_delta_ids=tuple(item.fact_id for item in execution.facts),
-            completed=True,
-        )
-        return InvestigationRuntimeSnapshot(
-            rounds=(round_snapshot,),
-            evidence=execution.evidence,
-            facts=execution.facts,
-            missing_information=execution.missing_information,
-            max_tool_calls=execution.budget.max_tool_calls,
-            used_tool_calls=execution.budget.used_tool_calls,
-            remaining_tool_calls=execution.budget.remaining_tool_calls,
-        )
-
-    @staticmethod
     def _snapshot_from_adaptive(state: AdaptiveInvestigationState) -> InvestigationRuntimeSnapshot:
         rounds = tuple(
             InvestigationPlanningRoundSnapshot(
                 round_number=round.round_number,
                 plan_id=round.plan_id,
                 plan_validation_status="accepted",
+                planner_metadata=round.planner_metadata,
                 steps=tuple(
                     InvestigationStepSnapshot(
                         step_id=step.step_id,
@@ -499,6 +360,7 @@ class InvestigationWorkflowService:
             evidence=state.evidence,
             facts=state.facts,
             missing_information=state.missing_information,
+            action_history=state.action_history,
             max_tool_calls=DEFAULT_TOOL_CALL_BUDGET,
             used_tool_calls=DEFAULT_TOOL_CALL_BUDGET - state.remaining_tool_calls,
             remaining_tool_calls=state.remaining_tool_calls,
@@ -512,71 +374,6 @@ def _grounded_reason(reason: str) -> GroundedTerminationReason:
         "tool_call_budget_exhausted": GroundedTerminationReason.BUDGET_EXHAUSTED,
         "no_progress": GroundedTerminationReason.NO_PROGRESS,
         "max_planning_rounds": GroundedTerminationReason.PLANNING_LIMIT_REACHED,
-        "planner_failure": GroundedTerminationReason.PROVIDER_FAILURE,
+        "planner_failure": GroundedTerminationReason.PLANNER_FAILURE,
         "plan_validation_failure": GroundedTerminationReason.PLAN_VALIDATION_FAILURE,
     }.get(reason, GroundedTerminationReason.COMPLETED)
-
-
-def _literal(name: str, value: object) -> PlanArgument:
-    return PlanArgument(name=name, value=Literal(value=value))
-
-
-def _build_static_plan(request: InvestigationRequest) -> InvestigationPlan | None:
-    steps: list[PlanStep] = []
-    if request.incident_reference:
-        steps.append(
-            PlanStep(
-                step_id="s1",
-                tool_id=InvestigationToolId.GET_INCIDENT,
-                arguments=(_literal("incident_reference", request.incident_reference),),
-                reason="Collect the incident record.",
-            )
-        )
-    if request.deployment_reference and len(steps) < 5:
-        steps.append(
-            PlanStep(
-                step_id=f"s{len(steps) + 1}",
-                tool_id=InvestigationToolId.GET_DEPLOYMENTS,
-                arguments=(_literal("deployment_reference", request.deployment_reference),),
-                reason="Collect deployment timing and revision evidence.",
-            )
-        )
-    if request.telemetry_window and len(steps) < 5:
-        steps.append(
-            PlanStep(
-                step_id=f"s{len(steps) + 1}",
-                tool_id=InvestigationToolId.QUERY_TELEMETRY,
-                arguments=tuple(
-                    _literal(name, value)
-                    for name, value in request.telemetry_window.model_dump().items()
-                ),
-                reason="Collect bounded telemetry evidence.",
-            )
-        )
-    if request.pull_request_number and len(steps) < 5:
-        steps.append(
-            PlanStep(
-                step_id=f"s{len(steps) + 1}",
-                tool_id=InvestigationToolId.GET_PULL_REQUEST,
-                arguments=(
-                    _literal("repository_owner", request.repository_owner),
-                    _literal("repository_name", request.repository_name),
-                    _literal("pr_number", request.pull_request_number),
-                ),
-                reason="Collect pull-request evidence.",
-            )
-        )
-    if request.pull_request_number and len(steps) < 5:
-        steps.append(
-            PlanStep(
-                step_id=f"s{len(steps) + 1}",
-                tool_id=InvestigationToolId.GET_DIFF,
-                arguments=(
-                    _literal("repository_owner", request.repository_owner),
-                    _literal("repository_name", request.repository_name),
-                    _literal("pr_number", request.pull_request_number),
-                ),
-                reason="Collect changed-file evidence.",
-            )
-        )
-    return InvestigationPlan(steps=tuple(steps)) if steps else None

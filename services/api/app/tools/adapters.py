@@ -146,6 +146,34 @@ class GetIncidentTool(_EvidenceTool):
             return self._failed(error)
 
 
+class GetFailureLocationTool(_EvidenceTool):
+    # PURPOSE: Put failure-location retrieval behind the same typed, read-only
+    # adapter boundary as every other external evidence lookup.
+    #
+    # WHY: Calling IncidentSource directly from the workflow would hide a
+    # connector call from plan validation, retry policy, budget accounting,
+    # action history, and persisted step state.
+    definition = next(
+        item
+        for item in TOOL_DEFINITIONS
+        if item.tool_id == InvestigationToolId.GET_FAILURE_LOCATION
+    )
+
+    def __init__(self, source: IncidentSource) -> None:
+        self._source = source
+
+    async def execute(self, arguments: Mapping[str, object]) -> ToolResult:
+        # Validation occurs before provider access, just like the other tools;
+        # a planner cannot smuggle arbitrary incident-source arguments through.
+        request = self._arguments(arguments)
+        try:
+            return self._observed(
+                await self._source.get_failure_location_evidence(request)
+            )
+        except (ConnectorUnavailableError, FixtureNotFoundError) as error:
+            return self._failed(error)
+
+
 class GetDeploymentsTool(_EvidenceTool):
     definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.GET_DEPLOYMENTS)
 
@@ -224,6 +252,7 @@ def build_tool_adapters(
         GetCommitTool(github_source),
         GetPullRequestTool(github_source),
         GetDiffTool(github_source),
+        GetFailureLocationTool(incident_source),
         GetIncidentTool(incident_source),
         GetDeploymentsTool(incident_source),
         QueryTelemetryTool(incident_source),

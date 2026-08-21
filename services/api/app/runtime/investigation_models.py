@@ -21,7 +21,8 @@ from app.investigations.execution import (
     ExecutionBlockReason,
     ExecutionStepStatus,
 )
-from app.investigations.hypotheses.models import RejectedHypothesis
+from app.investigations.hypotheses.models import HypothesisGenerationMetadata
+from app.investigations.planning import ActionSummary, PlannerMetadata
 from app.runtime.models import RunStatus, RuntimeErrorInfo
 
 
@@ -39,6 +40,9 @@ class InvestigationPlanningRoundSnapshot(ContractModel):
     round_number: Annotated[int, Field(ge=1)]
     plan_id: NonEmptyString
     plan_validation_status: NonEmptyString
+    # Optionality is a read-compatibility choice for snapshots written before
+    # planner identity was persisted; every new completed round supplies it.
+    planner_metadata: PlannerMetadata | None = None
     steps: tuple[InvestigationStepSnapshot, ...] = ()
     evidence_delta_ids: tuple[NonEmptyString, ...] = ()
     fact_delta_ids: tuple[NonEmptyString, ...] = ()
@@ -59,7 +63,11 @@ class InvestigationRuntimeSnapshot(ContractModel):
     evidence: tuple[Evidence, ...] = ()
     facts: FactSet = ()
     missing_information: tuple[MissingInformation, ...] = ()
+    # Defaults preserve decoding of older JSONB snapshots while new runs expose
+    # the exact bounded context that was available to the next planning round.
+    action_history: tuple[ActionSummary, ...] = ()
     validated_hypotheses: tuple[ValidatedHypothesis, ...] = ()
+    hypothesis_generation_metadata: HypothesisGenerationMetadata | None = None
     rejected_hypothesis_count: Annotated[int, Field(ge=0)] = 0
     max_tool_calls: Annotated[int, Field(ge=0)]
     used_tool_calls: Annotated[int, Field(ge=0)]
