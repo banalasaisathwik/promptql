@@ -1,6 +1,19 @@
-# Current architecture
+# Architecture
 
-This document describes only what is present in the repository now.
+This document describes the system as it exists in the repository today
+(Part 1), followed by forward-looking design notes for work that is not yet
+implemented (Part 2), and closes with standing invariants, non-goals, and the
+milestone sequence used to track progress (Part 3).
+
+For how any given subsystem arrived at its current shape, see the relevant
+ADR in [docs/decisions/](decisions/index.md) (e.g. [ADR-020](decisions/ADR-020-first-class-investigation-evidence.md)
+for the evolution of the evidence model) rather than a narrative here.
+
+---
+
+# Part 1 — Current state
+
+## System overview
 
 ```mermaid
 flowchart LR
@@ -9,7 +22,7 @@ flowchart LR
     API --> PostgreSQL["Managed PostgreSQL<br/>Neon"]
     API -. "read-only REST" .-> GitHub["GitHub"]
     API -. "read-only REST" .-> Jira["Jira Cloud"]
-    API -. "optional structured generation" .-> LLM["Selected OpenAI, Gemini, Groq, or OpenRouter API"]
+    API -. "structured generation" .-> LLM["Selected OpenAI, Gemini, Groq, or OpenRouter API"]
     API -. "OTLP traces and metrics" .-> Observability["Hosted observability<br/>Grafana Cloud"]
     API -. "optional bounded OTLP traces" .-> Langfuse["Langfuse"]
 ```
@@ -18,23 +31,29 @@ Plain-text alternative:
 
 ```text
 browser -> Vite React application -> FastAPI API -> Neon PostgreSQL
-                                      `-> optional selected LLM provider
+                                      `-> selected LLM provider (fake by default)
                                       `-> OTLP traces/metrics -> Grafana Cloud
                                       `-> optional bounded OTLP traces -> Langfuse
 ```
 
-The frontend loads the backend-owned demo scenario catalog, starts or
-synchronously executes a validated connector request, and renders the
-backend-owned merge-readiness decision plus its supporting GitHub and Jira
-fixture evidence. A developer run page repeatedly reads the persisted current
-snapshot for an accepted run. The API also serves `GET /health`.
+The frontend's root route (`/`) renders `InvestigationConsolePage`, which
+submits an investigation request and navigates to `/runs/:runId` to poll the
+persisted snapshot. `/runs/:runId` renders either an investigation dashboard
+or a merge-readiness dashboard depending on the stored `workflow_name`, so a
+merge-readiness run remains viewable if one already exists — but nothing in
+the current routing lets a browser *start* one: `MergeReadinessPage.tsx` and
+`RequestForm.tsx` still exist and have their own tests, but `App.tsx` never
+imports them, so they are unreachable dead code in the running app. The API
+also serves `GET /health`.
 
 ```text
-GET  /v1/demo/pull-request-scenarios -> selectable fixture metadata
-POST /v1/pull-request-inspections    -> combined GitHub and Jira facts
-POST /v1/pull-request-merge-readiness -> runtime run, policy result, and facts
+GET  /v1/demo/pull-request-scenarios       -> selectable fixture metadata
+POST /v1/pull-request-inspections          -> combined GitHub and Jira facts (fixture-only)
+POST /v1/pull-request-merge-readiness      -> synchronous run, policy result, explanation, and facts
 POST /v1/pull-request-merge-readiness-runs -> accepted pending run ID (202)
-GET  /v1/runs/{run_id}               -> persisted typed runtime run
+POST /v1/investigations                    -> accepted pending investigation run ID (202)
+GET  /v1/runs/{run_id}                     -> persisted current run snapshot (merge-readiness or investigation)
+GET  /health                               -> liveness check
 ```
 
 Browser code calls relative `/v1` URLs. Vite proxies that prefix to the local
@@ -45,2192 +64,979 @@ same routing contract.
 
 | Path | Current responsibility |
 | --- | --- |
-| `apps/web` | Browser UI, runtime response validation, backend fixture selection, synchronous/live request submission, snapshot polling, and evidence presentation |
-| `services/api` | Backend HTTP boundary, independently selected fake/live GitHub and Jira connectors, asynchronous workflow execution, PostgreSQL persistence, and pure merge-readiness policy |
+| `apps/web` | Browser UI for the investigation console (request submission, run polling, hypothesis/finding presentation) and a shared run dashboard that also renders a merge-readiness run's decision/evidence if one is opened directly by ID; a merge-readiness *submission* form exists in source but is not reachable from the app's routing |
+| `services/api` | Backend HTTP boundary, independently selected fake/live GitHub and Jira connectors, merge-readiness and investigation workflow execution, PostgreSQL persistence, deterministic policy, planning/execution/hypothesis generation for investigations, and observability export |
 | `packages` | Reserved for reusable TypeScript packages; not yet present |
-| `docs` | Product, architecture, testing, decisions, work records, and learning |
+| `docs` | Product, architecture, testing, decisions, and work records |
 | `infra` | Reserved for future infrastructure configuration; not yet present |
 | `scripts` | Reserved for future repository automation; not yet present |
 
-## Connector inspection module map
-
-The implemented slice is organized so each module answers one question:
+## Module map
 
 ```text
 services/api/app/
-├── connectors/
-│   ├── models.py             # What are valid provider facts?
-│   ├── fixture_catalog.py    # Which demo scenarios exist?
-│   ├── github_fixtures.py    # What GitHub facts belong to each scenario?
-│   ├── jira_fixtures.py      # What Jira facts belong to each scenario?
-│   ├── fakes.py              # How are fixtures looked up?
-│   └── errors.py             # How does lookup failure leave this boundary?
-├── tools/
-│   ├── models.py              # What stable typed tool contracts exist?
-│   ├── registry.py             # Which tool definitions are discoverable?
-│   ├── adapters.py             # How do tools call existing capabilities?
-│   └── errors.py               # How are lookup and argument failures typed?
-├── inspection/
-│   ├── models.py             # What combined application results exist?
-│   └── service.py            # How are GitHub and Jira calls coordinated?
-├── policy/
-│   ├── models.py             # What typed readiness conclusions exist?
-│   └── evaluator.py          # How do provider facts become a decision?
-├── runtime/
-│   ├── models.py             # What run and step snapshots are valid?
-│   ├── state.py              # Which lifecycle transitions are allowed?
-│   └── repository.py         # How can run storage be replaced later?
-├── workflows/
-│   └── merge_readiness.py    # How are connector and policy steps executed?
-├── api/v1/
-│   ├── models.py             # What HTTP-specific error bodies exist?
-│   └── connector_router.py   # Which URLs expose the use case?
-└── main.py                   # How is the FastAPI application assembled?
+├── connectors/          # GitHub/Jira/incident provider access (fake + live)
+├── tools/                # Typed, read-only investigation tool registry over connectors
+├── inspection/           # Fixture-only raw GitHub+Jira lookup (legacy/demo route)
+├── policy/                # Pure merge-readiness decision function
+├── investigations/        # Investigation domain: facts, planning, execution, hypotheses
+│   ├── code_diagnosis/    # Grounded code-location findings + recommendations
+│   ├── fact_derivation/   # Evidence -> deterministic Fact derivation
+│   ├── hypotheses/        # Hypothesis generation, validation, rendering
+│   └── planning/          # Typed LLM planner + deterministic plan validation
+├── explanations/           # Merge-readiness natural-language explanation generation
+├── diagnostics/            # Standalone, explicitly-invoked provider-boundary CLIs
+├── evals/                  # Offline quality/regression harness
+│   └── investigations/     # Investigation-specific component/trajectory evals
+├── runtime/                 # Run/step lifecycle, state machine, persistence contracts
+├── database/                 # SQLAlchemy engine, ORM models, Postgres repository
+├── observability/             # OpenTelemetry tracing/metrics/logging, Langfuse export
+├── workflows/                  # Orchestrates connectors/policy/investigation into one run
+├── api/v1/                      # FastAPI routes and HTTP-facing models
+└── main.py                       # Application assembly (DI wiring, lifespan, routes)
 ```
-
-Durable execution adds these backend modules beside that domain map:
 
 ```text
-services/api/
-├── app/config.py                         # Safe DATABASE_URL parsing
-├── app/database/engine.py                # Engine, pool, and sessions
-├── app/database/models.py                # Relational tables and constraints
-├── app/database/postgres_run_repository.py # Typed snapshot persistence
-├── app/runtime/errors.py                 # Sanitized persistence failures
-└── migrations/                           # Alembic schema history
+apps/web/src/
+├── routing.ts                          # Path -> page mapping (merge-readiness, investigation, run dashboard)
+├── App.tsx                              # Top-level route switch
+└── features/inspection/
+    ├── types.ts                          # Shared TypeScript data shapes
+    ├── requestValidation.ts               # Form input -> typed request
+    ├── responseValidation.ts               # Untrusted network JSON -> typed union
+    ├── investigationRequest.ts              # Investigation-specific request shaping
+    ├── api.ts / investigationApi.test.ts     # Backend /v1 calls
+    ├── apiError.ts                            # Client failure representation
+    ├── runPolling.ts                           # Shared snapshot-polling loop
+    ├── useRunSnapshot.ts                        # Polling hook used by both dashboards
+    ├── MergeReadinessPage.tsx                    # Merge-readiness request form (unreachable — App.tsx never imports it)
+    ├── RunDashboardPage.tsx                       # Live run dashboard; dispatches on workflow_name
+    ├── InvestigationConsolePage.tsx                # Investigation request submission UI (the actual `/` route)
+    ├── InvestigationDashboard.tsx                   # Live investigation run dashboard
+    └── components/
+        ├── RequestForm.tsx                           # Merge-readiness request input form (used only by the unreachable page above)
+        └── MergeReadinessPanel.tsx                    # Decision/evidence rendering, reused by RunDashboardPage for a merge-readiness run
 ```
 
-Runtime observability adds a provider-neutral boundary:
-
-```text
-services/api/app/observability/
-|-- contracts.py                 # Closed attributes, labels, and categories
-|-- runtime_telemetry.py         # Domain spans, metrics, and terminal events
-|-- observed_run_repository.py   # Storage decorator and checkpoint spans
-|-- structured_logging.py        # Safe correlated JSON events
-`-- setup.py                     # Providers, exporters, FastAPI setup, shutdown
-```
-
-Internal merge-readiness explanation adds a provider-neutral model boundary:
-
-```text
-services/api/app/explanations/
-|-- models.py                    # Minimized input and structured output
-|-- protocols.py                 # LLMClient operation contract
-|-- fakes.py                     # Deterministic local/test implementation
-|-- factory.py                   # Application-boundary provider selection
-|-- openai_client.py             # Async Responses Structured Output adapter
-|-- gemini_client.py             # Google compatibility adapter and compact claims
-|-- groq_client.py               # Groq strict JSON Schema compatibility adapter
-|-- openrouter_client.py         # OpenRouter reuse of the chat-completions adapter
-|-- errors.py                    # Typed sanitized failure categories
-|-- validator.py                # Ground generated codes in policy facts
-|-- templates.py                # Render approved user-facing wording
-`-- service.py                   # Generation, parsing, validation, rendering
-```
-
-A manually invoked, versioned eval boundary reuses that production path without
-entering FastAPI or application persistence:
-
-```text
-services/api/app/evals/
-|-- cases.py                     # Development and untouched holdout inputs
-|-- models.py                    # Typed observations, metrics, reports, baselines
-|-- observation.py               # One production adapter/parser/validator attempt
-|-- graders.py                   # Pure sets, rates, reliability, thresholds
-|-- reporting.py                 # Safe JSONL/JSON, summaries, comparisons
-`-- runner.py                    # Repeated samples, pacing, gates, and CLI
-```
-
-The logical prompt is `merge-readiness-explanation` version `v1`. The eleven
-inspected Stage 1 cases are `merge-readiness-development-v1`; six unexecuted
-variations form `merge-readiness-holdout-v1`. Expected claims always come from
-the pure policy and shared `required_explanation_claims()` function.
-
-`runner.py` defaults to three serial samples per case and a one-second delay
-between calls. Pacing is outside measured provider latency and never retries a
-failure. Every call becomes one observation. `graders.py` keeps all attempts in
-provider/attempt denominators but includes only returned candidates in model-
-quality denominators. The completed report separately states execution,
-quality-threshold, operational-threshold, and combined release outcomes.
-
-JSONL observations flush incrementally under ignored `local-artifacts/`; a
-typed JSON report and optional compatible baseline are written after grading.
-Normal holdout artifacts and console output contain aggregates only. Explicit
-`--debug-holdout-details` reveals per-case holdout claims and therefore spends
-that holdout. No artifact contains prompts, generated prose, connector
-payloads, repository/Jira identity, credentials, raw responses, exception text,
-or cost without explicit versioned pricing configuration.
-
-```text
-apps/web/src/features/inspection/
-├── types.ts                  # What data shapes exist in TypeScript?
-├── requestValidation.ts      # How does form text become a request?
-├── responseValidation.ts     # How is unknown network JSON proven safe?
-├── apiError.ts               # How are client failures represented?
-├── api.ts                    # How does the browser call /v1?
-├── MergeReadinessPage.tsx     # How do analysis UI states transition?
-└── components/
-    ├── RequestForm.tsx       # How is request input rendered?
-    └── MergeReadinessPanel.tsx # How are decisions and evidence rendered?
-```
+Each `.test.ts`/`.test.tsx` file next to its module is a colocated unit test,
+omitted above for brevity.
 
 ## Dependency and ownership boundaries
 
-- Bun owns JavaScript and TypeScript dependencies and workspace scripts.
-- `apps/web` owns browser implementation and its React/Vite dependencies.
-- uv owns dependencies declared in `services/api/pyproject.toml`.
-- `services/api` owns backend behavior and does not use Bun for Python packages.
-- No shared TypeScript package currently exists; introduce one only for a
-  concrete cross-package need.
-- External browser and future connector data must be validated at their system
-  boundaries.
-- The API contains frozen Pydantic contracts, deterministic in-memory GitHub
-  and Jira fakes, and asynchronous read-only REST connectors for GitHub and
-  Jira Cloud. Both default to credential-free `fake` mode and neither live mode
-  falls back to fixture data.
-- `GET /v1/demo/pull-request-scenarios` is explicitly demo-only. The separate
-  raw-inspection route remains fixture-only. The merge-readiness workflow uses
-  the application-selected GitHub connector.
-- Raw inspection routes delegate to `app.inspection.service`. The readiness
-  route delegates to `MergeReadinessWorkflowService`; routes contain neither
-  connector sequencing nor policy rules.
-- `app.policy.evaluate_merge_readiness` is a pure domain function. It accepts
-  typed GitHub and Jira facts, performs no connector or infrastructure calls,
-  and returns every verified blocker plus explicit missing information and
-  evidence references. `POST /v1/pull-request-merge-readiness` invokes it after
-  recorded connector steps; the older inspection endpoint remains facts-only.
-- `MergeReadinessExplanationService` accepts only a completed
-  `MergeReadinessResult`. It minimizes that result to stable decision,
-  reason, and action enums before calling an injected `LLMClient`. Application
-  assembly selects the deterministic fake by default or an explicitly
-  configured async `OpenAILLMClient`, `GeminiLLMClient`, or `GroqLLMClient`.
-  The OpenAI adapter uses Responses
-  Structured Outputs with `store=False`, a configured timeout/token limit, and
-  SDK retries disabled. Pydantic validates generated structure, then
-  `StrictMergeReadinessExplanationValidator` requires the generated
-  decision/reason/action codes to be supported and complete relative to the
-  full policy result. Generated prose is discarded. Approved templates render
-  the existing API/frontend explanation after a terminal run commits or is
-  retrieved; explanations are not persisted.
-- `GitHubConnector` is an asynchronous protocol shared by fake and HTTP
-  implementations. The application factory reads validated settings and
-  injects one implementation; the workflow neither knows nor branches on the
-  source. Raw REST JSON is validated and normalized inside `github_http.py`.
-- `JiraConnector` is an asynchronous key-based protocol. GitHub owns issue-key
-  extraction; the workflow passes the validated key to the independently
-  selected Jira connector. Raw Jira JSON and Basic authentication remain inside
-  `jira_http.py` and the application factory.
-- Required checks and approvals are facts only when branch rules or protection
-  evidence supplies their requirements. Missing permissions or indeterminate
-  evidence produces an `unknown` policy result unless another verified blocker
-  exists. GitHub's nullable `mergeable` field is likewise indeterminate.
-- Jira custom status names are display evidence only. Jira status-category keys
-  normalize to the existing to-do, in-progress, and done facts consumed by the
-  pure policy. Standard Jira has no universal blocker field, so live Jira marks
-  blocker evidence unknown rather than inventing a site-specific fact. V1
-  treats this metadata as optional: an explicit `BLOCKED` fact blocks, while
-  `UNKNOWN` remains visible in evidence but creates neither missing required
-  information nor a retry action.
-- GitHub and Jira source modes are selected independently, supporting all four
-  fake/live combinations. A bounded `runtime.connector_sources.selected`
-  startup event makes the selected pair visible in server logs, and connector
-  spans identify the source used by each operation. `RunSources` persists the
-  bounded GitHub, Jira, and configured explanation source in nullable checked
-  columns and exposes them through POST and GET. A read-time response uses the
-  provider that actually enriched that response; old rows remain readable with
-  unknown connector sources.
-- The basic runtime creates a unique run, records three ordered steps, enforces
-  terminal state transitions, and returns immutable Pydantic snapshots. A
-  completed run contains `result`; a failed run returns HTTP `500`, contains a
-  sanitized error, and has `result=null` on the synchronous route.
-- `POST /v1/pull-request-merge-readiness-runs` is additive developer-facing
-  execution: it first commits a pending snapshot, returns `202 Accepted` with
-  its run ID, and starts the existing workflow in a process-local task. The
-  task registry keeps only task references and cancels them at app shutdown; it
-  is not durable execution or crash recovery. PostgreSQL snapshots committed
-  before a crash remain readable.
-- `RunRepository` isolates workflow execution from storage. Production route
-  dependencies require `PostgresRunRepository`; memory is available only when
-  unit and HTTP tests inject it explicitly.
-- One application-lifetime SQLAlchemy engine owns a small connection pool.
-  Repository methods open short transactions and release their sessions before
-  GitHub, Jira, or policy work begins. PostgreSQL stores run identity, status,
-  timestamps, workflow version, and step ordering relationally. Request,
-  connector facts, typed result, and sanitized errors are JSONB snapshots that
-  are revalidated through Pydantic on retrieval.
-- Alembic owns schema creation. Application startup validates connectivity and
-  required tables but never runs migrations or calls `create_all()`.
-- Terminal step and terminal run state are saved in one transaction. The API
-  returns `200` only after a completed result commits, `500` only after a failed
-  run commits, and sanitized `503` when durability cannot be confirmed.
-- One FastAPI server span parents a manual workflow span, three step spans, and
-  explicit persistence spans. `run_id` may correlate spans and safe JSON logs,
-  but IDs and user-controlled values are forbidden metric labels. Terminal run
-  measurements and logs occur only after the terminal database commit.
-- An independently invoked explanation call creates one
-  `merge_readiness.explanation.generate` span and bounded duration/token
-  metrics. Span attributes include the stable prompt ID/version, a short
-  SHA-256 fingerprint of the configured model, fixed provider, operation,
-  result, sanitized failure, and token counts. Operators can compare the
-  fingerprint with their known deployment configuration without exporting an
-  arbitrary environment value.
-  Model and prompt identity never become metric labels. Prompts, outputs,
-  repository/Jira identities, request IDs, credentials, and exception text are
-  excluded.
-- OpenTelemetry exports traces and metrics through OTLP HTTP/protobuf when
-  explicitly enabled. Grafana Cloud is configuration, not a domain dependency;
-  setup and exporter failures degrade safely without changing HTTP, runtime,
-  policy, or persistence behavior.
-- The investigation runtime uses the same OpenTelemetry API for a correlated
-  root trace and bounded stage spans. A separately enabled, failure-isolated
-  OTLP trace exporter can send those spans to Langfuse. Only safe identifiers,
-  counts, task/provider/model/prompt-version metadata, provider-reported token
-  counts, duration, and closed failure categories cross that boundary. Prompt
-  text, questions, code, Evidence/Fact bodies, candidates, provider responses,
-  endpoints, headers, and credentials do not.
-- Frontend network data remains `unknown` until `responseValidation.ts` proves
-  the expected runtime structure. The parser accepts pending, running,
-  completed, failed, and cancelled snapshots as distinct unions. The dashboard
-  shows run ID, status, ordered steps, timing, source provenance, sanitized
-  failures, final backend result, and a pretty-printed copy of the validated
-  run without deriving a policy decision.
+- Bun owns JavaScript/TypeScript dependencies and workspace scripts;
+  `apps/web` owns its own React/Vite dependencies. No shared TypeScript
+  package exists yet — introduce one only for a concrete cross-package need.
+- uv owns dependencies declared in `services/api/pyproject.toml`;
+  `services/api` does not use Bun for Python packages.
+- `GET /v1/demo/pull-request-scenarios` and `POST /v1/pull-request-inspections`
+  are fixture-only: `inspection/service.py` constructs `FakeGitHubConnector`
+  and `FakeJiraConnector` directly and never reads connector-mode
+  configuration. Every other route uses the application-selected connector.
+- `POST /v1/pull-request-merge-readiness` and the live-run routes delegate to
+  `MergeReadinessWorkflowService` / `InvestigationWorkflowService`; routes
+  contain neither connector sequencing nor policy/planning logic
+  (`api/v1/connector_router.py`).
+- `app.policy.evaluate_merge_readiness` is a pure function: it accepts typed
+  GitHub/Jira facts, performs no I/O, and returns every verified blocker plus
+  explicit missing-information and evidence references
+  (`policy/evaluator.py`). A blocker takes precedence over missing
+  information, which takes precedence over `READY`.
+- GitHub and Jira connector source (`fake` or live) are selected
+  independently via `PROMPTQL_GITHUB_CONNECTOR` / `PROMPTQL_JIRA_CONNECTOR`;
+  both default to `fake`, and neither live mode falls back to fixture data on
+  failure (`config.py`, `connectors/factory.py`). `RunSources` persists the
+  GitHub, Jira, and explanation source actually used by a run.
+- `GitHubConnector` and `JiraConnector` are async protocols shared by fake
+  and HTTP implementations (`connectors/protocols.py`); the workflow neither
+  knows nor branches on which implementation it received. Raw provider JSON
+  is validated and normalized inside `github_http.py` / `jira_http.py` /
+  `github_code_http.py` before it becomes a domain value.
+- `MergeReadinessWorkflowService` runs exactly three ordered steps —
+  fetch GitHub facts, fetch Jira facts, evaluate policy — persisting a
+  snapshot at each transition through the injected `RunRepository`
+  (`workflows/merge_readiness.py`). A completed run carries `result`; a
+  failed run returns HTTP `500` with a sanitized error and `result=null` on
+  the synchronous route.
+- `POST /v1/pull-request-merge-readiness-runs` and `POST /v1/investigations`
+  are both additive, asynchronous: each first commits a pending snapshot,
+  returns `202 Accepted` with the run ID, and continues the workflow in a
+  process-local task owned by `LiveRunTaskRegistry`, which cancels
+  outstanding tasks at app shutdown. This is not durable execution — a crash
+  loses in-flight work, though already-committed PostgreSQL snapshots remain
+  readable.
+- `RunRepository` isolates workflow execution from storage; production route
+  dependencies require `PostgresRunRepository`, wrapped by
+  `ObservedRunRepository` for telemetry (`api/v1/connector_router.py`).
+- One application-lifetime SQLAlchemy engine owns a 5-connection pool with a
+  5-second timeout and pings/recycles connections
+  (`database/engine.py`). Startup (`verify_database_ready`) fails fast if the
+  `workflow_runs`/`workflow_steps` tables or the `investigation_state` column
+  are missing, rather than accepting requests it cannot persist. Alembic
+  owns schema creation; the application never runs migrations or calls
+  `create_all()`.
+- `GET /v1/runs/{run_id}` returns one persisted current snapshot and selects
+  its typed response shape (`MergeReadinessResponse` vs
+  `InvestigationResponse`) from the stored `workflow_name`, so both workflow
+  kinds share one polling resource without client-side inference
+  (`api/v1/connector_router.py`).
+- OpenTelemetry traces and metrics export via OTLP HTTP/protobuf only when
+  `PROMPTQL_TELEMETRY_ENABLED=true` and an endpoint or console exporter is
+  configured; a separately gated Langfuse OTLP traces-only exporter can share
+  the same tracer provider (`observability/setup.py`). Both exporters are
+  wrapped by a failure-isolating decorator, so a setup or export failure logs
+  one bounded warning and never changes HTTP, runtime, policy, or persistence
+  behavior. `run_id` may correlate spans and logs; user-controlled values are
+  never metric labels.
+- Frontend network responses remain `unknown` until `responseValidation.ts`
+  proves the expected discriminated snapshot shape (`pending` / `running` /
+  `completed` / `failed` / `cancelled`) before rendering.
 
-## Live run dashboard
+## Connectors subsystem
 
-`GET /v1/runs/{run_id}` means **the persisted current workflow snapshot**. The
-live dashboard at `/runs/:runId` observes that state by issuing a serialized
-GET request about once per second while the snapshot is `pending` or `running`.
-It stops once the snapshot is `completed`, `failed`, or `cancelled`, and also
-stops and aborts its request on route change or component unmount. A temporary
-refresh failure remains a dashboard refresh notice; it never changes a
-workflow's backend-owned status to `failed`.
+`connectors/` (`services/api/app/connectors/`) provides normalized,
+provider-neutral access to GitHub, Jira, and incident/operational data behind
+three async protocols in `protocols.py`: `GitHubConnector`, `JiraConnector`,
+and `GitHubCodeEvidenceSource`/`IncidentSource` for investigation evidence.
 
-The page can open any existing persisted ID, including after a browser refresh.
-It does not keep critical run state only in React memory. The immediate live
-flow is:
+- `factory.py` selects fake or HTTP implementations from `GitHubSettings` /
+  `JiraSettings` mode (`config.py`); neither live mode falls back to fixture
+  data on failure, and both default to `fake`.
+- `github_http.py` / `jira_http.py` / `github_code_http.py` validate raw
+  provider JSON against private strict response models before it becomes a
+  domain value; `github_diff.py` parses unified-diff patch text into typed
+  hunk evidence. The GitHub files-list call pages at 100 records with a
+  10-page local maximum — a complete empty response yields no evidence,
+  reaching the bound raises `GitHubIncompleteResultError`, and malformed
+  JSON/schema/patch syntax raises `GitHubInvalidResponseError`.
+- `IncidentSource` currently has only one implementation:
+  `FakeIncidentSource` (`incident_fakes.py`), whose fixed fixtures back
+  `get_incident_evidence`, `get_deployment_evidence`,
+  `get_failure_location_evidence`, and `get_telemetry_window_evidence`. No
+  HTTP/live incident source exists, and nothing in `config.py` or
+  `main.py` selects one — `InvestigationWorkflowService` always falls back
+  to `FakeIncidentSource()` unless a caller passes a different
+  implementation explicitly (`workflows/investigation.py`), so investigation
+  incident/deployment/telemetry evidence is fake-only today regardless of
+  the configured GitHub/Jira connector mode.
+- A lookup with no matching fixture raises `FixtureNotFoundError` rather than
+  returning empty evidence, preserving the distinction between "unavailable"
+  and "observed zero results."
+- Jira's standard status model has no universal blocker field, so
+  `blocker_state` is `UNKNOWN` unless a request explicitly encodes
+  `BLOCKED`; only `BLOCKED` produces a policy blocker. GitHub's `mergeable`
+  field is nullable and normalizes to `Mergeability.UNKNOWN` rather than a
+  guessed true/false.
+
+See [ADR-006](decisions/ADR-006-read-only-github-rest-connector.md), [ADR-007](decisions/ADR-007-read-only-jira-cloud-connector.md)/[ADR-008](decisions/ADR-008-optional-jira-blocker-evidence.md), and [ADR-021](decisions/ADR-021-focused-github-code-evidence-source.md) for how the GitHub/Jira connectors and the GitHub code-evidence source were introduced; see [Evidence & Fact model](#evidence--fact-model) below for the normalized `Evidence` envelope's current shape (its own history is [ADR-020](decisions/ADR-020-first-class-investigation-evidence.md)).
+
+## Tools subsystem
+
+`tools/` (`services/api/app/tools/`) exposes connector/source capabilities as
+a small, typed, read-only surface that a planner or deterministic caller can
+select from without seeing provider-specific APIs.
+
+`ToolDefinition` pairs a stable `InvestigationToolId` with a typed strict
+input model, a `ToolResult` output model, a `plan_output_model` (the static
+contract a planner may reference from another step), and a `read_only` flag.
+`ToolRegistry` stores these definitions — register (rejecting duplicate IDs),
+`get` (raising `UnknownToolError`), and `list` (sorted, stable order) — and
+never invokes a handler itself; `adapters.py` holds the actual call-through to
+each connector/source.
+
+`TOOL_DEFINITIONS` currently registers **eight** tools:
 
 ```text
-browser POST live-start -> PostgreSQL pending snapshot -> 202 {run_id, pending}
-browser navigate /runs/:runId -> repeated GET snapshot -> validated dashboard
-in-process task -> existing workflow transitions -> PostgreSQL current snapshot
+get_commit            -> GitHubCodeEvidenceSource.get_commit_evidence
+get_pull_request       -> GitHubCodeEvidenceSource.get_pull_request_evidence
+get_diff                -> GitHubCodeEvidenceSource.get_changed_file_evidence
+get_incident              -> IncidentSource.get_incident_evidence
+get_deployments             -> IncidentSource.get_deployment_evidence
+get_failure_location          -> IncidentSource.get_failure_location_evidence
+query_telemetry                  -> IncidentSource.get_telemetry_window_evidence
+get_jira_issue                      -> JiraConnector.get_issue + Jira Evidence normalization
 ```
 
-Vite development supplies the SPA history fallback for `/runs/*`; a production
-web server must serve the same application entry point for bookmarked or
-refreshed run URLs before the browser can make its relative `/v1` requests.
-
-This is state, not an event architecture: state says what is true now; an event
-says what happened. V2 may add durable `RunEvent` history and an SSE stream
-alongside snapshots when replay, recovery, or high-fan-out updates justify it.
-The dashboard neither queries Grafana nor exposes OTel spans. Grafana/OTel
-remains operational telemetry; the dashboard is product/runtime visibility.
-
-## V2.17-V2.18 grounded hypothesis boundary
-
-The completed V2.16 state can now enter a deliberately narrow proposal and
-grounding flow:
-
-```text
-Evidence -> deterministic fact derivation -> Facts
-        -> typed LLM hypothesis generator -> CandidateHypothesis
-        -> deterministic validator -> ValidatedHypothesis
-        -> V2.19 deterministic renderer -> grounded API/UI result
-```
-
-Facts remain objective, evidence-backed relationships; a hypothesis is an
-uncertain causal interpretation. The generator receives a goal, sorted Facts,
-and deterministic missing-information records, not raw logs, diffs, provider
-payloads, credentials, or execution traces. It uses the existing
-provider-neutral `TypedLLMClient`, a versioned prompt, and a bounded output
-schema. Generated rationale is non-authoritative and cannot become final prose.
-
-`DeterministicHypothesisValidator` accepts the currently supported generic
-code-change family only when selected Facts establish both a changed file and a
-matching failure file/hunk for the same file-path subject. It rejects unknown,
-duplicate, mismatched, or insufficient Fact references in candidate order.
-This is structural and semantic support, not proof of the actual root cause.
-No dependency, Redis, Postgres, Kafka, or provider-specific branch exists. The
-current Fact vocabulary does not justify dependency or deployment causal kinds,
-and V2.19 owns template rendering of accepted structures. The renderer accepts
-only `ValidatedHypothesis` values, resolves every supporting Fact ID, and emits
-`GroundedInvestigationResult` using fixed templates. It never receives the
-candidate rationale or raw provider prose.
-
-Changed-file Evidence now produces an atomic `ChangedFileFact`; the existing
-matching-file and changed-hunk Facts remain separate deterministic
-relationships. The code-change validator requires both kinds of support for the
-same path, so a rendered contributing-factor statement remains traceable to
-the observed file and its failure-location link. Renderer summaries also keep
-budget exhaustion, no progress, planning limits, provider unavailability, and
-plan-validation failure semantically distinct from a failed runtime snapshot.
-
-## V2 completion investigation runtime stabilization
-
-The user-facing V2 path now reuses the existing persisted snapshot mechanism:
-
-```text
-structured InvestigationRequest
-  -> POST /v1/investigations
-  -> PostgreSQL pending InvestigationRun
-  -> existing LiveRunTaskRegistry
-  -> typed investigation runtime snapshot
-  -> GET /v1/runs/{run_id} polling
-  -> React InvestigationDashboard
-```
-
-`InvestigationRun.state` contains compact planning rounds, safe planner metadata,
-normalized Evidence, derived Facts, MissingInformation, compact action history,
-validated hypotheses, safe hypothesis-generation metadata, tool-call budget
-accounting, and a termination reason. The nullable `investigation_state` JSON
-column extends the existing workflow-run row; V1 merge-readiness rows continue
-to use their existing typed request/result and step table. The UI selects the
-run variant from the validated `workflow_name` and does not reconstruct events
-or derive domain semantics.
-
-The final boundary is:
-
-```text
-ValidatedHypothesis + validated supporting Facts
-  -> render_grounded_result()
-  -> GroundedInvestigationResult
-  -> InvestigationDashboard
-```
-
-The live workflow uses `AdaptiveInvestigationRuntime` as its primary execution
-path. It obtains each bounded typed plan through the configured LLM client,
-validates it through the existing `PlanValidator`, and executes it through the
-existing `AgentExecutor`. A validated round plan and each completed round are
-persisted through the same snapshot row and polling path; completed prior
-rounds remain visible when the next plan is saved. Failure-location retrieval is
-registered as `get_failure_location`; it now crosses the same tool allowlist,
-plan validation, retry classification, global budget, step lifecycle, Evidence,
-Fact, and snapshot boundaries as every other planned source call. There is no
-hidden post-runtime connector lookup. No new SSE, WebSocket, event bus, or
-OpenTelemetry replacement is introduced.
-
-The deterministic fake provider is a real offline product adapter, not a
-transport-shape-only stub. For the checkout fixture it proposes bounded plans
-from explicit request fields, executes at least two adaptive rounds, and proposes
-one code-change hypothesis only when the derived changed-file and failure-file
-Facts agree. The same deterministic validator and renderer used for real
-providers remain authoritative.
-
-### Code-diagnosis component and product integration (implemented)
-
-`app/investigations/code_diagnosis/` implements the next bounded trust boundary.
-`CodeContextBuilder` selects only Evidence locations related to accepted
-hypothesis paths and caps both location count and diff-line content. The typed
-provider candidate selects a `location_evidence_id`; it cannot emit a numeric
-line or function. `DeterministicCodeFindingValidator` resolves exact coordinates
-from normalized Evidence and requires complete hypothesis, Fact-to-Evidence,
-changed-file, and failure-file support. Backend-owned templates produce
-read-only developer recommendations from validated categories.
-
-After hypothesis validation, `InvestigationWorkflowService` builds this bounded
-context, calls the independently routed code-diagnosis client, validates every
-candidate, and derives recommendations. `InvestigationRuntimeState` persists
-accepted findings, safe generation metadata, rejection count, and recommendations
-inside the existing JSON snapshot. `render_grounded_result()` accepts only those
-validated structures, and the API/UI project them without reconstructing a
-location or causal claim. A diagnosis provider/schema failure preserves the
-already grounded hypothesis, records the distinct `code_diagnosis_failure`
-termination reason, and exposes no candidate payload.
-
-### Investigation observability and passive LLMOps export (implemented)
-
-`RuntimeTelemetry.observe_investigation_stage()` creates one correlated trace
-over investigation execution and nested spans for planning rounds, planner
-calls, plan validation, physical tool attempts, retry delays, Fact derivation,
-hypothesis generation and validation, code diagnosis and validation, rendering,
-and termination. Stage-duration histograms, physical-tool-attempt counters, and
-terminal planning-round counters use exact bounded label sets. A retry is
-visible independently while still consuming the authoritative execution budget.
-
-Generation spans record task, provider, requested and provider-resolved model,
-prompt version, and provider-reported token counts. Standard GenAI attributes
-accompany PromptQL-specific allowlisted fields so an optional Langfuse
-destination can interpret usage and derive cost when its pricing catalog has a
-match. Unknown token usage or price remains unknown; application code never
-invents cost.
-
-`create_observability()` can attach two independent exporters to one tracer
-provider: the existing general OTLP exporter plus metrics, and a Langfuse OTLP
-traces-only exporter. Either destination can be enabled alone. Both use the
-existing failure-isolating wrapper, so setup/export failure emits only a bounded
-warning and cannot affect planning, persistence, rendering, or HTTP status.
-Langfuse remains passive observability with no runtime read or decision path.
-
-```text
-redis-prod ----
-postgres-prod -+-> future generic dependency validation, once Fact predicates exist
-payments-api --
-```
-
-## Not implemented
-
-Crash recovery, cancellation APIs, distributed workers, queues, GitHub or Jira
-OAuth/app authentication, multi-tenant connector credentials,
-site-specific Jira blocker mapping, tenant isolation, retention, explanation
-persistence, LLM retries/fallback, prompt optimization, hosted eval services,
-LLM-as-a-judge, production-traffic eval collection, dashboards, alerting, and
-OpenTelemetry log export are not implemented. Neon/Grafana resources and
-application deployment are not provisioned by this repository. Hosted Langfuse
-export has not been verified because project credentials are not configured.
-V1 explanation evals and V2 component/trajectory evals are implemented locally.
-The V2 catalog currently contains one deterministic checkout fixture family;
-hosted eval services, production-traffic collection, and broader reference
-coverage remain deferred.
-
-## Validated explanation response boundary
-
-Completed merge-readiness POST and GET responses add a non-authoritative
-explanation after the durable policy run is loaded or committed.
-`MergeReadinessExplanationService` sends only policy decision and stable
-reason/action codes to the injected client. Generated output is parsed as an
-untrusted `GeneratedExplanation`; its codes must exactly cover the policy's
-required code sets without inventions, omissions, duplicates, or
-contradictions. The code-only `ValidatedExplanation` is rendered through
-backend-owned templates before `MergeReadinessResponse` exposes it. The
-frontend validates the unchanged network shape and renders it separately from
-the authoritative policy result.
-
-The explanation is produced by `FakeLLMClient` by default or by the optional
-`OpenAILLMClient` or `GeminiLLMClient` when explicitly configured. Validation or provider failure
-returns a sanitized `explanation_error` while the completed policy run remains
-usable. Explanations are not persisted, so POST enrichment and later GET
-retrieval can each make a provider call in a real-provider mode. Persisting/versioning
-accepted explanations remains a separate architectural decision.
-
-## Explanation provider boundary
-
-`LLMSettings.from_environment()` validates the provider before application
-startup. `create_llm_client()` is the only production selection point:
-
-```text
-PROMPTQL_LLM_PROVIDER=fake
-  -> FakeLLMClient
-
-PROMPTQL_LLM_PROVIDER=openai + key + model
-  -> AsyncOpenAI(max_retries=0)
-  -> OpenAILLMClient.generate_structured()
-  -> responses.parse(text_format=GeneratedExplanation, store=False)
-  -> LLMStructuredResponse
-
-PROMPTQL_LLM_PROVIDER=gemini + Gemini key + model
-  -> AsyncOpenAI(base_url=fixed Google compatibility URL, max_retries=0)
-  -> GeminiLLMClient.generate_structured()
-  -> beta.chat.completions.parse(response_format=GeneratedExplanation)
-  -> LLMStructuredResponse
-
-PROMPTQL_LLM_PROVIDER=groq + Groq key + model
-  -> AsyncOpenAI(base_url="https://api.groq.com/openai/v1", max_retries=0)
-  -> GroqLLMClient.generate_structured()
-  -> beta.chat.completions.parse(response_format=GeneratedExplanation)
-  -> LLMStructuredResponse
-
-PROMPTQL_LLM_PROVIDER=openrouter + OPENROUTER_API_KEY + configured model
-  -> AsyncOpenAI(base_url="https://openrouter.ai/api/v1", max_retries=0)
-  -> OpenRouterLLMClient.generate_typed()
-  -> LLMStructuredResponse
-```
-
-For investigations, `ModelPolicy` performs deterministic task-to-requested-model
-selection before provider construction: `PLANNING` uses
-`PROMPTQL_PLANNER_MODEL`, `HYPOTHESIS_GENERATION` uses
-`PROMPTQL_HYPOTHESIS_MODEL`, and `CODE_DIAGNOSIS` uses
-`PROMPTQL_CODE_DIAGNOSIS_MODEL`; each falls back to `PROMPTQL_DEFAULT_MODEL`.
-The planner, hypothesis generator, and code diagnoser therefore receive
-independent typed clients, while their prompts, schemas, validators, and runtime
-remain provider-neutral. Without a default, startup requires all three explicit
-task models instead of deferring a missing-model failure into an investigation.
-PromptQL owns task-to-requested-model selection; OpenRouter owns serving-provider
-routing/failover. PromptQL deliberately does not perform semantic, quality-based,
-or automatic model routing, which keeps evaluations, cost, and failure analysis
-reproducible. SDK retries remain disabled, so existing runtime retry policy is
-not amplified.
-
-The SDK client owns HTTP/authentication and provider response parsing. The
-adapter owns minimized serialization and provider-error normalization. The
-provider-neutral service owns orchestration and telemetry. The deterministic
-validator owns semantic grounding, and backend templates own every visible
-word. This division keeps a schema-valid model response from becoming an
-authoritative business result.
-
-Gemini and Groq have explicit provider identities and provider-specific
-configuration rather than reusing OpenAI names. Both compatibility URLs are
-fixed in the factory, so environment configuration cannot redirect either
-provider's secret to an arbitrary host. All adapters feed the same
-provider-neutral structured result into the unchanged deterministic validator;
-generated prose is never exposed. Groq's bounded identity is also accepted by
-the existing durable run-source column after migration `20260816_0003`.
-
-Groq Chat Completions receives `GeneratedExplanation` as the Pydantic response
-format. The installed OpenAI SDK converts that model into a strict JSON Schema;
-Groq currently supports strict mode for `openai/gpt-oss-20b` and
-`openai/gpt-oss-120b`. PromptQL still revalidates the parsed object and then
-proves semantic support and completeness deterministically. API compatibility
-therefore does not make Groq an OpenAI provider or make generated claims
-authoritative.
-
-Google's compatibility layer rejects the complete `GeneratedExplanation` JSON
-Schema because its enum and length constraints create too many serving states.
-`GeminiStructuredClaims` therefore asks the provider for a decision, an internal
-summary, and integer indexes into request-specific allowed reason/action lists.
-The adapter rejects duplicate or out-of-range indexes, maps accepted positions
-back to the original typed codes, and then builds the unchanged strict
-`GeneratedExplanation`. Every enum, length bound, completeness rule, and later
-semantic grounding check still applies before anything can be rendered.
-
-Google may also report an invalid Gemini API key as HTTP 400 `INVALID_ARGUMENT`
-instead of HTTP 401. `GeminiLLMClient` recognizes only Google's exact nested
-invalid-key response and normalizes it to the existing `authentication`
-category. `MergeReadinessExplanationService` emits one safe
-`llm.explanation.failed` event containing only the bounded provider and failure
-category; the public response remains the generic `provider_failure` contract.
-# V2 target architecture
-
-> **Status: planned / incrementally implemented.**
->
-> The sections above describe the architecture currently implemented in the
-> repository. This section describes the intended V2 direction.
->
-> A V2 component must not be treated as implemented merely because it appears in
-> this target architecture. The active plan and current source code remain the
-> source of truth for implementation status.
-
-## V2 architectural objective
-
-V1 answers a mostly closed deterministic question:
-
-> Is this pull request ready to merge?
-
-V2 introduces a more open-ended engineering problem:
-
-> Why did this engineering incident happen?
-
-The architectural change is therefore not simply:
-
-```text
-more connectors
-```
-
-It is the transition from:
-
-```text
-fixed evidence collection
-        ↓
-deterministic policy
-        ↓
-optional LLM explanation
-```
-
-to a controlled investigation system capable of:
-
-```text
-goal
-↓
-evidence collection
-↓
-planning
-↓
-validated tool execution
-↓
-additional evidence
-↓
-hypothesis generation
-↓
-claim grounding
-↓
-explicit uncertainty
-```
-
-The core V2 rule is:
-
-> Probabilistic components may propose. Deterministic runtime code controls
-> validation, execution, persistence, budgets, permissions, and exposure.
-
----
-
-## V1 baseline carried into V2
-
-V2 must extend, not unnecessarily replace, the following existing V1
-boundaries:
-
-```text
-ContractModel
-├── frozen Pydantic contracts
-└── extra fields forbidden
-
-runtime/
-├── RunStatus
-├── StepStatus
-├── RuntimeStep
-├── RuntimeErrorInfo
-├── state transition validation
-└── RunRepository
-
-database/
-├── PostgreSQL persistence
-├── SQLAlchemy
-└── Alembic
-
-connectors/
-├── provider-neutral protocols
-├── normalized GitHub facts
-└── normalized Jira facts
-
-explanations/
-├── LLMClient
-├── provider adapters
-├── structured output parsing
-├── deterministic semantic validation
-└── deterministic rendering
-
-evals/
-├── development datasets
-├── holdout datasets
-├── repeated sampling
-├── provider reliability
-├── candidate quality
-└── baseline/release thresholds
-
-observability/
-├── OpenTelemetry traces
-├── OpenTelemetry metrics
-├── structured logs
-└── Grafana Cloud export
-```
-
-V2 should create new abstractions only where the investigation use case exposes a
-real missing concept.
-
----
-
-# Investigation bounded context
-
-V2 introduces an investigation-specific domain boundary.
-
-Implemented V2.1 module:
-
-```text
-services/api/app/
-└── investigations/
-    ├── __init__.py
-    └── models.py
-```
-
-Only files required by implemented milestones should exist.
-
-Do not create empty planner, tool, evidence, or runtime modules merely to match
-this target diagram.
-
-The V2.1 investigation domain represents:
-
-```text
-InvestigationRequest
-
-InvestigationResult
-├── ChangedFileFact | DeploymentFact | StackFrameFact
-├── Hypothesis
-├── MissingInformation
-└── RecommendedAction
-```
-
-`InvestigationFact` is a discriminated union. Its `fact_type` selects a
-fact-specific schema, while every fact carries a stable `fact_id` and one or
-more `evidence_reference_ids`. V2.2 makes those references resolvable against
-the first-class evidence owned by the same `InvestigationResult`.
-
-`InvestigationResult` deterministically rejects duplicate entity IDs and broken
-references among facts, hypotheses, missing-information items, and recommended
-actions. It can also represent insufficient evidence with no facts or
-hypotheses, provided unknowns are stated explicitly. Categorical hypothesis
-confidence communicates strength without pretending to be a calibrated
-probability. Grounding status describes support from current information, not
-objective root-cause correctness.
-
-The investigation result is domain state.
-
-It does not own generic runtime lifecycle information such as:
-
-```text
-run ID
-run status
-step timing
-runtime failure
-retry attempt
-checkpoint
-```
-
-Those remain runtime concerns.
-
-A future relationship may therefore resemble:
-
-```text
-InvestigationRun
-├── shared runtime lifecycle
-└── InvestigationResult
-```
-
-but V2 must not prematurely introduce a generic `InvestigationRun` merely to
-mirror `MergeReadinessRun`.
-
-The second real workflow should first reveal which runtime abstractions are
-actually common.
-
----
-
-# Fact, evidence, claim, and hypothesis boundaries
-
-V2 must maintain explicit semantic boundaries between the information it
-collects and the conclusions it produces.
-
-## Observation
-
-An observation is a result returned from an external operation.
-
-Example:
-
-```text
-GitHub API response
-```
-
-or:
-
-```text
-telemetry query response
-```
-
-Raw provider observations must be validated and normalized at their adapter
+A call flows: `ToolDefinition.validate_arguments` (invalid arguments raise
+before any source call) → the adapter → the underlying
+connector/source → a `ToolResult` with outcome `observed` / `empty` /
+`failed`. `ToolFailure.code` is a closed `ToolFailureCode` enum; only
+`rate_limited`, `timeout`, and `upstream_unavailable` are retryable
+(`ToolFailure.retryable`) — authentication, authorization, invalid
+request/response, missing resource, incomplete result, configuration, and
+generic `source_failure` are terminal. Tool results carry typed `Evidence`
+only; raw provider payloads, SDK objects, and credentials never cross this
 boundary.
 
----
+This registry is PromptQL-internal metadata; it is not MCP and has no
+external transport.
 
-## Evidence
+## Runtime subsystem: run lifecycle and single-round execution
 
-Evidence is normalized, provenance-preserving information that can be used by
-an investigation.
+`runtime/` (`services/api/app/runtime/`) defines the shared run/step
+lifecycle used by both workflow kinds: `RunStatus` and `StepStatus`
+(`pending` / `running` / `completed` / `failed` / `cancelled`), state-machine
+validators, and the `RunRepository` protocol. `CANCELLED` is a defined state
+with model-level invariants, but no code path in the repository ever
+transitions a run to it — see [Cancellation](#cancellation) in Part 2.
 
-Conceptually:
-
-```text
-Evidence
-├── evidence_id
-├── source
-├── kind
-├── observed_at
-├── retrieved_at
-├── payload
-└── provenance
-```
-
-V2.2 implements this first-class evidence model in
-`services/api/app/investigations/models.py`. The domain stores only normalized,
-typed content and never a raw provider response.
-
----
-
-## Fact
-
-A fact is a machine-readable conclusion that can be deterministically
-established from evidence.
-
-Prefer strongly typed facts.
-
-Example:
+Investigation plan execution (`investigations/execution.py`) is a separate,
+deterministic interpreter, `AgentExecutor`, that runs one already-validated
+plan:
 
 ```text
-ChangedFileFact
-├── path = "checkout.py"
-└── change_type = modified
+ValidatedPlan (topologically ordered steps)
+  -> for each step: dependency/output readiness check
+  -> typed argument construction (ToolDefinition.validate_arguments)
+  -> reserve one ExecutionBudget unit -> invoke adapter
+  -> merge returned Evidence -> recompute Facts over the full accumulated set
+  -> continue / retry / block remaining steps
 ```
 
-rather than making the authoritative representation only:
+- `ExecutionBudget.max_tool_calls` (0–100) is consumed immediately before
+  every physical attempt, including retries — an attempted-and-failed call
+  consumes budget, a step that is never invoked (`blocked`) does not.
+  Exhaustion blocks every remaining pending step with reason
+  `budget_exhausted` and preserves prior Evidence/Facts/failures.
+- `RetryPolicy` allows at most 3 total attempts per step, with 1s then 2s
+  delays (`initial_backoff_seconds=1.0`, `backoff_multiplier=2.0`). A retry
+  is attempted only when the typed failure is `retryable` **and** attempts
+  remain **and** budget remains; retries are owned by `AgentExecutor`, not by
+  individual adapters, and every tool is currently `read_only`, so a retried
+  call cannot duplicate a write effect (no idempotency system exists because
+  no write tool exists yet).
+- `failed` means a tool call was attempted and returned a typed failure;
+  `blocked` means it was never invoked because a dependency failed or a
+  referenced runtime output was unavailable. A failed branch blocks its
+  descendants; an independent ready branch continues.
+
+Execution is process-local and non-durable: `InvestigationExecutionState` and
+`AdaptiveInvestigationState` (see [Planning subsystem](#planning-subsystem-planner-validator-and-replanning)) live only in memory during one
+request; a crash mid-run loses that state. See
+[Crash recovery](#crash-recoverycheckpointresume-design) in Part 2.
+
+See [ADR-023](decisions/ADR-023-bounded-tool-retry-policy.md) for the retry/budget policy decision.
+
+## Planning subsystem: planner, validator, and replanning
+
+`investigations/planning/` turns accumulated investigation state into a
+validated, executable plan, and `investigations/replanning.py` repeats that
+cycle across bounded rounds.
+
+**`TypedLLMPlanner`** (`planning/service.py`) sends a compact `PlannerInput`
+— deterministic Facts, MissingInformation, evidence summaries, action
+history, and the caller-approved subset of tool definitions (with their
+input/output JSON Schemas) — through the injected `TypedLLMClient` and
+parses only a bounded `InvestigationPlan`. It distinguishes provider failure,
+an invalid outer structured response, and a plan that fails its own Pydantic
+schema (`PlannerFailureCode.PROVIDER_FAILURE` / `INVALID_RESPONSE` /
+`PLAN_SCHEMA_INVALID`). The standalone plan contract allows 1–5 steps
+(`MAX_PLAN_STEPS = 5`); the current planner prompt (`investigation-planner`
+/ `v2.7.6`) asks for 1–3 so live output fits the adaptive runtime's shorter
+horizon. The planner never calls a tool adapter or emits a hypothesis field.
+
+**`PlanValidator`** (`planning/validation.py`) is a pure function from an
+untrusted `InvestigationPlan` + allowed tools to either a `ValidatedPlan` or
+a list of typed `PlanValidationFailure`s. It checks, in order: step-count
+bound, duplicate step IDs, unknown/not-allowed tools, unknown/self
+dependencies, cycles (Kahn's-algorithm topological sort — an unresolved
+remainder means a cycle), missing required arguments, unknown arguments,
+literal-argument type compatibility, and — for a `StepOutputRef` — that the
+referenced step is both an existing dependency and exposes that field on its
+`plan_output_model` with a compatible type. Any failure rejects the whole
+plan atomically.
+
+**`AdaptiveInvestigationRuntime`** (`replanning.py`) is the live execution
+path used by `InvestigationWorkflowService`. It runs up to
+`MAX_PLANNING_ROUNDS = 3` rounds of plan → validate → execute
+(`MAX_ADAPTIVE_PLAN_STEPS = 3` per round), accumulating Evidence, Facts,
+MissingInformation, and a compact `ActionSummary` history across rounds. At
+each round boundary it compares evidence/fact ID sets before and after
+execution; the delta is a progress signal only, never an importance score.
+The runtime stops (`ContinuationReason`) on: exhausted global tool-call
+budget, 3 completed rounds, one no-progress round
+(`MAX_NO_PROGRESS_ROUNDS = 1`), planner failure, or plan-validation failure.
+It never inspects the semantic content of an Evidence or Fact item.
+
+No dedicated ADR covers the tool registry, deterministic baseline, planner,
+plan validator, execution loop, or round-based replanning individually —
+these were built incrementally under the V2.5–V2.16 milestones tracked in
+[Part 3's implementation sequence](#implementation-sequence) rather than each
+getting a separate decision record. [ADR-023](decisions/ADR-023-bounded-tool-retry-policy.md) covers the retry policy specifically.
+
+## Investigations subsystem structure
+
+`investigations/` (`services/api/app/investigations/`) is the domain package
+for the incident-investigation workflow. It has grown well beyond the single
+`models.py` file from its first milestone into six areas:
 
 ```text
-"checkout.py changed"
+investigations/
+├── models.py           # Evidence, Fact, Hypothesis, MissingInformation, RecommendedAction, InvestigationRequest/Result
+├── baseline.py           # DeterministicBaseline: fixed-sequence runbook (not the live path)
+├── execution.py            # AgentExecutor: single-round plan interpreter, budgets, retries
+├── replanning.py             # AdaptiveInvestigationRuntime: multi-round planner/validator/executor loop (the live path)
+├── fact_derivation/            # Pure Evidence -> Fact relationship rules
+│   ├── code_change.py            # ChangedFileFact, changed-file/failure-file/hunk matching
+│   ├── deployment.py               # Deployment-to-commit, commit-to-PR association
+│   └── temporal.py                   # Deployment-preceded-incident ordering
+├── planning/                           # TypedLLMPlanner + PlanValidator (see Planning subsystem above)
+├── hypotheses/                           # Hypothesis generation, deterministic validation, rendering
+└── code_diagnosis/                         # Code-location findings + developer recommendations
 ```
 
-Human-readable descriptions may supplement typed structure.
-
----
-
-## Hypothesis
-
-A hypothesis is a plausible explanation supported by one or more facts or
-evidence items.
-
-Example:
-
-```text
-Facts:
-- checkout.py changed
-- failing stack frame points to checkout.py
-- errors began after deployment
-
-Hypothesis:
-- the checkout.py change likely introduced the incident
-```
-
-A hypothesis must never automatically become a fact.
-
----
-
-## Groundedness versus correctness
-
-The system must distinguish:
-
-```text
-supported by available evidence
-```
-
-from:
-
-```text
-objectively proven true
-```
-
-A future deterministic validator may classify a hypothesis as:
-
-```text
-supported
-weakly_supported
-contradicted
-unsupported
-unknown
-```
-
-This is a grounding judgment.
-
-It is not automatically ground-truth correctness.
-
-Correct root cause may instead come from:
-
-- a known offline golden case
-- engineer confirmation
-- later operational evidence
-- successful remediation
-
----
-
-# V2.1 — Investigation Domain Model
-
-> **Implemented and validated domain milestone**
-
-V2.1 defines the typed vocabulary required to express an investigation in
-`services/api/app/investigations/models.py`.
-
-Implemented concepts are:
+**How a live investigation actually flows** (`workflows/investigation.py`,
+`InvestigationWorkflowService`):
 
 ```text
 InvestigationRequest
-
-typed investigation facts
-
-Hypothesis
-
-HypothesisConfidence
-
-MissingInformation
-
-RecommendedAction
-
-InvestigationResult
+  -> AdaptiveInvestigationRuntime.investigate()          [planning/ + replanning.py]
+       (up to 3 rounds of plan -> validate -> AgentExecutor.execute())
+  -> accumulated Evidence -> derive_facts()                [fact_derivation/]
+  -> TypedLLMHypothesisGenerator.generate() (only if Facts exist)
+  -> DeterministicHypothesisValidator.validate()             [hypotheses/]
+  -> CodeContextBuilder.build() (only if a hypothesis validated)
+  -> TypedLLMCodeDiagnoser.generate()
+  -> DeterministicCodeFindingValidator.validate()              [code_diagnosis/]
+  -> render_grounded_result()                                    [hypotheses/rendering.py]
+  -> GroundedInvestigationResult persisted as InvestigationRun.result
 ```
 
-V2.1 does **not** implement:
+Each stage is independently optional-on-failure: a failed planner, hypothesis
+generator, or code diagnoser stops that stage and records a distinct
+`GroundedTerminationReason` (`planner_failure`, `hypothesis_generation_failure`,
+`code_diagnosis_failure`, ...) while preserving whatever Evidence/Facts/
+hypotheses were already validated — a code-diagnosis failure, for example,
+still returns the grounded hypothesis from the stage before it.
+
+Two models are easy to conflate:
+
+- **`InvestigationResult`** (`models.py`) is the original V2.1 domain
+  container (evidence + facts + hypotheses + missing information +
+  recommended actions, with full cross-reference validation). It is used by
+  `baseline.py`'s `DeterministicBaseline` runbook and by
+  `diagnostics/openrouter.py`'s standalone CLI — **not** by the live
+  investigation route.
+- **`GroundedInvestigationResult`** (`hypotheses/rendering.py`) is what the
+  live route actually persists and returns: a compact, already-rendered
+  result (`termination_reason`, `summary`, `supported_hypotheses`,
+  `code_findings`, `recommendations`, `key_fact_ids`, `missing_information`)
+  produced only by `render_grounded_result()` from validated structures.
+
+`InvestigationRuntimeSnapshot` (`runtime/investigation_models.py`) is the
+third, JSON-persisted shape: it carries per-round planner/execution detail
+(`InvestigationPlanningRoundSnapshot`, `InvestigationStepSnapshot`) plus the
+accumulated Evidence/Facts/MissingInformation/action history, and is what
+`GET /v1/runs/{run_id}` actually returns while a run is `pending`/`running`,
+with the final `GroundedInvestigationResult` in its `result` field once
+`completed`.
+
+## Evidence & Fact model
+
+`Evidence` (`investigations/models.py`) is an immutable, provider-neutral
+envelope: `evidence_id`, `source` (`github` / `jira` / `incident` /
+`deployment` / `telemetry`), `kind`, `provenance`
+(`source_reference`, optional `observed_at`, required `retrieved_at`, both
+timezone-aware), and a discriminated `content` union. Nine content variants
+exist today: `changed_file`, `commit`, `pull_request`, `diff_hunk`,
+`jira_issue`, `incident`, `stack_frame`, `deployment`, and
+`telemetry_window`. A model validator enforces that `kind` matches
+`content.content_type` and that the declared `source` is the one expected
+for that `kind` (e.g. `stack_frame` must come from `incident`).
+
+`derive_facts()` (`fact_derivation/`) is a pure function, re-run over the
+full accumulated Evidence set after every new observation, that joins
+Evidence into eight typed relationship facts by three independent rule
+modules:
+
+- **`code_change.py`**: emits a `ChangedFileFact` per observed changed file;
+  `ChangedFileMatchesFailureFileFact` when a changed file's normalized path
+  equals a stack frame's file path; `ChangedHunkOverlapsFailureLineFact`
+  when a diff hunk's new-line range contains the frame's line number (a
+  pure-deletion hunk, `new_count == 0`, can never match).
+- **`deployment.py`**: `DeploymentReferencesCommitFact` when a deployment's
+  commit SHA case-insensitively matches an observed commit;
+  `CommitAssociatedWithPullRequestFact` when that commit SHA matches a pull
+  request's head or merge SHA.
+- **`temporal.py`**: `DeploymentPrecededIncidentFact` only under strict
+  inequality (`deployed_at < incident.started_at`) — equal timestamps
+  produce no fact, and the fact name is deliberately "preceded," not
+  "caused."
+
+Every fact carries `evidence_reference_ids` back to the Evidence that
+established it; `InvestigationResult` (where used) rejects any fact,
+hypothesis, or action whose references don't resolve. **Groundedness is not
+correctness**: the deterministic validators described in
+[Hypotheses subsystem](#hypotheses-subsystem) below classify a hypothesis as
+`supported` / `weakly_supported` / `contradicted` / `unsupported` /
+`unknown` relative to *current Evidence*, which is a claim about available
+support — not an objective determination of the true root cause. A
+"supported" hypothesis can still be wrong; the correct root cause can only
+come from an offline golden case, engineer confirmation, or later
+operational evidence, none of which the validator consults.
+
+## Hypotheses subsystem
+
+`investigations/hypotheses/` generates, validates, and renders causal
+hypotheses about why an incident happened, without ever letting generated
+prose become final output.
+
+- **`TypedLLMHypothesisGenerator`** (`service.py`) sends Facts,
+  MissingInformation, and the investigation goal through the injected
+  `TypedLLMClient` and parses only `CandidateHypothesis` values — untrusted,
+  provider-proposed causal claims. Called only when at least one Fact
+  exists; an empty Fact set skips the provider call entirely rather than
+  asking a model to hypothesize from nothing.
+- **`DeterministicHypothesisValidator`** (`validator.py`) accepts a
+  candidate only if its `kind` is the currently supported
+  `CODE_CHANGE_MAY_HAVE_CONTRIBUTED` family, its supporting-fact references
+  are unique and all resolve, and the selected Facts jointly establish both
+  a `ChangedFileFact` **and** a matching `ChangedFileMatchesFailureFileFact`
+  / `ChangedHunkOverlapsFailureLineFact` for the same file-path subject.
+  Everything else is rejected with a specific `HypothesisValidationFailureCode`
+  (`unsupported_hypothesis_kind`, `entity_mismatch`,
+  `missing_required_support`, ...). No dependency-failure, deployment-only,
+  or provider-specific hypothesis kind exists yet — the Fact vocabulary
+  doesn't support one.
+- **`render_grounded_result()`** (`rendering.py`) accepts only
+  `ValidatedHypothesis` values, re-resolves every supporting Fact ID against
+  the current FactSet (raising `GroundingRenderError` if one is missing),
+  and emits a `GroundedInvestigationResult` from **fixed templates** — the
+  candidate's generated rationale text never reaches this function or the
+  final result. The rendered summary also keeps termination reasons
+  (budget exhaustion, no progress, planning-round limit, planner/hypothesis/
+  code-diagnosis provider failure, plan-validation failure) semantically
+  distinct from each other and from a runtime crash.
+
+See [ADR-024](decisions/ADR-024-grounded-hypothesis-proposals.md) for this generation/validation boundary's origin.
+
+## Code diagnosis subsystem
+
+`investigations/code_diagnosis/` is a second, narrower probabilistic stage
+that runs only after a hypothesis has already been validated: it proposes
+*where in the code* a validated hypothesis's change likely matters, and
+turns that into a read-only developer recommendation.
+
+- **`CodeContextBuilder`** (`context.py`) builds the minimized
+  `CodeDiagnosisInput`: only Evidence whose file path matches an accepted
+  hypothesis's subject, capped at `MAX_CODE_CONTEXT_LOCATIONS` locations and
+  `MAX_CODE_LINES_PER_HUNK` lines per hunk (each line further truncated to
+  300 characters). Precomputed `CodeDiagnosisSupport` bundles give the model
+  the exact Fact-to-Evidence relationship so it doesn't have to (and can't
+  authoritatively) reconstruct it.
+- **`TypedLLMCodeDiagnoser`** (`service.py`) asks the model to select a
+  `location_evidence_id` from that bounded context plus a finding
+  `category` — the candidate cannot emit a numeric line, file path, or
+  function name of its own.
+- **`DeterministicCodeFindingValidator`** (`validator.py`) resolves the
+  candidate's exact coordinates (line number, function name, or hunk
+  identity) *from the referenced Evidence itself*, not from anything the
+  candidate said, and rejects a candidate whose supporting facts/evidence
+  don't exactly match the originating hypothesis's own support bundle, or
+  whose file path doesn't match a `ChangedFileEvidenceContent` **and** a
+  `StackFrameEvidenceContent` observed at that same normalized path.
+- **`build_developer_recommendations()`** (`remediation.py`) turns each
+  `ValidatedCodeFinding` into a backend-owned template recommendation;
+  `render_grounded_result()` cross-checks that a recommendation's supporting
+  fact/evidence IDs exactly match its originating finding before including
+  it.
+
+A code-diagnosis provider or schema failure (`CodeDiagnosisError`) preserves
+the already-grounded hypothesis, records termination reason
+`code_diagnosis_failure`, and exposes no candidate payload — this is a
+partial-success result, not a run failure.
+
+See [ADR-026](decisions/ADR-026-budgeted-failure-location-evidence.md) and [ADR-027](decisions/ADR-027-evidence-identified-code-diagnosis.md) for this boundary's origin.
+
+## Diagnostics subsystem
+
+`diagnostics/` (`services/api/app/diagnostics/`) holds standalone,
+explicitly-invoked developer CLIs — not application code. `__init__.py`
+documents that the package has no import-time side effects, so `main.py`
+never imports it and it plays no role in serving requests.
+
+**`openrouter.py`** (774 lines) is a secret-safe diagnostic for the
+OpenRouter provider boundary specifically — the same
+`https://openrouter.ai/api/v1` OpenAI-compatible endpoint the `explanations/`
+and investigation task clients use in production. Run as a script
+(`--stage <name>`), it probes eight increasingly specific stages, each
+requiring `PROMPTQL_LLM_PROVIDER=openrouter`:
 
 ```text
-planner
-tools
-evidence retrieval
-evidence persistence
-runtime integration
-replanning
-LLM hypothesis generation
-claim validation
-queues/workers
+config            -> resolved provider/model routing only, no network call
+plain             -> a bare chat.completions.create() round trip
+typed             -> generate_typed() against a tiny smoke schema
+planner           -> a real TypedLLMPlanner.plan() call
+planner-routing   -> a raw parse() call with extra_body={"provider": {"require_parameters": True}}
+hypothesis        -> a real TypedLLMHypothesisGenerator.generate() call
+code-diagnosis    -> the full Evidence -> Fact -> validated-hypothesis -> code-finding path
+workflow          -> a complete InvestigationWorkflowService run (in-memory repo, fake connectors)
 ```
 
-V2.1 reuses existing contract conventions:
-
-```text
-ContractModel
-NonEmptyString
-StrEnum
-extra="forbid"
-frozen=True
-Pydantic validation
-stable machine-readable codes
-```
-
-No `InvestigationStatus`, `InvestigationRun`, API DTO, database mapping, or
-runtime integration was introduced. Existing runtime status semantics remain
-unchanged; a later real investigation workflow must expose the common runtime
-shape before V1 is generalized.
-
----
-
-# V2.2 — First-class evidence
-
-> **Implemented and validated domain milestone**
-
-V2.2 adds an immutable, provider-neutral `Evidence` envelope with:
-
-```text
-Evidence
-├── evidence_id
-├── source: github | jira | incident | deployment
-├── kind
-├── provenance
-│   ├── source_reference
-│   ├── observed_at?
-│   └── retrieved_at
-└── content: discriminated typed union
-```
-
-The initial normalized content variants are:
-
-```text
-ChangedFileEvidenceContent
-CommitEvidenceContent
-JiraIssueEvidenceContent
-StackFrameEvidenceContent
-DeploymentEvidenceContent
-```
-
-`observed_at` is optional because a source may not expose event time;
-`retrieved_at` is required. Both reject naive datetimes. V2.2 deliberately does
-not require retrieval time to follow source time because distributed clocks can
-skew by small amounts.
-
-`InvestigationResult` owns the evidence collection. It rejects duplicate
-evidence identities and any fact or hypothesis evidence reference that does not
-resolve in that collection. Missing data remains `MissingInformation`; the
-system does not manufacture evidence with a null value.
-
-Implemented domain relationship and deferred collection boundary:
-
-```text
-external provider [future V2.3+]
-       ↓
-adapter validation [future V2.3+]
-       ↓
-normalized observation
-       ↓
-Evidence [implemented V2.2]
-       ↓
-typed Fact [implemented V2.1]
-       ↓
-Hypothesis [candidate model implemented V2.1; generation deferred]
-```
-
-Evidence now allows the domain to answer:
-
-```text
-Where did this information come from?
-When was it observed?
-When did PromptQL retrieve it?
-Which conclusion depends on it?
-```
-
-Implemented logical evidence sources are:
-
-```text
-github
-jira
-incident
-deployment
-```
-
-Provider-specific response schemas remain behind future adapters. No collection,
-persistence, runtime, API, frontend, or LLM behavior is part of V2.2.
-
----
-
-# V2.3 — GitHub code evidence
-
-> **Implemented and validated provider capability**
-
-V1 continues to consume only `GitHubConnector.get_pull_request()` metadata
-required for merge readiness. V2.3 adds a separate, focused
-`GitHubCodeEvidenceSource` protocol with three read-only operations:
-
-```text
-get_commit_evidence
-get_pull_request_evidence
-get_changed_file_evidence
-```
-
-The concrete fake and HTTP implementations return immutable V2.2 `Evidence`.
-The HTTP flow is:
-
-```text
-GitHub REST JSON
-       ↓
-private strict response models
-       ↓
-HttpGitHubCodeEvidenceSource
-       ↓
-status/count/timestamp normalization
-       ↓
-bounded unified-diff parser
-       ↓
-Evidence: commit | pull_request | changed_file | diff_hunk
-```
-
-Normalized commit evidence carries the SHA, bounded message, optional Git
-author timestamp, and parent SHAs. It excludes author profiles and email.
-Pull-request evidence carries title/state, base/head SHAs, and an optional merge
-commit SHA without claiming which merge strategy introduced deployed code.
-
-Changed-file evidence normalizes GitHub `added`, `modified`, `removed`, and
-`renamed` statuses into domain values, validates additions/deletions/changes,
-and records whether patch text was available. Present patches become one or more
-typed hunk evidence items with old/new ranges and bounded context/addition/
-deletion lines. Missing patch text creates no fake hunk.
-
-The files endpoint is fetched in provider order at 100 records per page with a
-10-page local maximum. An empty complete response returns no evidence. Reaching
-the bound raises `GitHubIncompleteResultError`; malformed JSON/schema/status or
-patch syntax raises `GitHubInvalidResponseError`. Existing sanitized 401, 403,
-404, 429, timeout/network, and upstream failure categories remain distinct.
-
-The capability reuses `GitHubSettings`, the application-scoped authenticated
-HTTP client, and bounded connector telemetry. Repository identities, SHAs, PR
-numbers, paths, response bodies, and patch content are never telemetry labels.
-No live GitHub call is part of automated validation.
-
-Implemented versus deferred:
-
-```text
-GitHub provider capability       implemented V2.3
-normalized V2 evidence           implemented V2.2/V2.3
-deterministic fact derivation    future V2.6
-typed tool boundary              implemented V2.5
-commit-to-PR derived fact        deferred until a workflow requires it
-```
-
-Provider capability is not automatically a planner-visible tool. V2.5 now
-exposes a smaller composed tool surface after deterministic schema validation;
-AST parsing, symbol graphs, repository indexing, embeddings, and LLM diff
-selection remain deferred.
-
----
-
-# V2.4 — IncidentSource boundary
-
-> **Implemented and validated provider capability**
-
-`IncidentSource` is a provider-neutral operational-evidence port with four
-read-only, validated operations:
-
-```text
-get_incident_evidence
-get_deployment_evidence
-get_failure_location_evidence
-get_telemetry_window_evidence
-```
-
-Each operation returns one immutable V2.2 `Evidence` envelope. Incident
-metadata records an identifier, optional service/environment/event time, and
-optional bounded status/category. Deployment evidence records service,
-environment, full commit SHA, and deployment time. Failure-location evidence
-can preserve an error category and whatever normalized location fields are
-actually available; it does not retain raw stack dumps. Telemetry-window
-evidence preserves a typed service/signal/time-window/filter request shape and
-an observed event count, never raw PromQL, LogQL, or provider query text.
-
-The current implementation is `FakeIncidentSource`, whose fixed fixtures make
-offline behavior deterministic without credentials. A lookup with no fixture
-raises `FixtureNotFoundError`; it never fabricates an empty `Evidence` record.
-This maintains the distinction between unavailable evidence and a source that
-observed zero matching events.
-
-```text
-deterministic fixture
-       ↓
-FakeIncidentSource
-       ↓
-IncidentSource protocol
-       ↓
-Evidence: incident | deployment | stack_frame | telemetry_window
-```
-
-Grafana Cloud remains the configured OpenTelemetry export destination for
-application operational telemetry. Exporting traces/metrics to Grafana does not
-create a read/query API for investigation evidence, so no live Grafana adapter,
-credentials, query language, or configuration was added in V2.4. A future live
-adapter must validate provider responses and translate them behind this port.
-
-Provider capability remains distinct from the V2.5 tool boundary. V2.4 does not
-derive deployment timing facts, connect stack frames to diff hunks, plan,
-persist, expose an API, or generate hypotheses.
-
----
-
-# V2.5 — Tool abstraction and registry
-
-> **Implemented and validated internal capability boundary**
-
-V2.5 adds seven stable, read-only investigation tools over the existing
-provider-neutral capabilities:
-
-```text
-get_commit          -> GitHubCodeEvidenceSource.get_commit_evidence
-get_pull_request    -> GitHubCodeEvidenceSource.get_pull_request_evidence
-get_diff            -> GitHubCodeEvidenceSource.get_changed_file_evidence
-get_incident        -> IncidentSource.get_incident_evidence
-get_deployments     -> IncidentSource.get_deployment_evidence
-query_telemetry     -> IncidentSource.get_telemetry_window_evidence
-get_jira_issue      -> JiraConnector.get_issue plus Jira Evidence normalization
-```
-
-The boundary is implemented in `services/api/app/tools/`:
-
-```text
-ToolDefinition
-    ├── stable InvestigationToolId
-    ├── concise description
-    ├── typed strict input model/schema
-    ├── typed ToolResult output model
-    └── read_only classification
-
-ToolRegistry
-    ├── register, rejecting duplicate IDs
-    ├── get, raising an explicit unknown-tool error
-    └── list, returning definitions in sorted stable order
-```
-
-`ToolRegistry` stores metadata and discovers capabilities; it does not invoke
-handlers. `adapters.py` keeps execution beside the existing source/connector
-protocols so a future runtime can apply timeouts, permissions, budgets,
-retries, telemetry, idempotency, checkpointing, and cancellation around the
-same adapters. This avoids turning the registry into the V2.9 executor loop.
-
-The request flow is:
-
-```text
-typed mapping
-      ↓
-ToolDefinition.validate_arguments
-      ↓ invalid -> InvalidToolArgumentsError before source call
-tool adapter
-      ↓
-existing source/connector capability
-      ↓
-normalized Evidence
-      ↓ provider failure -> sanitized ToolResult.failure
-ToolResult(observed | empty | failed)
-```
-
-Tool results contain typed `Evidence`, never generated prose. `ToolResult`
-distinguishes an observed evidence set from an empty observation and from a
-failed source. Capability unavailability and source failure have separate
-machine-readable failure codes. Raw provider payloads, SDK objects, exception
-strings, credentials, and provider query languages do not cross this boundary.
-
-The seven tools are a capability-oriented surface, not a mechanical mirror of
-provider APIs. `IncidentSource.get_failure_location_evidence` remains an
-internal capability because it is subordinate diagnostic detail that the
-initial baseline can request as part of incident analysis; exposing every
-source method would enlarge selection and authorization surface without a
-current independent tool decision. A later requirement can expose it without
-changing the source protocol.
-
-This registry is PromptQL-internal metadata, not MCP. MCP is a future external
-interoperability adapter and is not a dependency, transport, server, or client
-in V2.5. No LLM provider or native function-calling schema is canonical here.
-V2.6 deterministic selection and a future planner are intended to consume the
-same definitions and adapters:
-
-```text
-GitHubCodeEvidenceSource ─┐
-IncidentSource ───────────┼─> tool adapters -> ToolDefinitions -> ToolRegistry
-JiraConnector ────────────┘                                  /             \
-                                              V2.6 deterministic chooser   future planner
-                                                           \             /
-                                                         future executor
-```
-
-V2.5 does not implement planning, execution policy, dynamic gating, budgets,
-retries, replanning, MCP, fact derivation, hypothesis generation, or write
-tools.
-
----
-
-# V2.6 — Deterministic investigation baseline
-
-> **Implemented internal baseline; no API or UI is exposed yet**
-
-`DeterministicBaseline` is a sequential runbook over the V2.5 tool adapters.
-`ToolInvoker` confirms each adapter definition through the metadata-only
-`ToolRegistry`; it does not make the registry an executor. Successful results
-enter an ordered `EvidenceAccumulator`; failures become bounded
-`MissingInformation` without erasing earlier evidence.
-
-Pure `investigations/fact_derivation/` modules join normalized Evidence into
-provenance-preserving, non-causal relationship facts. Equal timestamps, absent
-patches, deleted hunks, and absent relationships produce no positive fact.
-
-```text
-Evidence -> deterministic Facts -> future probabilistic Hypotheses
-```
-
-Failure-location is a documented subordinate `IncidentSource` lookup because
-V2.5 intentionally exposes no independent failure-location tool. It is always
-requested in the fixed incident sequence, so future planner comparison retains
-the same enrichment. No planner, causal hypothesis, generic inference engine,
-runtime DAG, retry, persistence, API, or UI is implemented.
-
-Conceptually:
-
-```text
-incident
-↓
-fetch incident evidence
-↓
-identify deployment
-↓
-identify related commit
-↓
-fetch PR/diff
-↓
-fetch Jira context
-↓
-assemble evidence
-```
-
-This workflow establishes a baseline against which a future planner can be
-evaluated.
-
-Without this baseline:
-
-```text
-agent produced an answer
-```
-
-does not demonstrate that agentic planning improved the system.
-
----
-
-# V2.7 — Typed planner
-
-> **Implemented typed proposal boundary; validation and execution remain deferred**
-
-`TypedLLMPlanner` receives a compact `PlannerInput`: deterministic Facts,
-MissingInformation, provenance-preserving evidence summaries, and an explicit
-allowed subset of the seven V2.5 read-only tools. It sends that state through
-the existing provider-neutral typed LLM adapter boundary and parses only an
-immutable, bounded `InvestigationPlan`.
-
-The planner cannot call an adapter, mutate the V2.6 baseline, create a Fact, or
-return a root-cause/hypothesis field. Tool gating remains outside the planner:
-the caller injects allowed definitions before prompt construction. Each plan has
-one to five `PlanStep`s with stable V2.5 IDs, explicit literals or narrow
-`StepOutputRef`s, optional control dependencies, and concise rationale.
-`depends_on` represents ordering; a reference represents data consumption.
-V2.8 validates their graph and consistency before any future execution.
-
-Provider failure, malformed structured response, and plan-schema failure stay
-distinct. The prompt is versioned as `investigation-planner` / `v2.7.6` and
-excludes raw diff lines, provider payloads, credentials, and telemetry query
-syntax. The V2.6 deterministic runbook remains independently callable.
-
-The standalone plan schema retains its one-to-five-step compatibility contract,
-while the current planner instruction requests one to three steps so live output
-fits the adaptive runtime's existing short-horizon safety boundary. The runtime
-still rejects a longer proposal deterministically if a provider ignores that
-instruction.
-
-`PlannerInput` also carries the caller's existing typed `InvestigationRequest`
-and the caller-approved tools' input/output JSON Schemas. These are deterministic
-projections of backend contracts, not model-generated capabilities. They let the
-planner reuse known repository and incident values and reference only output
-fields that the `PlanValidator` can accept.
-
-The serialized planner argument contract uses `value_kind` as an explicit
-discriminator between literal values and step-output references. Its
-provider-facing schema therefore requires one complete branch rather than a
-mixture of both. The same local Pydantic union remains authoritative after
-generation. Groq typed calls use its supported low reasoning effort, while the
-OpenRouter subclass deliberately omits that Groq-only request parameter.
-
-When Groq rejects a strict structured generation, its adapter retains only
-allowlisted diagnostic metadata: HTTP status, provider type/code, a fixed
-sanitized message, and failed-generation presence/length. It never persists or
-logs provider messages, raw generations, prompts, evidence, headers, or keys.
-The adaptive planner and final hypothesis boundary log the same allowlisted
-shape with counts and prompt identity. This keeps transport, provider structured
-generation, and local Pydantic/schema failures distinguishable without placing
-Facts, prompts, raw provider responses, or credentials in logs.
-
-The implemented planner receives bounded state such as:
-
-```text
-investigation goal
-available tools
-current evidence
-missing information
-```
-
-and produce a typed candidate plan.
-
-Conceptually:
-
-```text
-Facts + MissingInformation + allowed tools
- ↓
-Typed LLM planner
- ↓
-Pydantic schema validation
- ↓
-V2.8 PlanValidator
- ↓
-future V2.9 runtime executor
-```
-
-The planner decides:
-
-> What should we try?
-
-The runtime decides:
-
-> Is this valid and allowed?
-
-V2.8 provides cycle detection, deterministic topological ordering, reference
-target/type checks, dependency/reference consistency, and allowlist semantics.
-V2.9 remains responsible for execution. Budgets, dynamic replanning, and
-hypothesis generation are not implemented.
-
----
-
-# Plan representation
-
-A future plan may be represented as a dependency graph.
-
-Example:
-
-```text
-             get incident
-                 │
-        ┌────────┴────────┐
-        ▼                 ▼
-   get deployment     get Jira
-        │
-        ▼
-    get commit
-        │
-        ▼
-     get diff
-```
-
-Relevant concepts include:
-
-```text
-DAG
-dependencies
-cycle detection
-topological ordering
-```
-
-Do not use an LLM to decide whether a plan contains an illegal cycle when
-ordinary deterministic graph algorithms can determine it.
-
----
-
-# V2.8 — Plan validation
-
-Plan validation is implemented as a pure, deterministic application component
-separate from generation. `PlanValidator` checks the typed proposal against the
-registry and caller-injected allowed set, returning either `ValidatedPlan` or
-sanitized typed failures atomically. Static per-tool output contracts provide
-planner-visible fields for type checking without changing V2.5 `ToolResult` or
-executing a provider capability.
-
-Implemented checks include:
-
-```text
-known tool
-valid arguments
-valid dependencies
-no cycles
-allowed capability
-step count within bound
-```
-
-Target:
-
-```text
-probabilistic plan generation
-+
-deterministic plan acceptance
-```
-
-The compiler analogy is intentional: the LLM planner is a program generator,
-the validator is a static checker/type checker, and V2.9 will be the execution
-engine. A legal plan may still be inefficient; plan quality remains an eval
-concern rather than a validator rejection.
-
----
-
-# V2.9 — Investigation execution loop
-
-The target V2 runtime evolves from:
-
-```text
-step 1
-step 2
-step 3
-```
-
-toward:
-
-```text
-current state
-↓
-plan
-↓
-validate
-↓
-execute allowed tool
-↓
-record result/evidence
-↓
-update state
-↓
-continue / replan / finish
-```
-
-The runtime, not the model, owns termination.
-
-V2.9 now implements `AgentExecutor` as a deterministic, sequential interpreter
-of one `ValidatedPlan`. It consumes V2.8's topological order, resolves a
-`StepOutputRef` only from normalized Evidence produced by a successful source
-step, constructs the destination tool's typed input, and invokes the existing
-V2.6 `ToolInvoker`. It never calls the planner, selects another tool, mutates
-the accepted plan, or creates Facts outside deterministic derivation.
-
-`failed` means the tool call was attempted and returned a typed failure;
-`blocked` means it was never invoked due to a failed dependency or unavailable
-runtime output. A failed branch blocks its descendants but an independent ready
-branch continues. Each genuinely new Evidence ID causes `derive_facts` to run
-over the complete accumulated Evidence set so cross-observation facts and
-stable fact-ID deduplication remain correct. New facts do not replan.
-
----
-
-# Execution budgets
-
-Autonomous investigation must be bounded.
-
-Future budgets may include:
-
-```text
-max steps
-max tool calls
-max model calls
-max replans
-token budget
-overall deadline
-```
-
-Budget exhaustion must produce an explicit typed outcome rather than an
-unbounded loop.
-
-V2.10 implements one caller-supplied `ExecutionBudget.max_tool_calls` and a
-sequential `BudgetState`. The executor checks and consumes it immediately
-before each invocation. An attempted failed call consumes budget; a blocked
-step does not. Exhaustion blocks every remaining pending step with
-`budget_exhausted`, sets a typed termination reason, and preserves prior
-Evidence, Facts, and failures.
-
-`MAX_PLAN_STEPS` bounds a single generated plan at validation time. The total
-tool-call budget bounds actual execution work, including retries. Token/cost/
-deadline/per-tool/distributed budgets, recovery, concurrency, and dynamic
-replanning remain planned.
-
----
-
-# Failure architecture
-
-V2 should extend the existing failure taxonomy rather than collapsing all
-failures into one exception type.
-
-Relevant categories may eventually include:
-
-```text
-provider failure
-connector failure
-tool failure
-planner/schema failure
-plan validation failure
-claim validation failure
-budget exhaustion
-deadline exceeded
-cancellation
-runtime/persistence failure
-```
-
-Also preserve the distinction:
-
-```text
-missing evidence
-```
-
-is not automatically:
-
-```text
-system failure
-```
-
----
-
-# Further retry architecture
-
-Beyond the implemented V2.12 slice, retries remain runtime behaviour rather
-than a property of every adapter.
-
-Retry only failures that are plausibly transient.
-
-Examples:
-
-```text
-429 rate limit       → potentially retry
-503 unavailable      → potentially retry
-network timeout      → potentially retry
-
-401 unauthorized     → do not blindly retry
-403 forbidden        → do not blindly retry
-invalid schema       → do not blindly retry
-policy rejection     → do not blindly retry
-```
-
-Future retry control should use:
-
-```text
-attempt limit
-deadline
-exponential backoff
-jitter
-```
-
-Provider SDK retry behaviour should remain explicit rather than silently
-competing with runtime retry policy.
-
----
-
-# V2.11-V2.12: typed failures and bounded retries
-
-`ToolFailureCode` now preserves sanitized connector categories instead of
-collapsing them all into `source_failure`. `ToolFailure.retryable` is a closed,
-deterministic classification: only `rate_limited`, `timeout`, and
-`upstream_unavailable` retry. Authentication, authorization, invalid
-requests/responses, missing resources, incomplete results, configuration,
-unavailable capabilities, and generic `source_failure` are terminal.
-
-Retries remain owned by `AgentExecutor`, not by individual adapters. The
-confirmed initial policy allows at most three total attempts for one step and
-uses one-second then two-second exponential delays. Before every initial call
-and retry, the executor consumes one V2.10 tool-call unit. If none remains for
-a pending retry, it retains the typed failure, marks later pending work as
-`budget_exhausted`, and does not sleep or call the provider.
-
-`ExecutionStepState.attempts` records calls made for one logical step. No jitter,
-deadline, retry persistence, retry telemetry, write tools, or idempotency key
-exists yet. V2.13 verifies the existing `ToolDefinition.read_only` contract:
-all current V2.5 investigation tools retrieve normalized evidence only. A
-retry is therefore permitted only because the current tool operation is
-read-only as well as because its typed failure is transient.
-
----
-
-# V2.13: retry-safety and idempotency boundary
-
-The executor distinguishes a logical `PlanStep` from each external-call
-attempt. For example, three timeout/success calls for `s3: query_telemetry`
-remain one logical investigation operation. `ToolDefinition.read_only` already
-expresses the only execution-safety metadata required for the current V2 tools:
-all seven registered adapters retrieve normalized evidence and no adapter
-writes, remediates, or changes provider state.
-
-The current retry decision is: typed failure is retryable, the tool definition
-is read-only, attempts remain, and V2.10 budget remains. Repeating a read may
-return a newer observation, but does not duplicate an external effect.
-
-A future side-effecting tool is denied automatic retry by default until it has
-an explicit idempotency or reconciliation contract. If such a logical write
-step becomes retryable, all its attempts must reuse one logical-operation
-identity, potentially derived from `run_id + step_id`; the identity must not
-include the attempt number. Idempotency controls duplicate effects under
-at-least-once delivery; it does not promise a distributed provider call
-physically executes exactly once.
-
-No idempotency key, deduplication store, request-key persistence, provider-side
-deduplication, or write-operation replay exists in V2.
-
----
-
-# V2.14: crash recovery and checkpoint/resume boundary
-
-V2 investigation execution is process-local and non-resumable. `AgentExecutor`
-returns an in-memory `InvestigationExecutionState`; it does not call a V2 run
-repository or persist its accepted plan, state, outputs, budget, or attempts.
-
-The existing PostgreSQL repository is V1 merge-readiness persistence, not V2
-durable execution. It persists V1 workflow identity and source modes; request,
-GitHub, Jira, result, and sanitized error snapshots; plus ordered V1 step
-names, statuses, timestamps, duration, attempt count, and sanitized errors.
-It can make a V1 `RUNNING` step crash-visible, but it cannot reconstruct or
-resume a V2 agent execution.
-
-A future checkpoint/snapshot-based V2 recovery design would need the
-`ValidatedPlan`, step states, referenceable runtime outputs, accumulated
-Evidence, derived Facts, MissingInformation, tool-call budget usage, attempt
-counts, relevant typed failures, and execution/checkpoint-version metadata.
-
-Checkpointing persists sufficient current state to continue. Event sourcing
-instead persists every transition and rebuilds state by replaying an event
-history. PromptQL's default future direction is checkpoint/snapshot recovery;
-event sourcing is neither implemented nor selected.
-
-The unresolved in-flight window is: budget consumed, tool request sent, process
-crashes, and response never recorded. After restart, a persisted `RUNNING` step
-has an unknown outcome and cannot silently become either `SUCCEEDED` or
-`FAILED`. Re-executing a current read-only operation is comparatively safe, but
-still needs a correct checkpoint and resume policy. Blind replay of a future
-side-effecting operation could duplicate an effect, so it needs idempotency or
-external reconciliation.
-
-The future recovery flow is: process starts, load a non-terminal run, load its
-latest checkpoint, reconstruct execution state, inspect a prior `RUNNING` step
-as unknown, apply recovery policy, then continue the remaining DAG. No
-checkpoint table, serialization, resume endpoint, recovery scan, event log,
-worker ownership, stale-run detection, or budget/retry restoration exists.
-Rerunning an entire `ValidatedPlan` after restart is not crash recovery and is
-deliberately not implemented.
-
-The existing PostgreSQL runtime persists workflow snapshots.
-
-That gives V1:
-
-```text
-durable state
-```
-
-It does not yet provide:
-
-```text
-durable execution
-```
-
-A future V2 recovery path may need to handle:
-
-```text
-step 1 completed
-step 2 completed
-step 3 running
-
-PROCESS CRASHES
-```
-
-and later:
-
-```text
-load persisted run
-↓
-identify stranded execution
-↓
-reconcile state
-↓
-determine safe replay/resume
-↓
-continue
-```
-
-Checkpointing, crash consistency, reconciliation, and safe replay belong to this
-later milestone.
-
----
-
-# Cancellation
-
-Runtime cancellation should eventually have explicit lifecycle semantics.
-
-For example:
-
-```text
-pending
-running
-cancelling
-cancelled
-completed
-failed
-```
-
-Existing `CANCELLED` state support does not itself constitute a cancellation
-mechanism.
-
-Cancellation APIs and cancellation propagation are separate implementation
-work.
-
-V2.15 confirms that current process-local execution has no existing
-cooperative cancellation signal. It is therefore postponed rather than adding
-an endpoint, persistence, forced provider abort, rollback, or compensation.
-`cancel requested` would mean no new work should start; `cancelled` would mean
-the runtime actually reached that boundary. Neither means external work was
-rolled back.
-
----
-
-# Dynamic replanning
-
-When expected evidence is unavailable, the runtime should be able to preserve
-the observation and optionally ask the planner for another bounded plan.
-
-Conceptually:
-
-```text
-planned evidence unavailable
-↓
-structured missing-information result
-↓
-planner receives updated state
-↓
-candidate replan
-↓
-deterministic validation
-↓
-execute
-```
-
-Replanning must have deterministic limits such as:
-
-```text
-max_replans
-```
-
-to prevent unbounded loops.
-
-## V2.16 — short-horizon dynamic replanning
-
-`AdaptiveInvestigationRuntime` executes up to three planning rounds. Each
-round is planner -> V2.8 validation -> existing executor, and contains at most
-three steps even though standalone V2.7 plans retain their five-step contract.
-Evidence and Facts accumulate across rounds. At a round boundary the runtime
-compares evidence/fact ID sets; the resulting deltas are a progress signal, not
-an importance score. It never interrupts an active short plan because a Redis,
-Postgres, Kafka, or other observation looks semantically important.
-
-The runtime stops on exhausted global tool-call budget, three rounds, one
-no-progress round, planner failure, or validation failure. The planner receives
-compact evidence, current facts, missing information, action history, remaining
-tool calls, and round position. Facts answer what is known; history answers
-what was tried. The runtime owns legality and bounds; the LLM owns the next
-semantic investigation strategy.
-
-Every completed `PlanningRound` retains the planner's provider, requested model,
-prompt identity/version, execution snapshot, and Evidence/Fact deltas. The final
-runtime snapshot also retains compact action history and hypothesis-generation
-metadata. These are bounded audit fields, not chain-of-thought or raw provider
-content.
-
----
-
-# Hypothesis generation
-
-Once sufficient evidence is collected, a future probabilistic component may
-generate candidate hypotheses.
-
-Input:
-
-```text
-typed facts
-evidence references
-missing information
-```
-
-Output:
-
-```text
-candidate hypotheses
-```
-
-Hypotheses should reference supporting evidence/facts explicitly.
-
-They remain candidates until validated.
-
----
-
-# Evidence-backed claim validation
-
-The V1 explanation validator checks model-generated reason/action codes against
-the authoritative deterministic merge-readiness result.
-
-V2 should evolve this principle.
-
-Future validation may classify hypotheses as:
-
-```text
-supported
-weakly_supported
-contradicted
-unsupported
-unknown
-```
-
-The validator should check claims against structured evidence where
-deterministic checks are possible.
-
-An LLM judge may supplement evaluation later but must not silently become the
-sole authority for correctness.
-
----
-
-# Grounded rendering
-
-Validated structured state should remain the authoritative representation.
-
-Target:
-
-```text
-candidate hypothesis
-↓
-validation
-↓
-approved structured claim
-↓
-deterministic or tightly controlled rendering
-↓
-user-facing result
-```
-
-Do not validate a claim and then casually send it through an unconstrained LLM
-that can introduce new unsupported assertions.
-
----
-
-# V2 evaluation architecture
-
-The implemented V2 harness lives under `app/evals/investigations/`. It reuses
-the shared eval rates, latency/token summaries, provider safety gate, and typed
-LLM boundary while keeping investigation cases and observations separate from
-the single-call V1 explanation schema.
-
-Each versioned development or holdout sample evaluates:
+Any stage beyond `config` can make a real, billed OpenRouter call and
+requires an explicit `--acknowledge-paid-call` flag; `all` runs the
+component stages in order and stops at the first failure ("fail-fast", since
+a later stage can't explain an earlier boundary failure). Every result is
+built through `_failure_result()` / `_sanitize_message()`, which redact the
+API key, any `Bearer <token>` header, and any `sk-...`-shaped key from
+provider error text, and truncate messages to 500 characters — only a fixed
+allowlist of fields (HTTP status, provider error code/type, sanitized
+message, upstream provider name) is ever printed. `resolved_configuration()`
+reports which models/routes are active without ever including the key
+itself.
+
+This exists because OpenRouter failures can originate at several different
+layers — raw transport/auth, this project's typed-parsing adapter, the
+planner's schema, or OpenRouter's own upstream-provider routing — and the
+staged design lets a developer isolate which layer is failing without
+guessing from a single opaque error.
+
+## Evals subsystem
+
+`evals/` (`services/api/app/evals/`) is an offline, manually-invoked quality
+harness that reuses production code paths without going through FastAPI or
+persistence. It has two independent datasets:
+
+**V1 explanation evals** (`evals/`, dataset IDs `merge-readiness-development-v1`
+and `merge-readiness-holdout-v1`, both `v1`): 11 development cases (8 direct
+fixture scenarios plus 3 constructed edge cases —
+`unknown-mergeability`, `draft-and-merge-conflict`,
+`multiple-blockers-and-actions`) and 6 holdout cases
+(`cases.py`). `runner.py` defaults to 3 serial samples per case with a
+1-second inter-call delay; `graders.py` keeps every attempt in
+provider/attempt denominators but only returned candidates in
+model-quality denominators, and `reporting.py` writes JSONL observations
+incrementally to ignored `local-artifacts/` plus a final typed JSON report.
+Expected claims always come from the real pure policy function
+(`required_explanation_claims()`), never a hand-written expectation.
+
+**V2 investigation evals** (`evals/investigations/`, dataset ID
+`v2-investigation-{split}`): evaluate both individual components and the
+complete adaptive trajectory —
 
 ```text
 planner validity and useful tool coverage
 deterministic Fact derivation and Evidence grounding
-hypothesis generation, reference agreement, and deterministic validation
-code diagnosis, Evidence-identified location grounding, and reference agreement
+hypothesis generation, reference agreement, deterministic validation
+code diagnosis, Evidence-identified location grounding, reference agreement
 deterministic recommendation grounding and reference agreement
 adversarial unsupported-claim rejection
 the complete production adaptive trajectory with fake connectors
 ```
 
-Trajectory graders check allowlisted tools, plan validation, shared budget and
-round limits, relevant Evidence discovery, grounded Facts/hypotheses/findings,
-grounded recommendations, and sensible termination. They compare Evidence and
-Fact recall with the deterministic baseline without requiring exact tool order.
+`MAX_PROVIDER_CALLS_PER_SAMPLE = 3 + MAX_PLANNING_ROUNDS + 2 = 8` bounds the
+worst-case provider spend per sample; `DEFAULT_SAMPLES_PER_CASE = 3`. A
+preflight reports the maximum possible provider calls before any real run,
+and a real (non-`fake`-provider) run requires explicit acknowledgement of
+paid calls. Denominators for provider success, schema validity, grounding
+quality, and ground-truth correctness are kept separate rather than
+collapsed into one "accuracy" number, so a failed provider/schema call is a
+release failure without becoming a misleading reasoning-quality zero.
 
-Implemented failure attribution:
+Both harnesses omit prompts, generated prose, connector payloads, repository/
+Jira identity, credentials, raw provider responses, and exception text from
+every artifact.
+
+See [ADR-015](decisions/ADR-015-versioned-explanation-eval-harness.md) for the V1 harness and [ADR-029](decisions/ADR-029-versioned-investigation-component-trajectory-evals.md) for the V2 harness.
+
+## Observability subsystem
+
+`observability/` (`services/api/app/observability/`) provides one
+OpenTelemetry tracer/meter provider shared by the merge-readiness workflow,
+the investigation runtime, and FastAPI request instrumentation
+(`FastAPIInstrumentor`, with `/health` excluded).
+
+- `RuntimeTelemetry` (`runtime_telemetry.py`) exposes both the V1
+  workflow-span API (`observe_workflow`, `observe_step`,
+  `record_terminal_step`/`record_terminal_workflow`) and the investigation
+  API `observe_investigation_stage()`, parameterized by a closed
+  `InvestigationStage` enum: `investigation`, `planning_round`, `planner`,
+  `plan_validation`, `tool_execution`, `retry`, `fact_derivation`,
+  `hypothesis_generation`, `hypothesis_validation`, `code_diagnosis`,
+  `code_validation`, `render`, `termination`. Stage outcomes
+  (`InvestigationStageResult`: `succeeded` / `failed` / `rejected` /
+  `blocked`) and a closed `FailureCategory` enum (connector, policy,
+  persistence, LLM-provider, LLM-invalid-output, LLM-validation, system,
+  telemetry-export, ...) keep span/metric labels bounded and free of
+  user-controlled or provider-controlled text.
+- `ObservedRunRepository` (`observed_run_repository.py`) wraps
+  `PostgresRunRepository` to add persistence-checkpoint spans without the
+  workflow code depending on telemetry directly.
+- `structured_logging.py` emits safe, correlated JSON events (e.g.
+  `runtime.connector_sources.selected`, `runtime.telemetry.export_failed`);
+  `run_id` may correlate spans/logs but is never a metric label.
+- `create_observability()` / `setup.py` builds the tracer/meter provider only
+  when `PROMPTQL_TELEMETRY_ENABLED=true` (console and/or OTLP export) or
+  `PROMPTQL_LANGFUSE_ENABLED=true`; otherwise it returns a no-op provider.
+  When Langfuse is enabled, a second `BatchSpanProcessor` sends the same
+  bounded spans to `{LANGFUSE_BASE_URL}/api/public/otel/v1/traces` — fan-out
+  from one tracer provider, not a parallel event or decision system.
+  `FailureIsolatingSpanExporter` / `FailureIsolatingMetricExporter` wrap
+  every exporter (console, general OTLP, and Langfuse) so an export or
+  shutdown failure logs one bounded warning and disables only that exporter,
+  never HTTP/runtime/policy/persistence behavior.
+- Investigation generation spans record task, provider, requested and
+  provider-resolved model, prompt version, and provider-reported token
+  counts, using both PromptQL-specific attributes and standard `gen_ai.*` /
+  `langfuse.observation.*` attribute names so Langfuse can interpret usage.
+  Unknown token usage or price stays unknown; no cost is invented locally.
+
+See [ADR-005](decisions/ADR-005-opentelemetry-observability.md) for the original OpenTelemetry/Grafana design and [ADR-028](decisions/ADR-028-passive-langfuse-otlp-generation-tracing.md) for the Langfuse export.
+
+## Explanations subsystem and provider boundary
+
+`explanations/` (`services/api/app/explanations/`) generates the
+non-authoritative natural-language explanation attached to a completed
+merge-readiness response, and also supplies the shared `TypedLLMClient`
+protocol/adapters that the investigation planner, hypothesis generator, and
+code diagnoser reuse.
+
+`MergeReadinessExplanationService` minimizes a completed
+`MergeReadinessResult` to stable decision/reason/action codes before calling
+an injected `LLMClient`; the generated `GeneratedExplanation` is untrusted
+until `StrictMergeReadinessExplanationValidator` confirms its codes exactly
+cover the policy's required set (no inventions, omissions, duplicates, or
+contradictions), after which backend-owned templates (`templates.py`) render
+the only wording ever shown — generated prose itself is discarded.
+Explanations are not persisted, so each POST/GET can trigger a fresh
+provider call in a real-provider mode.
+
+`create_llm_client()` (`factory.py`) is the sole production selection point,
+driven by `LLMSettings.from_environment()` (`config.py`):
 
 ```text
-wrong final result
-├── bad plan
-├── wrong tool
-├── incorrect arguments
-├── missing evidence
-├── connector/provider failure
-├── reasoning failure
-└── validator failure
+PROMPTQL_LLM_PROVIDER=fake        -> FakeLLMClient (default)
+PROMPTQL_LLM_PROVIDER=openai      -> AsyncOpenAI()                                    -> OpenAILLMClient
+PROMPTQL_LLM_PROVIDER=gemini      -> AsyncOpenAI(base_url=generativelanguage .../openai/) -> GeminiLLMClient
+PROMPTQL_LLM_PROVIDER=groq        -> AsyncOpenAI(base_url=api.groq.com/openai/v1)         -> GroqLLMClient
+PROMPTQL_LLM_PROVIDER=openrouter  -> AsyncOpenAI(base_url=openrouter.ai/api/v1)            -> OpenRouterLLMClient(GroqLLMClient)
 ```
 
-Keep these denominators separate:
+All four non-fake compatibility URLs are fixed in the factory (environment
+configuration cannot redirect a provider's secret to an arbitrary host); the
+SDK is always constructed with `max_retries=0`, so runtime retry policy is
+never silently amplified by the SDK. `OpenRouterLLMClient` is a thin
+subclass of `GroqLLMClient` that swaps the provider identity and disables
+Groq's reasoning-effort request parameter (`_typed_reasoning_effort = None`)
+rather than duplicating the adapter.
+
+For investigations, `ModelPolicy.model_for(task)` (`config.py`) resolves
+`PROMPTQL_PLANNER_MODEL` / `PROMPTQL_HYPOTHESIS_MODEL` /
+`PROMPTQL_CODE_DIAGNOSIS_MODEL`, each falling back to
+`PROMPTQL_DEFAULT_MODEL`; for a non-fake provider, startup
+(`LLMSettings.from_environment()`) requires either the default model or all
+three task models to be set, so a missing model fails at boot rather than
+mid-investigation. `main.py`'s `create_app()` constructs one client per task
+(`investigation_planner_client`, `investigation_hypothesis_client`,
+`investigation_code_diagnosis_client`) plus the shared V1 explanation client
+— PromptQL owns this deterministic task-to-model mapping; OpenRouter owns
+whatever serving-provider routing happens behind its endpoint. No semantic
+or quality-based model routing is performed.
+
+Provider-specific adapter behavior that still holds:
+
+- **Gemini**'s OpenAI-compatibility layer rejects the full
+  `GeneratedExplanation` JSON Schema (its enum/length constraints produce
+  too many serving states), so `GeminiStructuredClaims` asks for a decision
+  plus integer indexes into request-specific allowed reason/action lists;
+  the adapter rejects duplicate/out-of-range indexes before mapping back to
+  real codes. `GeminiLLMClient` also recognizes Google's HTTP 400
+  `INVALID_ARGUMENT` invalid-key shape and normalizes it to the standard
+  `authentication` failure category.
+- **Groq** receives `GeneratedExplanation` as a Pydantic response format
+  that the OpenAI SDK converts to a strict JSON Schema; Groq's strict-mode
+  support is currently limited to `openai/gpt-oss-20b` and
+  `openai/gpt-oss-120b`. The parsed object is still revalidated and
+  semantically grounded exactly as for any other provider.
+- **OpenRouter** reuses the Groq adapter unchanged apart from provider
+  identity and the omitted reasoning-effort parameter.
+
+See [ADR-012](decisions/ADR-012-openai-structured-explanation-adapter.md) (OpenAI), [ADR-013](decisions/ADR-013-gemini-openai-compatible-explanation-adapter.md)/[ADR-014](decisions/ADR-014-gemini-compact-claim-indexes.md) (Gemini), [ADR-017](decisions/ADR-017-groq-openai-compatible-explanation-adapter.md) (Groq), and [ADR-030](decisions/ADR-030-openrouter-openai-compatible-explanation-adapter.md) (OpenRouter) for each adapter's introduction, and [ADR-011](decisions/ADR-011-grounded-explanation-code-validation.md) for the grounding/validation boundary.
+
+## Live run dashboard
+
+`GET /v1/runs/{run_id}` returns the persisted current workflow snapshot — not
+an event stream. `RunPollingController` (`runPolling.ts`, shared by
+`useRunSnapshot.ts` for both dashboard variants) issues one GET roughly every
+1000ms while the snapshot is `pending` or `running`, stops automatically once
+it reaches a terminal status (`completed` / `failed` / `cancelled`), and
+aborts its in-flight request on unmount or route change. A transient refresh
+failure surfaces as a dashboard notice and is retried on the same interval;
+it never mutates the backend-owned status shown to the user.
 
 ```text
-provider success
-candidate availability
-schema validity
-grounding quality
-ground-truth correctness
+browser POST /v1/investigations (or a merge-readiness live-start)
+  -> PostgreSQL pending snapshot -> 202 {run_id, pending}
+browser navigate /runs/:runId -> repeated GET snapshot -> validated dashboard
+in-process task -> workflow/runtime transitions -> PostgreSQL current snapshot
 ```
 
-Do not reduce them to one ambiguous "accuracy" metric.
+Opening `/runs/:runId` directly (including after a browser refresh, or for a
+run never started from this browser) works because critical run state lives
+in PostgreSQL, not React memory — `App.tsx` derives the page purely from the
+URL path. Vite's dev server supplies the SPA history-fallback for `/runs/*`;
+a production deployment needs the same fallback so a bookmarked or refreshed
+run URL still reaches the app shell before its relative `/v1` request fires.
 
-Component quality is conditional on successful component provider/schema
-boundaries, and trajectory quality is conditional on a successful workflow
-generation boundary. Failed provider/schema calls remain release failures, but
-they do not become misleading reasoning-quality zeroes.
+This is state, not an event architecture: a snapshot says what is true now,
+not how the run got there. See [Runtime visibility: events and streaming](#runtime-visibility-events-and-streaming) in Part 2 for the not-yet-built alternative.
 
-Repeated sampling reruns only probabilistic stages. A preflight reports the
-maximum possible provider calls; a real run requires explicit paid-call
-acknowledgement. Aggregate report artifacts omit the question, prompts, code,
-Evidence payloads, generated output, credentials, and exception text. The first
-development/holdout catalog intentionally covers one fixture family, so it is a
-regression and harness proof rather than broad incident-quality evidence.
+See [ADR-018](decisions/ADR-018-live-run-dashboard-snapshot-polling.md) (merge-readiness) and [ADR-025](decisions/ADR-025-investigation-console-snapshot-integration.md) (investigation) for why polling the existing snapshot was chosen over a new event mechanism.
+
+## Not implemented
+
+As of this writing, the following are genuinely absent from the repository
+(verified by the absence of matching code, not carried forward from an
+earlier description): a cancellation API or any code path that ever
+transitions a run to `cancelled`; crash recovery / checkpoint-resume for
+investigation execution (which is process-local and in-memory only); a
+distributed worker or queue; GitHub or Jira OAuth/app authentication or any
+multi-tenant connector credential model; a live/HTTP `IncidentSource`
+(only `FakeIncidentSource` exists, in every environment); retention policies;
+persisted/versioned explanations; LLM SDK-level retries or provider fallback
+(`max_retries=0` everywhere, and runtime retries only the tool-execution
+path); hosted eval services, LLM-as-a-judge grading, or production-traffic
+eval collection; dashboards/alerting on top of the exported telemetry; and
+OpenTelemetry log export. `packages/`, `infra/`, and `scripts/` remain empty.
+Neon and Grafana Cloud resources and application deployment are configuration
+concerns outside this repository, not code paths inside it.
+
+A UI gap rather than a missing backend capability: there is currently no
+reachable way to *start* a merge-readiness run from the browser.
+`MergeReadinessPage.tsx` and `RequestForm.tsx` implement that submission
+flow, but `App.tsx`'s routing never renders them — only `/runs/:runId` (view
+an existing run) and the investigation console at `/` are reachable. The
+backend routes and the merge-readiness *dashboard* rendering both still
+work; only the "start a new merge-readiness run" entry point is orphaned.
 
 ---
 
-# V2 observability architecture
+# Part 2 — Forward-looking design notes
 
-Extend the current OpenTelemetry hierarchy.
+None of the sections below are implemented. Each is retained because it
+represents real design thinking for work that is still ahead — several are
+explicitly on the near-term plan — condensed to its core decision rather
+than repeated as narrative. Where a note's premise has already been
+overtaken by what Part 1 describes as current, that is called out inline
+instead of left standing.
 
-A future investigation trace may resemble:
+## Crash recovery/checkpoint/resume design
 
-```text
-HTTP request
-└── investigation
-    ├── baseline/planner
-    ├── plan validation
-    ├── tool.github.*
-    ├── tool.jira.*
-    ├── tool.incident.*
-    ├── replan
-    ├── hypothesis.generate
-    └── hypothesis.validate
-```
+Investigation execution is process-local and non-resumable today (see
+[Runtime subsystem](#runtime-subsystem-run-lifecycle-and-single-round-execution)):
+`AgentExecutor.execute()` and `AdaptiveInvestigationRuntime.investigate()`
+return in-memory state that is persisted only at round boundaries, and
+`InvestigationExecutionState` itself is never written to PostgreSQL. A crash
+between a tool request being sent and its response being recorded leaves
+that step's true outcome unknown — it cannot safely be assumed `SUCCEEDED`
+or `FAILED` on restart, and blindly replaying a read-only call is
+comparatively safe while replaying a future side-effecting one would not be.
 
-Potential bounded metrics include:
+The durable state PostgreSQL already provides for V1 merge-readiness runs
+(and for investigation round boundaries) is not the same thing as durable
+*execution*: it can make a stranded `RUNNING` row visible after a crash, but
+it cannot reconstruct or resume the mid-round agent state that produced it.
 
-```text
-investigation duration
-tool calls per run
-model calls per run
-replan count
-retry count
-budget exhaustion
-unsupported claim count
-token usage
-```
+The intended future direction is **checkpoint/snapshot recovery**, not event
+sourcing: persist enough state to continue (the `ValidatedPlan`, step
+states, referenceable runtime outputs, accumulated Evidence/Facts/
+MissingInformation, budget and attempt counts, and a
+checkpoint-schema version) rather than persisting every transition and
+replaying history to rebuild state. The recovery flow this implies: on
+startup, load a non-terminal run, load its latest checkpoint, reconstruct
+execution state, treat any prior `RUNNING` step as unknown rather than
+successful or failed, apply a recovery policy to it, and continue the
+remaining plan. None of this — checkpoint table, serialization, a resume
+endpoint, a startup recovery scan, or stale-run detection — exists yet.
+Rerunning an entire plan from scratch after a restart would not be crash
+recovery and is deliberately not what this direction describes.
 
-Do not use high-cardinality user-controlled values as metric labels.
+## Cancellation
 
----
+`RunStatus.CANCELLED` is a defined, validated state (see
+[Runtime subsystem](#runtime-subsystem-run-lifecycle-and-single-round-execution)),
+but no code path in the repository ever produces it — there is no
+cancellation API, no cooperative cancellation signal inside
+`AgentExecutor`/`AdaptiveInvestigationRuntime`, and no propagation to an
+in-flight provider or tool call.
 
-# Replay
+A real cancellation mechanism needs its own lifecycle distinct from the
+existing terminal states — conceptually `pending -> running -> cancelling ->
+cancelled`, where "cancel requested" means no new work should start and
+"cancelled" means the runtime actually reached that boundary. Neither state
+implies that already-dispatched external work (a tool call already sent to a
+connector, a request already sent to an LLM provider) was rolled back or
+compensated — cancellation here means stopping future work, not undoing past
+work.
 
-A later V2 capability should allow safe evidence snapshots to be reused for
-offline comparison.
+## Failure architecture
 
-Conceptually:
+The taxonomy already implemented is per-boundary and closed: `ToolFailureCode`
+(tools), `PlannerFailureCode` (planner), `PlanValidationFailureCode`
+(validator), `HypothesisValidationFailureCode` /
+`CodeFindingValidationFailureCode` (the two deterministic validators), and
+`FailureCategory` (observability). What doesn't exist yet is a single
+umbrella distinction the codebase doesn't currently need to make explicit:
+a **deadline-exceeded** category (no per-step or per-round wall-clock
+deadline exists — only the tool-call budget bounds work) and a
+**cancellation** failure category (since cancellation itself isn't wired
+up; see above). The one invariant worth preserving as these are added:
+*missing evidence is not automatically a system failure* — a `MissingInformation`
+record and a `RuntimeErrorInfo` remain semantically distinct outcomes, and
+that distinction already holds throughout the current tool/planner/executor
+code.
 
-```text
-recorded investigation evidence
-↓
-new prompt/model/runtime logic
-↓
-replay
-↓
-compare results
-```
+## Retry architecture beyond current
 
-Replay is useful for:
+The implemented policy (`RetryPolicy` in `investigations/execution.py`,
+see [Runtime subsystem](#runtime-subsystem-run-lifecycle-and-single-round-execution))
+is intentionally simple and fixed: exactly 3 attempts, fixed 1s/2s delays,
+no jitter, no per-call deadline, and a closed retryable set (`rate_limited`,
+`timeout`, `upstream_unavailable`). SDK-level retries are already disabled
+everywhere (`max_retries=0`), so runtime retry policy is not at risk of
+silently compounding with provider-SDK retries — that separation is already
+real, not aspirational.
 
-```text
-prompt regression
-model comparison
-planner comparison
-validator changes
-```
+What's still missing if retry policy needs to grow beyond the current fixed
+values: jitter (to avoid synchronized retry storms across concurrent runs),
+a configurable or adaptive backoff schedule, and a per-call or per-step
+deadline independent of the attempt count. None of these are implemented;
+the current 3-attempt/1s-2s policy is an explicit, owner-confirmed initial
+choice, not a placeholder pending immediate replacement.
 
-without relying on mutable live external systems for every experiment.
+## Replay
 
----
+No mechanism exists to re-run a *recorded* investigation's Evidence against a
+new prompt, model, planner, or validator version without calling live
+external systems again. The intended shape: capture a completed run's
+accumulated Evidence (already a normalized, persisted-shape value via
+`InvestigationRuntimeSnapshot`), and offer a path that replays only the
+probabilistic stages — planning, hypothesis generation, code diagnosis —
+against that frozen Evidence set instead of live connectors. This would let
+a prompt or model change be evaluated for regression, or two providers be
+compared, without depending on mutable live GitHub/Jira/incident state
+staying reproducible between two runs.
 
-# Queue/worker boundary
+## Queue/worker boundary
 
-Queues and workers are not an initial V2 requirement.
+Today's asynchronous execution (`POST /v1/investigations` and the
+merge-readiness live-start route, both returning `202 Accepted` with a
+`run_id` and continuing in a `LiveRunTaskRegistry`-owned `asyncio.Task`, see
+[Dependency and ownership boundaries](#dependency-and-ownership-boundaries))
+is intentionally still in-process — there is no queue, no separate worker
+process, and no cross-process work distribution. This was a deliberate
+choice to defer: keep synchronous/in-process execution until investigation
+duration or load actually demonstrates that request-lifetime, single-process
+execution is unsuitable, rather than introducing Kafka, RabbitMQ, Redis,
+Celery, SQS, or Temporal ahead of a specific requirement.
 
-Keep synchronous/in-process execution until investigation duration or load
-demonstrates that request-lifetime execution is unsuitable.
+If that requirement arrives, the `202 Accepted` / `run_id` / poll-the-snapshot
+contract the frontend and API already share would not need to change shape —
+only what sits behind `POST /v1/investigations` would: create durable run →
+enqueue work → a worker process picks it up → the same investigation runtime
+executes it. The `RunRepository` abstraction already isolates workflow logic
+from storage, which is the boundary a worker would need to cross to persist
+its progress instead of relying on in-process task lifetime.
 
-A later asynchronous architecture may become:
+## Runtime visibility: events and streaming
 
-```text
-POST /investigations
-↓
-create durable run
-↓
-enqueue work
-↓
-worker
-↓
-investigation runtime
-```
+`GET /v1/runs/{run_id}` and the ~1-second dashboard polling described in
+[Live run dashboard](#live-run-dashboard) answer *what is true now* — a
+snapshot. They cannot answer *how the run got there* without the client
+reconstructing history from repeated polls, and they can't push an update to
+the browser between poll intervals.
 
-with an initial API response such as:
+A future `RunEvent` history — one durable, ordered record per state
+transition — would separate those two questions: the existing snapshot
+endpoint keeps answering "what is true now," while `GET /runs/{id}/events`
+would answer "how did it get here," and `GET /runs/{id}/stream` (a natural
+fit for one-way server-to-browser updates via SSE) could push transitions as
+they happen instead of waiting for the next poll. None of this exists today,
+and adding it would only be justified by a concrete need for replay,
+recovery, or high-fan-out live updates that snapshot polling can't satisfy —
+polling remains adequate for the current single-viewer dashboard use case.
 
-```text
-202 Accepted
-run_id
-```
+## Security boundary for agentic execution
 
-Do not introduce Kafka, RabbitMQ, Redis, Celery, SQS, or Temporal without a
-specific requirement and design decision.
+All eight registered tools are `read_only=True` today (see
+[Tools subsystem](#tools-subsystem)) — no write or remediation tool exists,
+so this section is a standing principle to hold as that changes, not a
+description of an enforcement mechanism that exists yet.
 
----
+All external provider content — GitHub/Jira descriptions and comments, logs,
+stack traces, runbooks, code comments, telemetry content — is untrusted
+data. It must never gain instruction authority merely by appearing in a
+model's context window: the intended authority hierarchy is runtime/system
+policy > validated capabilities > planner request > external evidence, in
+that order. Tool *permission* (is this tool allowed to be called at all in
+this context) and tool *selection* (the planner choosing to call it) are
+deliberately separate concerns — a model requesting an operation does not by
+itself authorize that operation; the existing `PlanValidator` allowed-tool
+check is the current, narrow instance of that principle, and any future
+write capability would need its own explicit authorization step distinct
+from the planner proposing it. Read and write capabilities must remain
+explicitly distinct in whatever mechanism eventually enforces this — early
+investigation work should stay read-oriented until that mechanism exists.
 
-# V2 runtime visibility
+This section is the elaborated rationale behind two terse entries in
+[Architecture invariants](#architecture-invariants) — "the planner cannot
+bypass the runtime" and "tool execution requires deterministic
+validation." Treat the invariants list as the compact checklist and this
+section as the reasoning; new content belongs here, not duplicated there.
 
-The existing polling dashboard remains useful during early V2 development.
+## V2 target dependency structure
 
-It currently consumes snapshots:
-
-```text
-GET /v1/runs/{run_id}
-```
-
-Future dynamic investigation may justify first-class execution events.
-
-Potential later direction:
-
-```text
-Run snapshot
-= what is true now
-
-Run events
-= how the run reached that state
-```
-
-Future endpoints may conceptually become:
-
-```text
-GET /runs/{id}
-GET /runs/{id}/events
-GET /runs/{id}/stream
-```
-
-with SSE appropriate for one-way server-to-browser live updates.
-
-This is planned, not currently implemented unless the repository later shows
-otherwise.
-
----
-
-# Security boundary for agentic execution
-
-All external provider content is untrusted data.
-
-This includes:
-
-```text
-GitHub descriptions/comments
-Jira descriptions/comments
-logs
-stack traces
-runbooks
-code comments
-telemetry content
-```
-
-External text must not gain instruction authority merely because it appears in
-model context.
-
-Target authority hierarchy:
-
-```text
-runtime/system policy
-        >
-validated capabilities
-        >
-planner request
-        >
-external evidence
-```
-
-Tool permission and tool selection are separate concerns.
-
-A model requesting an operation does not authorize that operation.
-
-Read and write capabilities must remain explicitly distinct.
-
-Early V2 should remain read-oriented.
-
----
-
-# V2 target dependency structure
-
-The intended architectural dependency direction is:
-
-```text
-External providers
-      │
-      ▼
-Adapters / connectors
-      │
-      ▼
-Normalized evidence
-      │
-      ▼
-Investigation domain
-      │
-      ▼
-Planner / validator / runtime orchestration
-      │
-      ▼
-Validated InvestigationResult
-      │
-      ▼
-API
-      │
-      ▼
-Frontend
-```
-
-The domain should not import infrastructure-specific clients.
-
-Provider adapters may depend inward on domain/protocol contracts.
-
-High-level investigation policy must not depend on raw provider schemas.
+The intended dependency direction — external providers → adapters/connectors
+→ normalized evidence → investigation domain → planner/validator/runtime
+orchestration → validated result → API → frontend, each layer depending only
+inward — is already substantially what the current module map in
+[Module map](#module-map) reflects: `connectors/` doesn't import from
+`investigations/`, the domain package doesn't import FastAPI, and
+`api/v1/` delegates to `workflows/` rather than containing orchestration
+logic itself. The forward-looking part of this note is holding the line as
+new subsystems are added: the domain should not import infrastructure-specific
+clients, provider adapters may depend inward on domain/protocol contracts but
+not the reverse, and high-level investigation policy must not depend on raw
+provider schemas. This is a discipline to maintain, not a gap to fill.
 
 ---
 
-# V2 implementation sequence
+# Part 3 — Invariants, non-goals, and sequence
 
-The current target milestone order is:
+## Architecture invariants
 
-```text
-V2.1  Investigation Domain Model
-V2.2  Evidence Model
-V2.3  GitHub code/diff evidence
-V2.4  IncidentSource abstraction
-V2.5  Tool abstraction and registry
-V2.6  Deterministic investigation baseline
-V2.7  Typed planner
-V2.8  Plan validator
-V2.9  Agent execution loop
-V2.10 Execution budgets
-V2.11 Failure taxonomy extension
-V2.12 Retry/backoff/jitter
-V2.13 Retry-safety/idempotency boundary (implemented and verified; no idempotency system)
-V2.14 Durable checkpoint/resume (explicitly postponed; current execution is process-local)
-V2.15 Cancellation
-V2.16 Dynamic replanning
-V2.17 Hypothesis generation
-V2.18 Claim/evidence validation
-V2.19 Grounded rendering and initial investigation console (implemented offline)
-V2 completion stabilization Budgeted failure-location tool, truthful fake trajectory, and persisted generation metadata
-V2.20 Component/trajectory evals
-V2.21 Agent-level OTel/Grafana
-V2.22 Replay
-V2.23 Queue/workers if justified
-V2.24 Investigation UI/timeline (initial console implemented with V2.19)
-V2.25 Live verification/release gates
-```
+These invariants should be preserved as implementation continues. Most are
+already upheld by the current code described in Part 1; a few (9, 11) name
+the boundary between what exists now and what Part 2 describes as future
+work.
 
-The active implementation plan determines which one is currently being built.
+1. External data is validated at provider boundaries.
+2. Evidence retains provenance.
+3. Facts and hypotheses are distinct types.
+4. Missing evidence is represented explicitly.
+5. LLM output remains untrusted until validated.
+6. The planner cannot bypass the runtime.
+7. Tool execution requires deterministic validation.
+8. Runtime execution is bounded.
+9. Persistent state is not confused with crash recovery.
+10. Retryable and permanent failures remain distinct.
+11. Retries must not create uncontrolled duplicate effects.
+12. Model/provider/prompt identity remains observable without leaking secrets.
+13. Evaluation distinguishes reliability, schema validity, grounding, and
+    correctness.
+14. User-visible claims must not exceed their supporting evidence.
+15. Existing V1 behaviour must not regress merely to make V2 abstractions more
+    generic.
 
-Do not infer implementation merely from this roadmap.
+Invariants 6 and 7 are stated compactly here; see
+[Security boundary for agentic execution](#security-boundary-for-agentic-execution)
+in Part 2 for the elaborated rationale and the authority hierarchy they
+imply.
 
----
+## Explicit non-goals
 
-# Explicit V2 non-goals
-
-Unless a later milestone establishes a concrete requirement, early V2 does not
-include:
+Unless a later milestone establishes a concrete requirement, the system does
+not include, and none of the sections above should be read as implying a
+plan to add:
 
 ```text
 company-wide RAG
@@ -2253,77 +1059,46 @@ Kafka
 sharding
 ```
 
-These may be useful later.
+These may be useful later. They are not prerequisites for a reliable
+incident-investigation runtime, and none currently appear anywhere in
+`services/api/app/`.
 
-They are not prerequisites for building a reliable incident-investigation
-runtime.
+## Implementation sequence
 
----
+The original milestone-by-milestone plan, with status corrected against the
+current code rather than the plan's own annotations. Each **Implemented**
+row points to the Part 1 section with the actual current-state description
+instead of repeating it here.
 
-# V2 architecture invariants
+| Milestone | Status | Where it's described now |
+| --- | --- | --- |
+| V2.1 Investigation Domain Model | Implemented | [Investigations subsystem structure](#investigations-subsystem-structure) |
+| V2.2 Evidence Model | Implemented | [Evidence & Fact model](#evidence--fact-model) |
+| V2.3 GitHub code/diff evidence | Implemented | [Connectors subsystem](#connectors-subsystem) |
+| V2.4 IncidentSource abstraction | Implemented (fake-only in every environment) | [Connectors subsystem](#connectors-subsystem) |
+| V2.5 Tool abstraction and registry | Implemented (now 8 tools, not 7) | [Tools subsystem](#tools-subsystem) |
+| V2.6 Deterministic investigation baseline | Implemented (not the live path) | [Investigations subsystem structure](#investigations-subsystem-structure) |
+| V2.7 Typed planner | Implemented | [Planning subsystem](#planning-subsystem-planner-validator-and-replanning) |
+| V2.8 Plan validator | Implemented | [Planning subsystem](#planning-subsystem-planner-validator-and-replanning) |
+| V2.9 Agent execution loop | Implemented | [Runtime subsystem](#runtime-subsystem-run-lifecycle-and-single-round-execution) |
+| V2.10 Execution budgets | Implemented | [Runtime subsystem](#runtime-subsystem-run-lifecycle-and-single-round-execution) |
+| V2.11 Failure taxonomy extension | Implemented | [Tools subsystem](#tools-subsystem) |
+| V2.12 Retry/backoff/jitter | Implemented except jitter | [Runtime subsystem](#runtime-subsystem-run-lifecycle-and-single-round-execution); jitter tracked in [Retry architecture beyond current](#retry-architecture-beyond-current) |
+| V2.13 Retry-safety/idempotency boundary | Implemented (read-only tools only; no idempotency system exists) | [Runtime subsystem](#runtime-subsystem-run-lifecycle-and-single-round-execution) |
+| V2.14 Durable checkpoint/resume | Not implemented, explicitly postponed | [Crash recovery/checkpoint/resume design](#crash-recoverycheckpointresume-design) |
+| V2.15 Cancellation | Not implemented | [Cancellation](#cancellation) |
+| V2.16 Dynamic replanning | Implemented | [Planning subsystem](#planning-subsystem-planner-validator-and-replanning) |
+| V2.17 Hypothesis generation | Implemented | [Hypotheses subsystem](#hypotheses-subsystem) |
+| V2.18 Claim/evidence validation | Implemented | [Hypotheses subsystem](#hypotheses-subsystem) |
+| V2.19 Grounded rendering and initial investigation console | Implemented | [Hypotheses subsystem](#hypotheses-subsystem); console UI in [Module map](#module-map) |
+| V2 completion stabilization (budgeted failure-location tool, code diagnosis, generation metadata) | Implemented | [Code diagnosis subsystem](#code-diagnosis-subsystem) |
+| V2.20 Component/trajectory evals | Implemented | [Evals subsystem](#evals-subsystem) |
+| V2.21 Agent-level OTel/Grafana (+ Langfuse) | Implemented | [Observability subsystem](#observability-subsystem) |
+| V2.22 Replay | Not implemented | [Replay](#replay) |
+| V2.23 Queue/workers if justified | Not implemented, deliberately deferred | [Queue/worker boundary](#queueworker-boundary) |
+| V2.24 Investigation UI/timeline | Console implemented; event timeline/SSE not implemented | [Module map](#module-map); [Runtime visibility: events and streaming](#runtime-visibility-events-and-streaming) |
+| V2.25 Live verification/release gates | Status not verifiable from `services/api/app/` alone — this milestone concerns deployment/release process rather than application code, and this document only describes the latter | — |
 
-Future implementation should preserve these invariants:
-
-1. External data is validated at provider boundaries.
-2. Evidence retains provenance.
-3. Facts and hypotheses are distinct types.
-4. Missing evidence is represented explicitly.
-5. LLM output remains untrusted until validated.
-6. The planner cannot bypass the runtime.
-7. Tool execution requires deterministic validation.
-8. Runtime execution is bounded.
-9. Persistent state is not confused with crash recovery.
-10. Retryable and permanent failures remain distinct.
-11. Retries must not create uncontrolled duplicate effects.
-12. Model/provider/prompt identity remains observable without leaking secrets.
-13. Evaluation distinguishes reliability, schema validity, grounding, and
-    correctness.
-14. User-visible claims must not exceed their supporting evidence.
-15. Existing V1 behaviour must not regress merely to make V2 abstractions more
-    generic.
-
----
-
-# V2.1 implementation boundary
-
-At the start of V2, only V2.1 should become implemented.
-
-Its intended dependency shape is:
-
-```text
-services/api/app/investigations/models.py
-        │
-        ├── uses existing ContractModel conventions
-        ├── defines investigation-domain vocabulary
-        └── contains no provider/runtime execution
-```
-
-V2.1 should not create dependencies on:
-
-```text
-GitHub HTTP clients
-Jira HTTP clients
-LLM clients
-OpenTelemetry
-SQLAlchemy
-FastAPI
-planner code
-tool execution
-```
-
-This keeps the first investigation models as a pure domain boundary.
-
-When V2.1 is implemented and validated, move it from:
-
-```text
-TARGET / PLANNED
-```
-
-to the relevant:
-
-```text
-CURRENT / IMPLEMENTED
-```
-
-architecture section and leave the remaining target sections explicitly
-planned.
+The active implementation plan, not this table, is the source of truth for
+what's being worked on right now; this table only corrects the record on
+what has already landed.

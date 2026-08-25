@@ -57,6 +57,7 @@ class ExplanationSource(StrEnum):
     GEMINI = "gemini"
     GROQ = "groq"
     OPENAI = "openai"
+    OPENROUTER = "openrouter"
 
 
 class RunSources(ContractModel):

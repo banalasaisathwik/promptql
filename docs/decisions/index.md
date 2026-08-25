@@ -47,3 +47,4 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-027](ADR-027-evidence-identified-code-diagnosis.md) | Accepted | Let models select an observed code-location Evidence ID while deterministic code resolves coordinates and remediation |
 | [ADR-028](ADR-028-passive-langfuse-otlp-generation-tracing.md) | Accepted | Export bounded investigation generation spans to optional Langfuse through a second failure-isolated OTLP trace exporter |
 | [ADR-029](ADR-029-versioned-investigation-component-trajectory-evals.md) | Accepted | Evaluate V2 components and adaptive trajectories with versioned reference cases, deterministic graders, repeated sampling, and separate provider/schema/quality metrics |
+| [ADR-030](ADR-030-openrouter-openai-compatible-explanation-adapter.md) | Accepted | Add explicit OpenRouter identity through the fixed OpenAI-compatible endpoint, reusing the Groq adapter by subclassing it |

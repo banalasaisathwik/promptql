@@ -1,5 +1,3 @@
-"""Runtime snapshots for the V2 investigation console."""
-
 from datetime import datetime
 from typing import Annotated, Self
 from uuid import UUID
@@ -19,6 +17,7 @@ from app.investigations.hypotheses import (
 from app.investigations.models import (
     Evidence,
     FactSet,
+    InvestigationIdentifier,
     InvestigationRequest,
     MissingInformation,
 )
@@ -45,8 +44,8 @@ class InvestigationPlanningRoundSnapshot(ContractModel):
     round_number: Annotated[int, Field(ge=1)]
     plan_id: NonEmptyString
     plan_validation_status: NonEmptyString
-    # Optionality is a read-compatibility choice for snapshots written before
-    # planner identity was persisted; every new completed round supplies it.
+
+
     planner_metadata: PlannerMetadata | None = None
     steps: tuple[InvestigationStepSnapshot, ...] = ()
     evidence_delta_ids: tuple[NonEmptyString, ...] = ()
@@ -55,27 +54,21 @@ class InvestigationPlanningRoundSnapshot(ContractModel):
 
 
 class InvestigationRuntimeSnapshot(ContractModel):
-    # PURPOSE: Store the current investigation projection that a browser needs
-    # while execution is in progress or after it terminates.
-    #
-    # FLOW: The workflow writes rounds and tool states first, then adds normalized
-    # Evidence and derived Facts, and finally records validated hypotheses,
-    # budget accounting, and the termination reason.
-    #
-    # WHY: A typed snapshot is sufficient for the existing polling workload and
-    # avoids making the UI reconstruct domain state from low-level events.
     rounds: tuple[InvestigationPlanningRoundSnapshot, ...] = ()
-    evidence: tuple[Evidence, ...] = ()
+    evidence: tuple[InvestigationIdentifier, ...] = ()
+
+
+    evidence_content: tuple[Evidence, ...] = ()
     facts: FactSet = ()
     missing_information: tuple[MissingInformation, ...] = ()
-    # Defaults preserve decoding of older JSONB snapshots while new runs expose
-    # the exact bounded context that was available to the next planning round.
+
+
     action_history: tuple[ActionSummary, ...] = ()
     validated_hypotheses: tuple[ValidatedHypothesis, ...] = ()
     hypothesis_generation_metadata: HypothesisGenerationMetadata | None = None
     rejected_hypothesis_count: Annotated[int, Field(ge=0)] = 0
-    # These defaults are both lifecycle-friendly and backward-compatible:
-    # snapshots written before code diagnosis decode as having no findings.
+
+
     validated_code_findings: tuple[ValidatedCodeFinding, ...] = ()
     code_diagnosis_metadata: CodeDiagnosisMetadata | None = None
     rejected_code_finding_count: Annotated[int, Field(ge=0)] = 0
@@ -87,8 +80,6 @@ class InvestigationRuntimeSnapshot(ContractModel):
 
 
 class InvestigationRun(ContractModel):
-    """A durable run variant carried by the same polling endpoint as V1 runs."""
-
     run_id: UUID
     workflow_name: NonEmptyString
     workflow_version: NonEmptyString
@@ -103,9 +94,6 @@ class InvestigationRun(ContractModel):
 
     @model_validator(mode="after")
     def validate_lifecycle_fields(self) -> Self:
-        # `model_validator(mode="after")` runs after Pydantic has converted the
-        # incoming JSON into typed fields, so this is a lifecycle invariant check
-        # rather than a frontend-only TypeScript assertion.
         if self.status is RunStatus.PENDING:
             if self.started_at is not None or self.completed_at is not None:
                 raise ValueError("a pending investigation cannot have timestamps")

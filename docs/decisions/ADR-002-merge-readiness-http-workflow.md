@@ -4,7 +4,7 @@
 - Date: 2026-08-02
 - Owners: Repository owner
 - Supersedes: None
-- Superseded by: None
+- Superseded by: ADR-003 for the run/response shape (`PullRequestMergeReadiness` with `policy_result` was replaced by the typed `MergeReadinessRun` response with a `result` field)
 
 ## Context
 

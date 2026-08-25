@@ -14,6 +14,7 @@ from app.investigations import (
     RecommendedAction,
     RecommendedActionCode,
 )
+from app.investigations.evidence_store import EvidenceStore
 from app.investigations.fact_derivation import derive_facts
 from app.tools import InvestigationTool, InvestigationToolId, ToolFailureCode, ToolOutcome, ToolRegistry, ToolResult
 
@@ -26,26 +27,24 @@ class DuplicateEvidenceIdError(ValueError):
 
 
 class EvidenceAccumulator:
-    # PURPOSE: Keep collection order for repeatable results while rejecting an
-    # accidental attempt to treat two source observations as the same evidence.
-    def __init__(self) -> None:
-        self._evidence_by_id: dict[str, Evidence] = {}
+    def __init__(self, store: EvidenceStore | None = None) -> None:
+        self._store = store if store is not None else EvidenceStore()
+        self._ids: list[str] = []
+        self._seen_ids: set[str] = set()
 
     def add(self, evidence: tuple[Evidence, ...]) -> None:
         for item in evidence:
-            if item.evidence_id in self._evidence_by_id:
+            if item.evidence_id in self._seen_ids:
                 raise DuplicateEvidenceIdError(item.evidence_id)
-            self._evidence_by_id[item.evidence_id] = item
+            self._seen_ids.add(item.evidence_id)
+            self._ids.append(item.evidence_id)
+            self._store.put(item)
 
     def values(self) -> tuple[Evidence, ...]:
-        return tuple(self._evidence_by_id.values())
+        return self._store.get_many(tuple(self._ids))
 
 
 class ToolInvoker:
-    # PURPOSE: Join registry metadata to a concrete adapter without making the
-    # registry itself an executor. This is the small V2.6 dispatch boundary.
-    """Invoke an adapter only after its metadata definition is registered."""
-
     def __init__(self, registry: ToolRegistry, tools: Mapping[str, InvestigationTool]) -> None:
         self._registry = registry
         self._tools = tools
@@ -70,20 +69,18 @@ class ToolInvoker:
 
 
 class DeterministicBaseline:
-    # PURPOSE: Execute the fixed evidence runbook. Branches depend only on
-    # already-validated request/evidence data, never on a model decision.
-    """A sequential V2.6 runbook; it selects no tools probabilistically."""
-
     def __init__(
         self,
         invoker: ToolInvoker,
         incident_source: IncidentSource,
+        store: EvidenceStore,
     ) -> None:
         self._invoker = invoker
         self._incident_source = incident_source
+        self._store = store
 
     async def investigate(self, request: InvestigationRequest) -> InvestigationResult:
-        evidence = EvidenceAccumulator()
+        evidence = EvidenceAccumulator(self._store)
         missing: list[MissingInformation] = []
 
         if request.incident_reference is None:
@@ -109,7 +106,7 @@ class DeterministicBaseline:
                 request.telemetry_window.model_dump(),
             )
 
-        # A deployment's typed SHA is the only authority for the commit lookup.
+
         for item in evidence.values():
             content = item.content
             if content.content_type != "deployment":
@@ -139,8 +136,8 @@ class DeterministicBaseline:
             )
 
         unique_missing = tuple({item.missing_information_id: item for item in missing}.values())
-        # Derivation is deliberately after collection: it cannot call sources or
-        # turn a failed observation into an asserted relationship.
+
+
         facts = derive_facts(evidence.values())
         return InvestigationResult(
             evidence=evidence.values(), facts=facts, hypotheses=(),
@@ -155,7 +152,7 @@ class DeterministicBaseline:
     ) -> None:
         result = await self._invoker.invoke(tool_id, arguments)
         if result.outcome is ToolOutcome.OBSERVED:
-            evidence.add(result.evidence)
+            evidence.add(self._store.get_many(result.evidence_ids))
         elif result.outcome is ToolOutcome.FAILED:
             missing.append(self._missing_source(tool_id, result))
 

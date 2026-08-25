@@ -28,6 +28,7 @@ from app.investigations import (
     EvidenceSource,
     JiraIssueEvidenceContent,
 )
+from app.investigations.evidence_store import EvidenceStore
 from app.tools.errors import InvalidToolArgumentsError
 from app.tools.models import (
     InvestigationToolId,
@@ -49,28 +50,26 @@ class InvestigationTool(Protocol):
 class _EvidenceTool:
     definition: ToolDefinition
 
+    def __init__(self, store: EvidenceStore) -> None:
+        self._store = store
+
     def _arguments(self, arguments: Mapping[str, object]):
         try:
             return self.definition.validate_arguments(arguments)
         except ValueError as error:
             raise InvalidToolArgumentsError(self.definition.tool_id) from error
 
+
     def _observed(self, evidence: Evidence | tuple[Evidence, ...]) -> ToolResult:
         evidence_items = evidence if isinstance(evidence, tuple) else (evidence,)
+        evidence_ids = tuple(self._store.put(item) for item in evidence_items)
         return ToolResult(
             tool_id=self.definition.tool_id,
             outcome=ToolOutcome.OBSERVED,
-            evidence=evidence_items,
+            evidence_ids=evidence_ids,
         )
 
-    # PURPOSE: Translate provider-specific exceptions into the stable tool
-    # result seen by the investigation runtime.
-    #
-    # FLOW: Recognize the known connector boundary -> retain its safe category
-    # -> replace its detail with a generic message -> return a failed ToolResult.
-    #
-    # WHY: The executor needs category-level semantics for retries, while callers
-    # must not receive raw provider exception text or request details.
+
     def _failed(self, error: Exception) -> ToolResult:
         if isinstance(error, ConnectorUnavailableError):
             code = ToolFailureCode.CAPABILITY_UNAVAILABLE
@@ -93,7 +92,8 @@ class _EvidenceTool:
 class GetCommitTool(_EvidenceTool):
     definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.GET_COMMIT)
 
-    def __init__(self, source: GitHubCodeEvidenceSource) -> None:
+    def __init__(self, source: GitHubCodeEvidenceSource, store: EvidenceStore) -> None:
+        super().__init__(store)
         self._source = source
 
     async def execute(self, arguments: Mapping[str, object]) -> ToolResult:
@@ -107,7 +107,8 @@ class GetCommitTool(_EvidenceTool):
 class GetPullRequestTool(_EvidenceTool):
     definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.GET_PULL_REQUEST)
 
-    def __init__(self, source: GitHubCodeEvidenceSource) -> None:
+    def __init__(self, source: GitHubCodeEvidenceSource, store: EvidenceStore) -> None:
+        super().__init__(store)
         self._source = source
 
     async def execute(self, arguments: Mapping[str, object]) -> ToolResult:
@@ -121,7 +122,8 @@ class GetPullRequestTool(_EvidenceTool):
 class GetDiffTool(_EvidenceTool):
     definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.GET_DIFF)
 
-    def __init__(self, source: GitHubCodeEvidenceSource) -> None:
+    def __init__(self, source: GitHubCodeEvidenceSource, store: EvidenceStore) -> None:
+        super().__init__(store)
         self._source = source
 
     async def execute(self, arguments: Mapping[str, object]) -> ToolResult:
@@ -135,7 +137,8 @@ class GetDiffTool(_EvidenceTool):
 class GetIncidentTool(_EvidenceTool):
     definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.GET_INCIDENT)
 
-    def __init__(self, source: IncidentSource) -> None:
+    def __init__(self, source: IncidentSource, store: EvidenceStore) -> None:
+        super().__init__(store)
         self._source = source
 
     async def execute(self, arguments: Mapping[str, object]) -> ToolResult:
@@ -147,24 +150,17 @@ class GetIncidentTool(_EvidenceTool):
 
 
 class GetFailureLocationTool(_EvidenceTool):
-    # PURPOSE: Put failure-location retrieval behind the same typed, read-only
-    # adapter boundary as every other external evidence lookup.
-    #
-    # WHY: Calling IncidentSource directly from the workflow would hide a
-    # connector call from plan validation, retry policy, budget accounting,
-    # action history, and persisted step state.
     definition = next(
         item
         for item in TOOL_DEFINITIONS
         if item.tool_id == InvestigationToolId.GET_FAILURE_LOCATION
     )
 
-    def __init__(self, source: IncidentSource) -> None:
+    def __init__(self, source: IncidentSource, store: EvidenceStore) -> None:
+        super().__init__(store)
         self._source = source
 
     async def execute(self, arguments: Mapping[str, object]) -> ToolResult:
-        # Validation occurs before provider access, just like the other tools;
-        # a planner cannot smuggle arbitrary incident-source arguments through.
         request = self._arguments(arguments)
         try:
             return self._observed(
@@ -177,7 +173,8 @@ class GetFailureLocationTool(_EvidenceTool):
 class GetDeploymentsTool(_EvidenceTool):
     definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.GET_DEPLOYMENTS)
 
-    def __init__(self, source: IncidentSource) -> None:
+    def __init__(self, source: IncidentSource, store: EvidenceStore) -> None:
+        super().__init__(store)
         self._source = source
 
     async def execute(self, arguments: Mapping[str, object]) -> ToolResult:
@@ -191,7 +188,8 @@ class GetDeploymentsTool(_EvidenceTool):
 class QueryTelemetryTool(_EvidenceTool):
     definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.QUERY_TELEMETRY)
 
-    def __init__(self, source: IncidentSource) -> None:
+    def __init__(self, source: IncidentSource, store: EvidenceStore) -> None:
+        super().__init__(store)
         self._source = source
 
     async def execute(self, arguments: Mapping[str, object]) -> ToolResult:
@@ -205,7 +203,8 @@ class QueryTelemetryTool(_EvidenceTool):
 class GetJiraIssueTool(_EvidenceTool):
     definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.GET_JIRA_ISSUE)
 
-    def __init__(self, connector: JiraConnector) -> None:
+    def __init__(self, connector: JiraConnector, store: EvidenceStore) -> None:
+        super().__init__(store)
         self._connector = connector
 
     async def execute(self, arguments: Mapping[str, object]) -> ToolResult:
@@ -247,15 +246,16 @@ def build_tool_adapters(
     github_source: GitHubCodeEvidenceSource,
     incident_source: IncidentSource,
     jira_connector: JiraConnector,
+    store: EvidenceStore,
 ) -> dict[str, InvestigationTool]:
     tools: tuple[InvestigationTool, ...] = (
-        GetCommitTool(github_source),
-        GetPullRequestTool(github_source),
-        GetDiffTool(github_source),
-        GetFailureLocationTool(incident_source),
-        GetIncidentTool(incident_source),
-        GetDeploymentsTool(incident_source),
-        QueryTelemetryTool(incident_source),
-        GetJiraIssueTool(jira_connector),
+        GetCommitTool(github_source, store),
+        GetPullRequestTool(github_source, store),
+        GetDiffTool(github_source, store),
+        GetFailureLocationTool(incident_source, store),
+        GetIncidentTool(incident_source, store),
+        GetDeploymentsTool(incident_source, store),
+        QueryTelemetryTool(incident_source, store),
+        GetJiraIssueTool(jira_connector, store),
     )
     return {tool.definition.tool_id: tool for tool in tools}

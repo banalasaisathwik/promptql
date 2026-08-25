@@ -1,5 +1,3 @@
-"""Bounded, round-boundary orchestration for V2 investigation replanning."""
-
 import json
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Iterator
@@ -15,8 +13,9 @@ from app.investigations.execution import (
     ExecutionBudget,
     InvestigationExecutionState,
 )
+from app.investigations.evidence_store import EvidenceStore
 from app.investigations.fact_derivation import derive_facts
-from app.investigations.models import Evidence, FactSet, InvestigationRequest, MissingInformation
+from app.investigations.models import FactSet, InvestigationIdentifier, InvestigationRequest, MissingInformation
 from app.investigations.planning import (
     ActionSummary,
     ContextBuilder,
@@ -42,8 +41,8 @@ from app.tools.models import ToolDefinition, ToolOutcome
 
 MAX_PLANNING_ROUNDS = 3
 MAX_NO_PROGRESS_ROUNDS = 1
-# Reuse the configured runtime logger. A sibling logger would not inherit its
-# handler because the runtime logger intentionally does not propagate upward.
+
+
 _PLANNER_DIAGNOSTIC_LOGGER = logging.getLogger("promptql.runtime")
 
 
@@ -67,7 +66,7 @@ class PlanningRound(ContractModel):
 
 class AdaptiveInvestigationState(ContractModel):
     rounds: tuple[PlanningRound, ...]
-    evidence: tuple[Evidence, ...]
+    evidence: tuple[InvestigationIdentifier, ...]
     facts: FactSet
     missing_information: tuple[MissingInformation, ...]
     action_history: tuple[ActionSummary, ...]
@@ -90,19 +89,11 @@ def _tool_context(definition: ToolDefinition) -> PlannerToolDefinition:
     )
 
 
-# PURPOSE: Preserve enough safe context to distinguish planner transport,
-# provider, and local-schema failures after the typed planner has translated an
-# exception. The compact result is observability data, never runtime state.
-#
-# SECURITY: Counts and stable tool IDs are allowed; the investigation goal,
-# Evidence summaries, prompt, provider response, headers, and credentials stay
-# outside this record.
 def _planner_failure_diagnostics(
     planner: TypedLLMPlanner,
     planner_input: PlannerInput,
     error: InvestigationPlannerError,
 ) -> dict[str, object]:
-    """Return only bounded metadata needed to debug a failed planner call."""
     client = getattr(planner, "_client", None)
     provider = getattr(client, "provider", None)
     model = getattr(client, "model", None)
@@ -155,24 +146,12 @@ def _planner_failure_diagnostics(
 
 
 class AdaptiveInvestigationRuntime:
-    # PURPOSE: Coordinate several short, independently validated plans while
-    # preserving one investigation's accumulated state and global call limit.
-    #
-    # FLOW: Build safe planner context -> validate its proposal -> let the
-    # existing executor finish the entire round -> compare ID sets -> either
-    # stop deterministically or begin the next round. It never interprets the
-    # semantic meaning of an Evidence or Fact.
-    #
-    # DESIGN: This orchestration layer keeps LLM strategy separate from runtime
-    # safety, much like a TypeScript service coordinates existing components
-    # instead of duplicating their internal execution logic.
-    """Plan, validate, and execute short plans without mid-plan interruption."""
-
     def __init__(
         self,
         planner: TypedLLMPlanner,
         validator: PlanValidator,
         executor: AgentExecutor,
+        store: EvidenceStore,
         *,
         telemetry: RuntimeTelemetry | None = None,
         run_id: UUID | None = None,
@@ -180,6 +159,7 @@ class AdaptiveInvestigationRuntime:
         self._planner = planner
         self._validator = validator
         self._executor = executor
+        self._store = store
         self._telemetry = telemetry
         self._run_id = run_id
 
@@ -189,7 +169,7 @@ class AdaptiveInvestigationRuntime:
         allowed_tools: Iterable[ToolDefinition],
         *,
         budget: ExecutionBudget,
-        initial_evidence: tuple[Evidence, ...] = (),
+        initial_evidence: tuple[InvestigationIdentifier, ...] = (),
         initial_missing_information: tuple[MissingInformation, ...] = (),
         request_context: InvestigationRequest | None = None,
         on_round_planned: Callable[
@@ -200,7 +180,7 @@ class AdaptiveInvestigationRuntime:
     ) -> AdaptiveInvestigationState:
         definitions = tuple(sorted(allowed_tools, key=lambda item: item.tool_id))
         evidence = initial_evidence
-        facts: FactSet = derive_facts(initial_evidence)
+        facts: FactSet = derive_facts(self._store.get_many(initial_evidence))
         missing_information = initial_missing_information
         history: list[ActionSummary] = []
         rounds: list[PlanningRound] = []
@@ -222,14 +202,11 @@ class AdaptiveInvestigationRuntime:
                 InvestigationStage.PLANNING_ROUND,
                 round_number=round_number,
             ) as round_observation:
-                # The round span is the parent timeline; nested planner,
-                # validator, executor, tool, and Fact spans retain their own
-                # failure category without changing this control flow.
                 planner_input = ContextBuilder().build(
                     investigation_goal,
                     facts,
                     missing_information,
-                    evidence,
+                    self._store.get_many(evidence),
                     definitions,
                     action_history=tuple(history),
                     remaining_tool_calls=remaining,
@@ -263,8 +240,8 @@ class AdaptiveInvestigationRuntime:
                             round_observation.set_stage_result(
                                 InvestigationStageResult.FAILED
                             )
-                        # Log counts and stable identifiers, never the goal,
-                        # Evidence, prompt, provider body, or credentials.
+
+
                         _PLANNER_DIAGNOSTIC_LOGGER.error(
                             json.dumps(
                                 _planner_failure_diagnostics(
@@ -291,8 +268,6 @@ class AdaptiveInvestigationRuntime:
                     InvestigationStage.PLAN_VALIDATION,
                     round_number=round_number,
                 ) as validation_observation:
-                    # V2.7 still permits five-step standalone plans; adaptive
-                    # runtime accepts only the shorter V2.16 horizon.
                     if len(planned.plan.steps) > MAX_ADAPTIVE_PLAN_STEPS:
                         _mark_rejected(validation_observation)
                         _mark_rejected(round_observation)
@@ -331,10 +306,10 @@ class AdaptiveInvestigationRuntime:
                         ),
                         planned,
                     )
-                before_evidence = {item.evidence_id for item in evidence}
+                before_evidence = set(evidence)
                 before_facts = {item.fact_id for item in facts}
-                # The executor receives only the remaining global allowance. Its
-                # per-attempt accounting remains authoritative across rounds.
+
+
                 execution = await self._executor.execute(
                     validation.validated_plan,
                     budget=ExecutionBudget(max_tool_calls=remaining),
@@ -347,7 +322,7 @@ class AdaptiveInvestigationRuntime:
                 execution.missing_information,
             )
             remaining = execution.budget.remaining_tool_calls
-            evidence_delta = tuple(sorted({item.evidence_id for item in evidence} - before_evidence))
+            evidence_delta = tuple(sorted(set(evidence) - before_evidence))
             fact_delta = tuple(sorted({item.fact_id for item in facts} - before_facts))
             rounds.append(
                 PlanningRound(
@@ -368,12 +343,11 @@ class AdaptiveInvestigationRuntime:
                 if step.attempts == 0:
                     continue
                 tool_id = next(item.tool_id for item in planned.plan.steps if item.step_id == step.step_id)
-                result_evidence_ids = {
-                    item.evidence_id for item in (step.tool_result.evidence if step.tool_result else ())
-                }
-                # A round-level Fact delta does not prove that every step in
-                # that round produced a Fact. Attribute progress only when a
-                # new Fact cites Evidence returned by this exact step.
+                result_evidence_ids = (
+                    set(step.tool_result.evidence_ids) if step.tool_result else set()
+                )
+
+
                 history.append(
                     ActionSummary(
                         tool_id=tool_id,
@@ -405,8 +379,8 @@ class AdaptiveInvestigationRuntime:
                         ContinuationReason.COMPLETE,
                     )
                 )
-            # ID deltas mean state changed; they deliberately do not rank the
-            # information or introduce a provider/domain-specific signal rule.
+
+
             no_progress_rounds = no_progress_rounds + 1 if not evidence_delta and not fact_delta else 0
             if no_progress_rounds >= MAX_NO_PROGRESS_ROUNDS:
                 return self._state(
@@ -454,8 +428,6 @@ class AdaptiveInvestigationRuntime:
         accumulated: tuple[MissingInformation, ...],
         incoming: tuple[MissingInformation, ...],
     ) -> tuple[MissingInformation, ...]:
-        # Stable IDs make this an idempotent accumulation boundary: replanning
-        # can observe the same absence repeatedly without inflating state.
         items_by_id = {
             item.missing_information_id: item for item in accumulated
         }

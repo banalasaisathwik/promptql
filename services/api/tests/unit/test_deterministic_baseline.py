@@ -25,13 +25,15 @@ from app.investigations import (
     ToolInvoker,
 )
 from app.investigations.baseline import DuplicateEvidenceIdError, EvidenceAccumulator
+from app.investigations.evidence_store import EvidenceStore
 from app.investigations.fact_derivation import derive_facts
 from app.tools import build_tool_adapters, build_tool_registry
 
 
 def baseline(incident_source: FakeIncidentSource, github_source: FakeGitHubCodeEvidenceSource | None = None) -> DeterministicBaseline:
-    adapters = build_tool_adapters(github_source or FakeGitHubCodeEvidenceSource(), incident_source, FakeJiraConnector())
-    return DeterministicBaseline(ToolInvoker(build_tool_registry(adapters), adapters), incident_source)
+    store = EvidenceStore()
+    adapters = build_tool_adapters(github_source or FakeGitHubCodeEvidenceSource(), incident_source, FakeJiraConnector(), store)
+    return DeterministicBaseline(ToolInvoker(build_tool_registry(adapters), adapters), incident_source, store)
 
 
 class DeterministicBaselineTests(unittest.IsolatedAsyncioTestCase):
@@ -47,9 +49,10 @@ class DeterministicBaselineTests(unittest.IsolatedAsyncioTestCase):
                 return await self._tool.execute(arguments)
 
         source = FakeIncidentSource()
-        adapters = build_tool_adapters(FakeGitHubCodeEvidenceSource(), source, FakeJiraConnector())
+        store = EvidenceStore()
+        adapters = build_tool_adapters(FakeGitHubCodeEvidenceSource(), source, FakeJiraConnector(), store)
         recorded = {tool_id: RecordingTool(tool) for tool_id, tool in adapters.items()}
-        return DeterministicBaseline(ToolInvoker(build_tool_registry(adapters), recorded), source)
+        return DeterministicBaseline(ToolInvoker(build_tool_registry(adapters), recorded), source, store)
 
     async def test_canonical_run_uses_fixed_tools_and_derives_only_supported_facts(self) -> None:
         original = CHANGED_FILE_EVIDENCE_FIXTURES[FIXTURE_PULL_REQUEST]

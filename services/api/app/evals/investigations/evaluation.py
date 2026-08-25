@@ -47,6 +47,7 @@ from app.investigations.planning import (
     PlanValidator,
     TypedLLMPlanner,
 )
+from app.investigations.evidence_store import EvidenceStore
 from app.investigations.replanning import MAX_PLANNING_ROUNDS
 from app.runtime import InMemoryRunRepository, RunStatus
 from app.tools import build_tool_adapters, build_tool_registry
@@ -56,24 +57,24 @@ from app.workflows import InvestigationWorkflowService
 SleepFunction = Callable[[float], Awaitable[None]]
 
 
-# Purpose: Construct fresh fake sources for every baseline and trajectory sample.
-# Why here: Isolation prevents one repeated sample's in-memory state from making a
-# later sample look better or worse, similar to a fresh fixture per Jest test.
 def _fixture_tools():
     incident_source = FakeIncidentSource()
+    store = EvidenceStore()
     adapters = build_tool_adapters(
         FakeGitHubCodeEvidenceSource(),
         incident_source,
         None,
+        store,
     )
-    return incident_source, adapters, build_tool_registry(adapters)
+    return incident_source, adapters, build_tool_registry(adapters), store
 
 
 async def _deterministic_baseline(request: InvestigationRequest):
-    incident_source, adapters, registry = _fixture_tools()
+    incident_source, adapters, registry, store = _fixture_tools()
     return await DeterministicBaseline(
         ToolInvoker(registry, adapters),
         incident_source,
+        store,
     ).investigate(request)
 
 
@@ -94,8 +95,6 @@ def _failed_boundary(
     started_at_ns: int,
     error,
 ) -> ProviderBoundaryObservation:
-    # Flow: A provider failure means no valid response arrived; a schema failure
-    # means the provider returned successfully but its proposal was unusable.
     failure_code = error.code.value
     provider_failure = failure_code == "provider_failure"
     return ProviderBoundaryObservation(
@@ -165,9 +164,6 @@ def _recommendations_are_grounded(recommendations, findings) -> bool:
 
 
 def _unsupported_claims_rejected(case: InvestigationEvalCase, facts, evidence) -> bool:
-    # Purpose: Probe the production semantic validators with fabricated IDs.
-    # Watch out: Schema-valid adversarial candidates must still be rejected before
-    # they can count as grounded component output.
     unsupported_hypothesis = CandidateHypothesis(
         hypothesis_id="hypothesis:unsupported-eval",
         kind=case.expected_hypothesis_kind,
@@ -228,14 +224,11 @@ async def observe_investigation_case(
     hypothesis_client: TypedLLMClient,
     code_diagnosis_client: TypedLLMClient,
 ) -> InvestigationEvalObservation:
-    # Flow: Observe isolated components first, then run the same clients through
-    # the complete production workflow. This attributes local failures without
-    # replacing the end-to-end trajectory measurement.
     observation_started_at_ns = perf_counter_ns()
     baseline = await _deterministic_baseline(case.request)
     baseline_evidence_ids = {item.evidence_id for item in baseline.evidence}
     baseline_fact_ids = {item.fact_id for item in baseline.facts}
-    _, _, registry = _fixture_tools()
+    _, _, registry, _ = _fixture_tools()
 
     planner_boundary = _not_attempted_boundary()
     planner_valid = False
@@ -267,8 +260,8 @@ async def observe_investigation_case(
             registry.list(),
         )
         planner_valid = plan_validation.valid
-        # Why here: Set inclusion rewards coverage of useful tools without making
-        # one valid ordering or extra safe retrieval the reference implementation.
+
+
         proposed_tool_ids = {step.tool_id for step in planned.plan.steps}
         planner_useful = planner_valid and set(case.useful_tool_ids) <= proposed_tool_ids
 
@@ -342,8 +335,7 @@ async def observe_investigation_case(
             )
             recommendations = build_developer_recommendations(accepted_findings)
 
-    # Purpose: Exercise production orchestration and state transitions while
-    # keeping eval persistence deterministic and credential-free.
+
     repository = InMemoryRunRepository()
     workflow = InvestigationWorkflowService(
         repository,
@@ -355,9 +347,7 @@ async def observe_investigation_case(
     terminal = await workflow.continue_persisted_run(pending)
     state = terminal.state
     result = terminal.result
-    adaptive_evidence_ids = (
-        {item.evidence_id for item in state.evidence} if state is not None else set()
-    )
+    adaptive_evidence_ids = set(state.evidence) if state is not None else set()
     adaptive_fact_ids = (
         {item.fact_id for item in state.facts} if state is not None else set()
     )
@@ -568,9 +558,6 @@ def _all_boolean_fields(model, *, exclude: frozenset[str] = frozenset()) -> bool
 def _component_generation_succeeded(
     observation: InvestigationEvalObservation,
 ) -> bool:
-    # Watch out: Diagnosis may be skipped because an otherwise valid hypothesis
-    # response produced no accepted candidate. That is a quality result, not an
-    # operational failure, so only an attempted diagnosis can fail this gate.
     required_boundaries = (observation.planner, observation.hypothesis)
     if not all(
         boundary.attempted and boundary.provider_success and boundary.schema_valid
@@ -588,9 +575,6 @@ def aggregate_investigation_observations(
     *,
     planned_samples: int,
 ) -> InvestigationEvalMetrics:
-    # Flow: Provider success is measured across attempted boundaries; schema
-    # validity is conditioned on provider success so outages do not masquerade as
-    # structured-output quality failures.
     boundaries = tuple(
         (stage, boundary)
         for observation in observations
@@ -608,10 +592,8 @@ def aggregate_investigation_observations(
     schema_successes = sum(
         boundary.schema_valid for boundary in provider_success_boundaries
     )
-    # Key syntax: Pydantic's `model_fields` supplies stable field names, avoiding
-    # a second hand-maintained list that could drift from the observation schema.
-    # Why here: Conditional denominators stop network/schema failures from being
-    # counted a second time as reasoning-quality failures.
+
+
     component_eligible_observations = tuple(
         observation
         for observation in observations
@@ -746,8 +728,6 @@ async def execute_investigation_eval(
     git_commit: str | None = None,
     sleep: SleepFunction = asyncio.sleep,
 ) -> tuple[tuple[InvestigationEvalObservation, ...], InvestigationEvalReport]:
-    # Flow: Each case/sample pair gets a complete independent observation; pacing
-    # occurs between samples only and is injectable for fast deterministic tests.
     started_at = datetime.now(UTC)
     observations = []
     planned_samples = len(dataset.cases) * run_identity.samples_per_case
