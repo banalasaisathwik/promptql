@@ -1,5 +1,3 @@
-"""User-facing V2 investigation workflow built on the existing run repository."""
-
 import json
 import logging
 from datetime import UTC, datetime
@@ -16,6 +14,7 @@ from app.investigations import (
     InvestigationRequest,
     ToolInvoker,
 )
+from app.investigations.evidence_store import EvidenceStore
 from app.investigations.planning import PlanValidator, TypedLLMPlanner
 from app.investigations.code_diagnosis import (
     CodeContextBuilder,
@@ -68,20 +67,11 @@ _HYPOTHESIS_DIAGNOSTIC_LOGGER = logging.getLogger("promptql.runtime")
 _CODE_DIAGNOSIS_LOGGER = logging.getLogger("promptql.runtime")
 
 
-# PURPOSE: Make the final probabilistic boundary as observable as planning.
-#
-# FLOW: Read already-sanitized error metadata -> combine it with counts and
-# prompt/model identity -> return a JSON-safe event for the runtime logger.
-#
-# SECURITY: Facts, missing-information details, prompts, provider responses,
-# headers, and credentials are deliberately absent from the returned mapping.
 def _hypothesis_failure_diagnostics(
     generator: TypedLLMHypothesisGenerator,
     generation_input: HypothesisGenerationInput,
     error: HypothesisGenerationError,
 ) -> dict[str, object]:
-    """Allowlist failure metadata without retaining Facts, prompts, or responses."""
-
     client = getattr(generator, "_client", None)
     provider = getattr(client, "provider", None)
     details = error.provider_details
@@ -118,8 +108,6 @@ def _code_diagnosis_failure_diagnostics(
     diagnosis_input: CodeDiagnosisInput,
     error: CodeDiagnosisError,
 ) -> dict[str, object]:
-    """Allowlist code-diagnosis failure metadata without code or candidate text."""
-
     client = getattr(diagnoser, "_client", None)
     provider = getattr(client, "provider", None)
     details = error.provider_details
@@ -153,17 +141,6 @@ def _code_diagnosis_failure_diagnostics(
 
 
 class InvestigationWorkflowService:
-    # PURPOSE: Adapt the V2 executor and hypothesis boundary to the existing
-    # durable run lifecycle used by the V1 live dashboard.
-    #
-    # FLOW: Save pending -> save running/plan snapshots -> execute validated
-    # read-only steps -> validate hypothesis candidates against Facts -> render
-    # the grounded result -> save one terminal snapshot.
-    #
-    # WHY: Keeping persistence and execution orchestration here lets the router
-    # remain an HTTP boundary and keeps the existing polling path authoritative.
-    """Create durable V2 snapshots while reusing the existing polling boundary."""
-
     def __init__(
         self,
         repository: RunRepository,
@@ -204,9 +181,6 @@ class InvestigationWorkflowService:
         return pending
 
     async def continue_persisted_run(self, pending: InvestigationRun) -> InvestigationRun:
-        # FLOW: The root span surrounds the real persisted workflow. Termination
-        # is emitted only after a terminal snapshot exists, so its round/tool
-        # counts describe backend truth rather than an optimistic in-flight view.
         with self._telemetry.observe_investigation_stage(
             InvestigationStage.INVESTIGATION,
             pending.run_id,
@@ -247,8 +221,6 @@ class InvestigationWorkflowService:
             return terminal
 
     async def _continue_persisted_run(self, pending: InvestigationRun) -> InvestigationRun:
-        # The first running save gives a refresh a real lifecycle state; the
-        # later plan save exposes pending tool steps before external calls begin.
         started_at = datetime.now(UTC)
         running = pending.model_copy(
             update={
@@ -259,23 +231,25 @@ class InvestigationWorkflowService:
         )
         self._repository.save(running)
 
+        store = EvidenceStore()
         adapters = build_tool_adapters(
             self._github_code_source,
             self._incident_source,
             self._jira_connector,
+            store,
         )
         registry = build_tool_registry(adapters)
         executor = AgentExecutor(
             registry,
             ToolInvoker(registry, adapters),
+            store,
             telemetry=self._telemetry,
             run_id=pending.run_id,
         )
 
-        # These callbacks are invoked only at round boundaries. Keeping saves
-        # here avoids changing AgentExecutor just to expose per-step polling.
+
         async def save_planned_round(state, planned) -> None:
-            snapshot = self._snapshot_from_adaptive(state)
+            snapshot = self._snapshot_from_adaptive(state, store)
             round_number = len(state.rounds) + 1
             pending_round = InvestigationPlanningRoundSnapshot(
                 round_number=round_number,
@@ -304,19 +278,15 @@ class InvestigationWorkflowService:
 
         async def save_completed_round(state) -> None:
             self._repository.save(
-                running.model_copy(update={"state": self._snapshot_from_adaptive(state)})
+                running.model_copy(update={"state": self._snapshot_from_adaptive(state, store)})
             )
 
         try:
-            # The planner may propose work, but the existing adaptive runtime
-            # remains the authority for validation, shared budget accounting,
-            # round termination, and accumulated Evidence/Facts.
-            # The question and its typed request context cross unchanged. This
-            # layer does not infer intent or invent tool arguments.
             adaptive_state = await AdaptiveInvestigationRuntime(
                 TypedLLMPlanner(self._planner_client),
                 PlanValidator(registry),
                 executor,
+                store,
                 telemetry=self._telemetry,
                 run_id=pending.run_id,
             ).investigate(
@@ -337,11 +307,9 @@ class InvestigationWorkflowService:
             return await self._complete_adaptive_run(
                 running,
                 adaptive_state,
+                store,
             )
         except Exception:
-            # Any programming/invariant failure after evidence collection must
-            # still move the durable run out of RUNNING. Known provider failures
-            # are handled inside the completion path and retain partial truth.
             return self._fail(
                 running,
                 started_at,
@@ -352,10 +320,9 @@ class InvestigationWorkflowService:
         self,
         running: InvestigationRun,
         adaptive_state: AdaptiveInvestigationState,
+        store: EvidenceStore,
     ) -> InvestigationRun:
-        # Execution state is converted to a compact API snapshot before any
-        # probabilistic synthesis, so Facts remain authoritative throughout.
-        state = self._snapshot_from_adaptive(adaptive_state)
+        state = self._snapshot_from_adaptive(adaptive_state, store)
         validated_hypotheses = ()
         rejected_hypothesis_count = 0
         hypothesis_metadata = None
@@ -375,8 +342,6 @@ class InvestigationWorkflowService:
             ),
         )
         if adaptive_state.facts:
-            # An empty Fact set has no admissible causal support. Skipping the
-            # provider call is cheaper and keeps abstention deterministic.
             hypothesis_generator = TypedLLMHypothesisGenerator(self._llm_client)
             try:
                 with self._telemetry.observe_investigation_stage(
@@ -442,14 +407,12 @@ class InvestigationWorkflowService:
         code_diagnosis_metadata = None
         developer_recommendations = ()
         if validated_hypotheses:
-            # FLOW: A validated hypothesis unlocks a minimized provider call,
-            # but not an authoritative finding. Only the deterministic validator
-            # can copy an observed location into persisted domain state.
+            evidence = store.get_many(adaptive_state.evidence)
             diagnosis_input = CodeContextBuilder().build(
                 running.request,
                 validated_hypotheses,
                 adaptive_state.facts,
-                adaptive_state.evidence,
+                evidence,
             )
             code_diagnoser = TypedLLMCodeDiagnoser(self._code_diagnosis_client)
             try:
@@ -481,9 +444,6 @@ class InvestigationWorkflowService:
                     )
                 code_diagnosis_metadata = generated_findings.metadata
             except CodeDiagnosisError as error:
-                # WATCH OUT: This is a partial-success result. Evidence and the
-                # grounded hypothesis stay useful even though the optional,
-                # later diagnosis stage could not produce accepted structure.
                 _CODE_DIAGNOSIS_LOGGER.error(
                     json.dumps(
                         _code_diagnosis_failure_diagnostics(
@@ -505,7 +465,7 @@ class InvestigationWorkflowService:
                         generated_findings.candidates,
                         validated_hypotheses,
                         adaptive_state.facts,
-                        adaptive_state.evidence,
+                        evidence,
                     )
                     validated_code_findings = finding_validation.accepted_findings
                     rejected_code_finding_count = len(
@@ -528,8 +488,8 @@ class InvestigationWorkflowService:
                 "rejected_code_finding_count": rejected_code_finding_count,
                 "code_diagnosis_metadata": code_diagnosis_metadata,
                 "developer_recommendations": developer_recommendations,
-                # This field reports the adaptive runtime stop. The final result
-                # separately reports a later synthesis-stage provider failure.
+
+
                 "termination_reason": adaptive_state.continuation_reason.value,
             }
         )
@@ -593,7 +553,9 @@ class InvestigationWorkflowService:
         )
 
     @staticmethod
-    def _snapshot_from_adaptive(state: AdaptiveInvestigationState) -> InvestigationRuntimeSnapshot:
+    def _snapshot_from_adaptive(
+        state: AdaptiveInvestigationState, store: EvidenceStore
+    ) -> InvestigationRuntimeSnapshot:
         rounds = tuple(
             InvestigationPlanningRoundSnapshot(
                 round_number=round.round_number,
@@ -619,6 +581,7 @@ class InvestigationWorkflowService:
         return InvestigationRuntimeSnapshot(
             rounds=rounds,
             evidence=state.evidence,
+            evidence_content=store.get_many(state.evidence),
             facts=state.facts,
             missing_information=state.missing_information,
             action_history=state.action_history,
@@ -641,9 +604,6 @@ def _grounded_reason(reason: str) -> GroundedTerminationReason:
 
 
 def _set_generation_span_attributes(observation, metadata) -> None:
-    # Provider-reported usage and resolved identity are observability facts, not
-    # evidence about the incident. Missing values stay absent; cost is never
-    # guessed from local configuration.
     attributes = {
         "promptql.llm.provider": metadata.provider,
         "promptql.llm.requested_model": metadata.requested_model or metadata.model,

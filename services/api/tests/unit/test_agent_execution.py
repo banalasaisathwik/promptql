@@ -15,6 +15,7 @@ from app.investigations import (
     ExecutionTerminationReason,
     IncidentEvidenceContent,
 )
+from app.investigations.evidence_store import EvidenceStore
 from app.investigations.planning import (
     InvestigationPlan,
     Literal,
@@ -46,9 +47,6 @@ class RecordingInvoker:
         return results.pop(0) if isinstance(results, list) else results
 
 
-# This injected async test double records requested delays so backoff tests do
-# not wait one or two real seconds. It plays the same role as a mocked timer in
-# a JavaScript test while leaving production execution on `asyncio.sleep`.
 class RecordingSleeper:
     def __init__(self):
         self.delays = []
@@ -62,6 +60,7 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.definitions = {item.tool_id: item for item in TOOL_DEFINITIONS}
         self.registry = ToolRegistry(self.definitions.values())
         self.timestamp = datetime(2026, 8, 19, tzinfo=UTC)
+        self.store = EvidenceStore()
 
     def _validated(self, *steps):
         result = PlanValidator(self.registry).validate(
@@ -96,9 +95,9 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    @staticmethod
-    def _observed(tool_id, *evidence):
-        return ToolResult(tool_id=tool_id, outcome=ToolOutcome.OBSERVED, evidence=evidence)
+    def _observed(self, tool_id, *evidence):
+        evidence_ids = tuple(self.store.put(item) for item in evidence)
+        return ToolResult(tool_id=tool_id, outcome=ToolOutcome.OBSERVED, evidence_ids=evidence_ids)
 
     async def test_chain_resolves_runtime_reference_and_constructs_typed_input(self):
         plan = self._validated(
@@ -120,7 +119,7 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
             InvestigationToolId.GET_COMMIT: ToolResult(tool_id=InvestigationToolId.GET_COMMIT, outcome=ToolOutcome.EMPTY),
         })
 
-        state = await AgentExecutor(self.registry, invoker).execute(plan, budget=ExecutionBudget(max_tool_calls=5))
+        state = await AgentExecutor(self.registry, invoker, self.store).execute(plan, budget=ExecutionBudget(max_tool_calls=5))
 
         self.assertEqual([call[0] for call in invoker.calls], [InvestigationToolId.GET_DEPLOYMENTS, InvestigationToolId.GET_COMMIT])
         self.assertEqual(invoker.calls[1][1]["commit_sha"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -137,7 +136,7 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
             InvestigationToolId.GET_INCIDENT: ToolResult(tool_id=InvestigationToolId.GET_INCIDENT, outcome=ToolOutcome.FAILED, failure=ToolFailure(code=ToolFailureCode.SOURCE_FAILURE, message="source failed")),
         })
 
-        state = await AgentExecutor(self.registry, invoker).execute(plan, budget=ExecutionBudget(max_tool_calls=5))
+        state = await AgentExecutor(self.registry, invoker, self.store).execute(plan, budget=ExecutionBudget(max_tool_calls=5))
 
         self.assertEqual([item.status for item in state.step_states], [ExecutionStepStatus.FAILED, ExecutionStepStatus.BLOCKED, ExecutionStepStatus.BLOCKED, ExecutionStepStatus.FAILED])
         self.assertEqual([item.block_reason for item in state.step_states[1:3]], [ExecutionBlockReason.DEPENDENCY_FAILED, ExecutionBlockReason.DEPENDENCY_FAILED])
@@ -154,8 +153,8 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
             InvestigationToolId.GET_INCIDENT: self._observed(InvestigationToolId.GET_INCIDENT, self._incident("incident-1")),
         }
 
-        first = await AgentExecutor(self.registry, RecordingInvoker(results)).execute(plan, budget=ExecutionBudget(max_tool_calls=5))
-        second = await AgentExecutor(self.registry, RecordingInvoker(results)).execute(plan, budget=ExecutionBudget(max_tool_calls=5))
+        first = await AgentExecutor(self.registry, RecordingInvoker(results), self.store).execute(plan, budget=ExecutionBudget(max_tool_calls=5))
+        second = await AgentExecutor(self.registry, RecordingInvoker(results), self.store).execute(plan, budget=ExecutionBudget(max_tool_calls=5))
 
         self.assertEqual(len(first.evidence), 2)
         self.assertEqual(len(first.facts), 1)
@@ -169,7 +168,7 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         invoker = RecordingInvoker({InvestigationToolId.GET_INCIDENT: ToolResult(tool_id=InvestigationToolId.GET_INCIDENT, outcome=ToolOutcome.EMPTY)})
 
-        state = await AgentExecutor(self.registry, invoker).execute(plan, budget=ExecutionBudget(max_tool_calls=5))
+        state = await AgentExecutor(self.registry, invoker, self.store).execute(plan, budget=ExecutionBudget(max_tool_calls=5))
 
         self.assertEqual(len(invoker.calls), 1)
         self.assertEqual(state.step_states[1].status, ExecutionStepStatus.BLOCKED)
@@ -183,7 +182,7 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         invoker = RecordingInvoker({InvestigationToolId.GET_INCIDENT: self._observed(InvestigationToolId.GET_INCIDENT, self._incident("incident-1"))})
 
-        state = await AgentExecutor(self.registry, invoker).execute(plan, budget=ExecutionBudget(max_tool_calls=2))
+        state = await AgentExecutor(self.registry, invoker, self.store).execute(plan, budget=ExecutionBudget(max_tool_calls=2))
 
         self.assertEqual(len(invoker.calls), 2)
         self.assertEqual(state.budget.used_tool_calls, 2)
@@ -199,7 +198,7 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         invoker = RecordingInvoker({InvestigationToolId.GET_INCIDENT: ToolResult(tool_id=InvestigationToolId.GET_INCIDENT, outcome=ToolOutcome.FAILED, failure=ToolFailure(code=ToolFailureCode.SOURCE_FAILURE, message="source failed"))})
 
-        state = await AgentExecutor(self.registry, invoker).execute(plan, budget=ExecutionBudget(max_tool_calls=2))
+        state = await AgentExecutor(self.registry, invoker, self.store).execute(plan, budget=ExecutionBudget(max_tool_calls=2))
 
         self.assertEqual(len(invoker.calls), 1)
         self.assertEqual(state.budget.used_tool_calls, 1)
@@ -223,6 +222,7 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
             state = await AgentExecutor(
                 self.registry,
                 invoker,
+                self.store,
                 sleep=sleeper,
                 telemetry=harness.telemetry,
                 run_id=uuid4(),
@@ -255,7 +255,7 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
         })
         sleeper = RecordingSleeper()
 
-        state = await AgentExecutor(self.registry, invoker, sleep=sleeper).execute(
+        state = await AgentExecutor(self.registry, invoker, self.store, sleep=sleeper).execute(
             plan, budget=ExecutionBudget(max_tool_calls=3)
         )
 
@@ -273,7 +273,7 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
         invoker = RecordingInvoker({InvestigationToolId.GET_INCIDENT: [retryable_failure] * 3})
         sleeper = RecordingSleeper()
 
-        state = await AgentExecutor(self.registry, invoker, sleep=sleeper).execute(
+        state = await AgentExecutor(self.registry, invoker, self.store, sleep=sleeper).execute(
             plan, budget=ExecutionBudget(max_tool_calls=5)
         )
 
@@ -293,7 +293,7 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
         })
         sleeper = RecordingSleeper()
 
-        state = await AgentExecutor(self.registry, invoker, sleep=sleeper).execute(
+        state = await AgentExecutor(self.registry, invoker, self.store, sleep=sleeper).execute(
             plan, budget=ExecutionBudget(max_tool_calls=1)
         )
 

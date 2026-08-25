@@ -33,8 +33,6 @@ from app.investigations.code_diagnosis import (
 
 
 class SequentialPlannerClient:
-    """Test-only typed planner client that records each bounded planner input."""
-
     provider = LLMProviderName.FAKE
     model = "sequential-planner-test-double"
 
@@ -73,7 +71,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             completed.request,
             completed.state.validated_hypotheses,
             completed.state.facts,
-            completed.state.evidence,
+            completed.state.evidence_content,
         )
         diagnostics = _code_diagnosis_failure_diagnostics(
             TypedLLMCodeDiagnoser(FakeLLMClient()),

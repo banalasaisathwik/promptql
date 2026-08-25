@@ -15,7 +15,7 @@ from app.connectors.models import (
     JiraIssueKey,
     NonEmptyString,
 )
-from app.investigations import Evidence
+from app.investigations.models import InvestigationIdentifier
 
 
 class InvestigationToolId(StrEnum):
@@ -50,22 +50,12 @@ class ToolFailureCode(StrEnum):
     SOURCE_FAILURE = "source_failure"
 
 
-# PURPOSE: Carry a sanitized failure across the adapter/runtime boundary.
-#
-# FLOW: The adapter chooses one closed code from a connector error, then the
-# executor reads `retryable` before deciding whether another provider call is
-# permitted. Provider messages never participate in that control decision.
-#
-# DESIGN: This keeps retry policy deterministic and portable across providers,
-# similar to using a discriminated union rather than matching exception strings.
 class ToolFailure(ContractModel):
     code: ToolFailureCode
     message: NonEmptyString
 
     @property
     def retryable(self) -> bool:
-        # Runtime retry policy is driven by a closed failure taxonomy, never by
-        # an adapter message or a provider's untrusted response text.
         return self.code in {
             ToolFailureCode.RATE_LIMITED,
             ToolFailureCode.TIMEOUT,
@@ -76,7 +66,7 @@ class ToolFailure(ContractModel):
 class ToolResult(ContractModel):
     tool_id: InvestigationToolId
     outcome: ToolOutcome
-    evidence: tuple[Evidence, ...] = ()
+    evidence_ids: tuple[InvestigationIdentifier, ...] = ()
     failure: ToolFailure | None = None
 
     @model_validator(mode="after")
@@ -85,9 +75,9 @@ class ToolResult(ContractModel):
             raise ValueError("failed tool results need a typed failure")
         if self.outcome is not ToolOutcome.FAILED and self.failure is not None:
             raise ValueError("only failed tool results may contain a failure")
-        if self.outcome is ToolOutcome.OBSERVED and not self.evidence:
+        if self.outcome is ToolOutcome.OBSERVED and not self.evidence_ids:
             raise ValueError("observed tool results need evidence")
-        if self.outcome is ToolOutcome.EMPTY and self.evidence:
+        if self.outcome is ToolOutcome.EMPTY and self.evidence_ids:
             raise ValueError("empty tool results cannot contain evidence")
         return self
 
@@ -116,8 +106,6 @@ class GetIncidentPlanOutput(ContractModel):
 
 
 class GetFailureLocationPlanOutput(ContractModel):
-    # Incident sources may know only part of a stack frame. Optional fields
-    # describe that bounded uncertainty instead of inventing a file or line.
     file_path: NonEmptyString | None = None
     function_name: NonEmptyString | None = None
     line_number: int | None = None
@@ -161,8 +149,8 @@ class ToolDefinition(ContractModel):
     description: NonEmptyString
     input_model: ToolInputModel
     output_model: type[ToolResult]
-    # PURPOSE: Describe only values a future executor may expose to another plan
-    # step. This static contract does not alter the V2.5 ToolResult runtime shape.
+
+
     plan_output_model: type[ContractModel]
     read_only: bool = True
 

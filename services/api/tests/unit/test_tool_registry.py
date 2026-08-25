@@ -19,6 +19,7 @@ from app.connectors.incident_fakes import (
 )
 from app.connectors.models import TelemetrySignal
 from app.connectors.jira_fixtures import JIRA_FIXTURES
+from app.investigations.evidence_store import EvidenceStore
 from app.tools import (
     DuplicateToolError,
     GetCommitTool,
@@ -117,55 +118,58 @@ class ToolRegistryTests(unittest.TestCase):
 class ToolAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_github_adapters_return_normalized_evidence(self) -> None:
         source = FakeGitHubCodeEvidenceSource()
+        store = EvidenceStore()
 
-        commit_result = await GetCommitTool(source).execute(
+        commit_result = await GetCommitTool(source, store).execute(
             FIXTURE_COMMIT_REQUEST.model_dump()
         )
-        pull_request_result = await GetPullRequestTool(source).execute(
+        pull_request_result = await GetPullRequestTool(source, store).execute(
             FIXTURE_PULL_REQUEST.model_dump()
         )
-        diff_result = await GetDiffTool(source).execute(
+        diff_result = await GetDiffTool(source, store).execute(
             FIXTURE_PULL_REQUEST.model_dump()
         )
 
         self.assertEqual(commit_result.outcome, ToolOutcome.OBSERVED)
-        self.assertEqual(commit_result.evidence[0].kind.value, "commit")
-        self.assertEqual(pull_request_result.evidence[0].kind.value, "pull_request")
-        self.assertEqual(len(diff_result.evidence), 2)
+        self.assertEqual(store.get(commit_result.evidence_ids[0]).kind.value, "commit")
+        self.assertEqual(store.get(pull_request_result.evidence_ids[0]).kind.value, "pull_request")
+        self.assertEqual(len(diff_result.evidence_ids), 2)
 
     async def test_incident_adapters_use_existing_bounded_requests(self) -> None:
         source = FakeIncidentSource()
+        store = EvidenceStore()
 
-        incident_result = await GetIncidentTool(source).execute(
+        incident_result = await GetIncidentTool(source, store).execute(
             INCIDENT_REQUEST.model_dump()
         )
-        deployment_result = await GetDeploymentsTool(source).execute(
+        deployment_result = await GetDeploymentsTool(source, store).execute(
             DEPLOYMENT_REQUEST.model_dump()
         )
-        telemetry_result = await QueryTelemetryTool(source).execute(
+        telemetry_result = await QueryTelemetryTool(source, store).execute(
             TELEMETRY_REQUEST.model_dump()
         )
-        failure_location_result = await GetFailureLocationTool(source).execute(
+        failure_location_result = await GetFailureLocationTool(source, store).execute(
             FAILURE_LOCATION_REQUEST.model_dump()
         )
 
-        self.assertEqual(incident_result.evidence[0].kind.value, "incident")
-        self.assertEqual(deployment_result.evidence[0].kind.value, "deployment")
-        self.assertEqual(telemetry_result.evidence[0].content.event_count, 17)
+        self.assertEqual(store.get(incident_result.evidence_ids[0]).kind.value, "incident")
+        self.assertEqual(store.get(deployment_result.evidence_ids[0]).kind.value, "deployment")
+        self.assertEqual(store.get(telemetry_result.evidence_ids[0]).content.event_count, 17)
         self.assertEqual(
-            failure_location_result.evidence[0].content.file_path,
+            store.get(failure_location_result.evidence_ids[0]).content.file_path,
             "services/checkout.py",
         )
 
     async def test_jira_adapter_normalizes_connector_result_to_evidence(self) -> None:
         issue = next(iter(JIRA_FIXTURES.values()))
+        store = EvidenceStore()
 
-        result = await GetJiraIssueTool(FakeJiraConnector()).execute(
+        result = await GetJiraIssueTool(FakeJiraConnector(), store).execute(
             GetJiraIssueInput(issue_key=issue.issue_key).model_dump()
         )
 
-        self.assertEqual(result.evidence[0].source.value, "jira")
-        self.assertEqual(result.evidence[0].content.issue_key, issue.issue_key)
+        self.assertEqual(store.get(result.evidence_ids[0]).source.value, "jira")
+        self.assertEqual(store.get(result.evidence_ids[0]).content.issue_key, issue.issue_key)
 
     async def test_invalid_arguments_fail_before_capability_execution(self) -> None:
         class MustNotRunSource(FakeIncidentSource):
@@ -173,14 +177,14 @@ class ToolAdapterTests(unittest.IsolatedAsyncioTestCase):
                 raise AssertionError("source should not run for invalid arguments")
 
         with self.assertRaises(InvalidToolArgumentsError):
-            await GetIncidentTool(MustNotRunSource()).execute(
+            await GetIncidentTool(MustNotRunSource(), EvidenceStore()).execute(
                 {"incident_reference": "incident:test", "extra": "rejected"}
             )
 
     async def test_source_failure_is_typed_and_sanitized(self) -> None:
         source = FakeIncidentSource(incident_fixtures={})
 
-        result = await GetIncidentTool(source).execute(
+        result = await GetIncidentTool(source, EvidenceStore()).execute(
             INCIDENT_REQUEST.model_dump()
         )
 
@@ -194,7 +198,7 @@ class ToolAdapterTests(unittest.IsolatedAsyncioTestCase):
             async def get_commit_evidence(self, request):
                 raise GitHubRateLimitedError()
 
-        result = await GetCommitTool(RateLimitedGitHubSource()).execute(
+        result = await GetCommitTool(RateLimitedGitHubSource(), EvidenceStore()).execute(
             FIXTURE_COMMIT_REQUEST.model_dump()
         )
 
@@ -206,7 +210,7 @@ class ToolAdapterTests(unittest.IsolatedAsyncioTestCase):
             async def get_incident_evidence(self, request):
                 raise ConnectorUnavailableError("incident")
 
-        result = await GetIncidentTool(UnavailableSource()).execute(
+        result = await GetIncidentTool(UnavailableSource(), EvidenceStore()).execute(
             INCIDENT_REQUEST.model_dump()
         )
 
@@ -214,7 +218,7 @@ class ToolAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_telemetry_input_keeps_time_and_signal_structured(self) -> None:
         with self.assertRaises(InvalidToolArgumentsError):
-            await QueryTelemetryTool(FakeIncidentSource()).execute(
+            await QueryTelemetryTool(FakeIncidentSource(), EvidenceStore()).execute(
                 {
                     "service": "checkout-api",
                     "signal": TelemetrySignal.LOG_EVENTS,
@@ -230,6 +234,7 @@ class ToolCompositionTests(unittest.IsolatedAsyncioTestCase):
             FakeGitHubCodeEvidenceSource(),
             FakeIncidentSource(),
             FakeJiraConnector(),
+            EvidenceStore(),
         )
         registry = build_tool_registry(adapters)
 
