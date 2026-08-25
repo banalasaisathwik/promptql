@@ -134,6 +134,17 @@ owner approval. Inspect the final API explanation and bounded telemetry, but do
 not print the prompt, model output, API key, headers, request IDs, or raw
 exceptions.
 
+## Evaluation quality distinctions
+
+For AI features, distinguish provider success from candidate/model quality,
+and distinguish schema validity from semantic grounding from ground-truth
+correctness. Do not collapse these into one "accuracy" number. For
+investigation hypotheses, grounded does not automatically mean correct root
+cause. Offline correctness should rely on known gold/reference answers where
+available; production correctness may require later human or operational
+confirmation. Use LLM-as-a-judge only when appropriate and never treat it as
+automatically authoritative.
+
 ## Versioned explanation evaluations
 
 The local eval harness uses deterministic fake connector facts plus the
