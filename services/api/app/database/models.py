@@ -44,7 +44,7 @@ class WorkflowRunRow(DatabaseModel):
         ),
         CheckConstraint(
             "explanation_source IS NULL OR "
-            "explanation_source IN ('fake', 'gemini', 'groq', 'openai')",
+            "explanation_source IN ('fake', 'gemini', 'groq', 'openai', 'openrouter')",
             name="ck_workflow_runs_explanation_source",
         ),
         CheckConstraint(
