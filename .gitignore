@@ -50,3 +50,5 @@ docs/mermaid/*
 # Paid/local evaluation observations may contain provider and model metadata.
 # Keep generated reports local even though their schema excludes sensitive data.
 local-artifacts/
+
+.worktrees/
