@@ -1,9 +1,29 @@
 # PromptQL
 
-PromptQL is an early-stage enterprise investigation and analytics agent inspired
-by PromptQL-like systems. This repository currently provides the frontend,
-backend, documentation, testing, and agent-development foundations; it does not
-yet contain the complete agent runtime.
+PromptQL is an enterprise investigation and analytics agent inspired by
+PromptQL-like systems. Beyond the frontend, backend, documentation, testing,
+and agent-development foundations, the V2 investigation runtime is implemented
+and merged on master:
+
+- A typed evidence model with source provenance
+  (`services/api/app/investigations/models.py`)
+- Deterministic fact derivation over collected evidence
+  (`services/api/app/investigations/fact_derivation/`)
+- LLM hypothesis generation with deterministic, Fact-grounded validation
+  (`services/api/app/investigations/hypotheses/`)
+- A typed planner plus a static plan validator that checks tool existence,
+  argument shape, and step dependencies before execution
+  (`services/api/app/investigations/planning/`)
+- A budget-enforced execution loop that runs an accepted plan against the
+  tool registry with retry/backoff
+  (`services/api/app/investigations/execution.py`)
+- A bounded, round-boundary replanner that adapts the plan across multiple
+  rounds as new evidence and facts arrive
+  (`services/api/app/investigations/replanning.py`)
+- An eval harness covering component quality and end-to-end adaptive
+  investigation trajectories (`services/api/app/evals/`)
+- OpenTelemetry tracing/metrics and structured, secret-safe logging for
+  runtime execution (`services/api/app/observability/`)
 
 ## Live workflow dashboard
 
@@ -260,6 +280,11 @@ Run credential-free backend tests with:
 ```bash
 uv run python -m unittest discover -s tests -v
 ```
+
+This command intentionally omits `--env-file`, so `TEST_DATABASE_URL` is unset
+and the 6 PostgreSQL integration tests report explicit skips rather than
+running — this is expected, not a gap. See [TESTING.md](docs/TESTING.md) for
+how to opt into them against a dedicated test branch.
 
 Run the versioned V2 component and adaptive-trajectory eval on deterministic
 fixtures with:
