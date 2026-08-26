@@ -28,6 +28,7 @@ import type {
   InvestigationPlanningRound,
   InvestigationRuntimeState,
   InvestigationStepSnapshot,
+  LiveRunEvent,
   GroundedInvestigationResult,
   DeveloperRecommendation,
   ExecutionState,
@@ -868,4 +869,54 @@ export function parseRuntimeRun(value: unknown): RuntimeRun {
     return parseInvestigationRun(value)
   }
   return parseMergeReadiness(value)
+}
+
+
+const LIVE_RUN_EVENT_ENVELOPE_KEYS = new Set([
+  'event',
+  'level',
+  'timestamp',
+  'run_id',
+  'trace_id',
+  'span_id',
+])
+
+
+// One SSE `data:` payload, already JSON.parse()'d by the caller. The backend
+// allowlists event field names but not which subset appears per event, so
+// this keeps only scalar values and copies everything outside the known
+// envelope fields into `fields` rather than naming each one.
+export function parseLiveRunEvent(value: unknown): LiveRunEvent {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyString(value.event) ||
+    !isNonEmptyString(value.level) ||
+    !isNonEmptyString(value.timestamp)
+  ) {
+    throw new ConnectorApiError('The live event payload is malformed.')
+  }
+
+  const fields: Record<string, string | number | boolean> = {}
+  for (const [key, fieldValue] of Object.entries(value)) {
+    if (LIVE_RUN_EVENT_ENVELOPE_KEYS.has(key)) {
+      continue
+    }
+    if (
+      typeof fieldValue === 'string' ||
+      typeof fieldValue === 'number' ||
+      typeof fieldValue === 'boolean'
+    ) {
+      fields[key] = fieldValue
+    }
+  }
+
+  return {
+    event: value.event,
+    level: value.level,
+    timestamp: value.timestamp,
+    run_id: isNonEmptyString(value.run_id) ? value.run_id : undefined,
+    trace_id: isNonEmptyString(value.trace_id) ? value.trace_id : undefined,
+    span_id: isNonEmptyString(value.span_id) ? value.span_id : undefined,
+    fields,
+  }
 }

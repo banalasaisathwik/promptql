@@ -91,8 +91,10 @@ services/api/app/
 ├── runtime/                 # Run/step lifecycle, state machine, persistence contracts
 ├── database/                 # SQLAlchemy engine, ORM models, Postgres repository
 ├── observability/             # OpenTelemetry tracing/metrics/logging, Langfuse export
+│   └── live_event_broker.py    # In-process per-run pub/sub feeding the live SSE tap
 ├── workflows/                  # Orchestrates connectors/policy/investigation into one run
 ├── api/v1/                      # FastAPI routes and HTTP-facing models
+│   └── live_events_router.py     # GET /v1/runs/{run_id}/events - live SSE tap
 └── main.py                       # Application assembly (DI wiring, lifespan, routes)
 ```
 
@@ -109,10 +111,13 @@ apps/web/src/
     ├── apiError.ts                            # Client failure representation
     ├── runPolling.ts                           # Shared snapshot-polling loop
     ├── useRunSnapshot.ts                        # Polling hook used by both dashboards
+    ├── liveEventStream.ts                        # Framework-free SSE controller (EventSource wrapper)
+    ├── useRunLiveEvents.ts                        # Live-event hook wrapping liveEventStream.ts
     ├── MergeReadinessPage.tsx                    # Merge-readiness request form (unreachable — App.tsx never imports it)
     ├── RunDashboardPage.tsx                       # Live run dashboard; dispatches on workflow_name
     ├── InvestigationConsolePage.tsx                # Investigation request submission UI (the actual `/` route)
     ├── InvestigationDashboard.tsx                   # Live investigation run dashboard
+    ├── InvestigationTraceView.tsx                   # /runs/{id}/trace - live SSE event list, additive to the dashboard
     └── components/
         ├── RequestForm.tsx                           # Merge-readiness request input form (used only by the unreachable page above)
         └── MergeReadinessPanel.tsx                    # Decision/evidence rendering, reused by RunDashboardPage for a merge-readiness run
@@ -778,7 +783,11 @@ a production deployment needs the same fallback so a bookmarked or refreshed
 run URL still reaches the app shell before its relative `/v1` request fires.
 
 This is state, not an event architecture: a snapshot says what is true now,
-not how the run got there. See [Runtime visibility: events and streaming](#runtime-visibility-events-and-streaming) in Part 2 for the not-yet-built alternative.
+not how the run got there. This polling dashboard is untouched by the live
+SSE tap described in [Runtime visibility: events and streaming](#runtime-visibility-events-and-streaming)
+in Part 2 — that tap lives at a separate route (`/runs/:runId/trace`,
+`InvestigationTraceView.tsx`) and is additive, not a replacement; durable
+event history/replay is still not built.
 
 See [ADR-018](decisions/ADR-018-live-run-dashboard-snapshot-polling.md) (merge-readiness) and [ADR-025](decisions/ADR-025-investigation-console-snapshot-integration.md) (investigation) for why polling the existing snapshot was chosen over a new event mechanism.
 
@@ -941,19 +950,49 @@ its progress instead of relying on in-process task lifetime.
 
 `GET /v1/runs/{run_id}` and the ~1-second dashboard polling described in
 [Live run dashboard](#live-run-dashboard) answer *what is true now* — a
-snapshot. They cannot answer *how the run got there* without the client
-reconstructing history from repeated polls, and they can't push an update to
-the browser between poll intervals.
+snapshot. They still cannot answer *how the run got there* from durable
+history, but they no longer have to wait for the next poll to see a
+transition happen — see below.
 
-A future `RunEvent` history — one durable, ordered record per state
-transition — would separate those two questions: the existing snapshot
-endpoint keeps answering "what is true now," while `GET /runs/{id}/events`
-would answer "how did it get here," and `GET /runs/{id}/stream` (a natural
-fit for one-way server-to-browser updates via SSE) could push transitions as
-they happen instead of waiting for the next poll. None of this exists today,
-and adding it would only be justified by a concrete need for replay,
-recovery, or high-fan-out live updates that snapshot polling can't satisfy —
-polling remains adequate for the current single-viewer dashboard use case.
+**Implemented (V2.26): a live SSE tap, not durable history.**
+`GET /v1/runs/{run_id}/events` (`api/v1/live_events_router.py`) streams
+Server-Sent Events for one run: every event that already reaches
+`StructuredEventLogger.emit()` — `plan.validation_rejected`,
+`runtime.workflow.completed`/`failed`, `llm.explanation.failed`,
+`runtime.persistence.failed`, `runtime.telemetry.export_failed`,
+`investigation.tool.call_completed`, `investigation.round.planned`/
+`completed`, and the routed `investigation.hypothesis.failed`/
+`investigation.code_diagnosis.failed` diagnostics — also reaches any
+browser subscribed to that run. The mechanism is deliberately minimal and
+in-process, matching this project's non-goals around Redis/message queues:
+`LiveEventBroker` (`observability/live_event_broker.py`) is a
+`dict[str, list[asyncio.Queue]]` keyed by run ID, mirroring
+`LiveRunTaskRegistry`'s app.state-attached singleton pattern.
+`StructuredEventLogger.emit()` pushes to the broker (via an injected
+`set_broker()`, since the broker is constructed after the logger — see
+`main.py`'s `create_app()`) whenever a record carries a `run_id`; a full
+subscriber queue drops new events silently rather than ever blocking the
+investigation task. This is a diagnostic tap, not the `RunEvent` history
+below: a browser that connects late sees nothing that happened before it
+connected, and nothing is persisted.
+
+Building `StreamingResponse` on this stack surfaced one sharp edge worth
+recording: the generator passed to `StreamingResponse` must not call
+`await request.is_disconnected()` itself — Starlette already runs a
+concurrent task that listens for client disconnect and cancels the
+generator when it happens, and a second concurrent reader of the same ASGI
+receive channel deadlocks against it. The endpoint relies entirely on that
+built-in cancellation (which still runs the generator's `finally:
+broker.unsubscribe(...)`) instead of polling disconnection itself.
+
+**Still not implemented: a future `RunEvent` history** — one durable,
+ordered record per state transition, answering "how did it get here" even
+for a viewer who wasn't connected while it happened, with replay and
+recovery. That would be a different, heavier mechanism (probably backed by
+persistence, not an in-process queue) and is only justified by a concrete
+need for replay, recovery, or high-fan-out live updates — the SSE tap above
+covers the "watch it happen live, while I'm connected" case; it does not
+replace this.
 
 ## Security boundary for agentic execution
 
@@ -1096,8 +1135,9 @@ instead of repeating it here.
 | V2.21 Agent-level OTel/Grafana (+ Langfuse) | Implemented | [Observability subsystem](#observability-subsystem) |
 | V2.22 Replay | Not implemented | [Replay](#replay) |
 | V2.23 Queue/workers if justified | Not implemented, deliberately deferred | [Queue/worker boundary](#queueworker-boundary) |
-| V2.24 Investigation UI/timeline | Console implemented; event timeline/SSE not implemented | [Module map](#module-map); [Runtime visibility: events and streaming](#runtime-visibility-events-and-streaming) |
+| V2.24 Investigation UI/timeline | Console implemented; live SSE tap implemented (V2.26); durable event history/replay still not implemented | [Module map](#module-map); [Runtime visibility: events and streaming](#runtime-visibility-events-and-streaming) |
 | V2.25 Live verification/release gates | Status not verifiable from `services/api/app/` alone — this milestone concerns deployment/release process rather than application code, and this document only describes the latter | — |
+| V2.26 Live-event SSE tap | Implemented | [Runtime visibility: events and streaming](#runtime-visibility-events-and-streaming) |
 
 The active implementation plan, not this table, is the source of truth for
 what's being worked on right now; this table only corrects the record on

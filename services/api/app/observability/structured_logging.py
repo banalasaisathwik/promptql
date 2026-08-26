@@ -10,6 +10,8 @@ from uuid import UUID
 
 from opentelemetry import trace
 
+from app.observability.live_event_broker import LiveEventBroker
+
 
 LOGGER_NAME = "promptql.runtime"
 ALLOWED_EVENT_FIELDS = frozenset(
@@ -27,6 +29,25 @@ ALLOWED_EVENT_FIELDS = frozenset(
         "jira_source",
         "llm_provider",
         "telemetry_signal",
+        "tool_id",
+        "tool_outcome",
+        "round_number",
+        "round_completed",
+        "requested_model",
+        "prompt_version",
+        "facts_count",
+        "missing_information_count",
+        "hypothesis_count",
+        "location_count",
+        "exception_class",
+        "failure_code",
+        "http_status",
+        "provider_type",
+        "provider_code",
+        "provider_message",
+        "failed_generation_present",
+        "failed_generation_length",
+        "local_schema_error",
     }
 )
 
@@ -65,6 +86,14 @@ class StructuredEventLogger:
 
     def __init__(self, logger: logging.Logger | None = None) -> None:
         self._logger = logger or configure_structured_logger()
+        self._broker: LiveEventBroker | None = None
+
+    def set_broker(self, broker: LiveEventBroker | None) -> None:
+        # WHY A SETTER: the broker is an app.state-scoped singleton created
+        # after this logger (see create_app() in main.py), so it cannot be
+        # threaded through the constructor at construction time the way the
+        # underlying logging.Logger is.
+        self._broker = broker
 
     def emit(self, event: str, level: int = logging.INFO, **fields: Any) -> None:
         try:
@@ -89,6 +118,10 @@ class StructuredEventLogger:
                 level,
                 json.dumps(record, separators=(",", ":"), sort_keys=True),
             )
+
+            run_id = record.get("run_id")
+            if self._broker is not None and run_id is not None:
+                self._broker.publish(run_id, record)
         except Exception:
             return
 

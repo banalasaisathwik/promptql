@@ -81,6 +81,7 @@ def render_grounded_result(
     termination_reason: GroundedTerminationReason,
     validated_code_findings: tuple[ValidatedCodeFinding, ...] = (),
     recommendations: tuple[DeveloperRecommendation, ...] = (),
+    evidence: tuple[InvestigationIdentifier, ...] = (),
 ) -> GroundedInvestigationResult:
     # PURPOSE: Turn validated causal structure into the only final wording that
     # the investigation API and UI may expose.
@@ -120,6 +121,7 @@ def render_grounded_result(
 
     summary = _render_summary(
         has_supported_hypothesis=bool(rendered_hypotheses),
+        has_evidence=bool(evidence) or bool(facts),
         termination_reason=termination_reason,
     )
     rendered_code_findings = _render_code_findings(
@@ -151,16 +153,24 @@ def _render_hypothesis_statement(hypothesis: ValidatedHypothesis) -> str:
 def _render_summary(
     *,
     has_supported_hypothesis: bool,
+    has_evidence: bool,
     termination_reason: GroundedTerminationReason,
 ) -> str:
-    conclusion = (
-        "The investigation found a supported contributing factor."
-        if has_supported_hypothesis
-        else (
+    if has_supported_hypothesis:
+        conclusion = "The investigation found a supported contributing factor."
+    elif has_evidence:
+        conclusion = (
             "The investigation found relevant evidence, but it is not sufficient "
             "to support a causal hypothesis."
         )
-    )
+    else:
+        # A run can terminate (e.g. plan_validation_failure on round 1) before
+        # any evidence is ever collected. The general "found relevant evidence"
+        # conclusion would misrepresent that as an evaluated-and-insufficient
+        # outcome rather than a run that never got to evaluate anything.
+        conclusion = (
+            "The investigation could not proceed far enough to collect evidence."
+        )
     prefixes = {
         GroundedTerminationReason.COMPLETED: "",
         GroundedTerminationReason.BUDGET_EXHAUSTED: (

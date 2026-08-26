@@ -9,6 +9,7 @@ from app.observability.contracts import (
     PersistenceOperation,
     StepOutcome,
 )
+from app.observability.live_event_broker import LiveEventBroker
 from app.observability.observed_run_repository import ObservedRunRepository
 from app.observability.runtime_telemetry import (
     NoOpRuntimeTelemetry,
@@ -21,6 +22,7 @@ __all__ = [
     "InvestigationStage",
     "InvestigationStageResult",
     "LLMCallResult",
+    "LiveEventBroker",
     "NoOpRuntimeTelemetry",
     "Observability",
     "ObservedRunRepository",

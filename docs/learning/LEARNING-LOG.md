@@ -2503,3 +2503,87 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
 - **Unresolved question:** Which approved OpenRouter model/prompt combination can
   pass repeated V2 trajectory evals reliably, and which harmless issue key should
   verify Jira against the currently configured site?
+
+### 2026-08-26 - Add a minimal live-event SSE tap without a new pub/sub service
+
+- **V2 milestone:** V2.26 Live-event SSE tap.
+- **Engineering concept and syntax:** Server-Sent Events over
+  `StreamingResponse` need no new dependency, but the generator passed to
+  `StreamingResponse` must never call `await request.is_disconnected()`
+  itself: Starlette already runs a concurrent task that listens for client
+  disconnect on the same ASGI receive channel and cancels the generator
+  when it happens, so a second concurrent reader deadlocks against it (that
+  cancellation still runs the generator's `finally:` cleanup, so no manual
+  polling is needed). Separately, `httpx.ASGITransport` and
+  `starlette.testclient.TestClient` both collect the full ASGI response
+  before returning it, so neither can drive an endpoint that streams
+  indefinitely by design — that has to be tested at the generator level
+  directly, not through an HTTP client.
+- **Implementation locations:** `observability/live_event_broker.py` is a
+  new `LiveEventBroker` — `dict[str, list[asyncio.Queue]]` keyed by run ID,
+  mirroring `LiveRunTaskRegistry`'s app.state-attached singleton pattern.
+  `structured_logging.py`'s `StructuredEventLogger.emit()` pushes to the
+  broker via an injected `set_broker()` (the broker is constructed after
+  the logger, so it can't go through the constructor) whenever a record
+  carries `run_id`. `runtime_telemetry.py` gained
+  `record_investigation_tool_call`'s `run_id` parameter plus two new
+  methods, `record_investigation_round` and
+  `record_investigation_diagnostic_failure`, so tool-call outcomes and
+  round boundaries (previously metrics/persistence-only) and the ad hoc
+  hypothesis/code-diagnosis failure logs in `workflows/investigation.py`
+  (previously raw `logging.getLogger("promptql.runtime").error(...)`, now
+  routed through the same `emit()` funnel) all reach the broker too.
+  `api/v1/live_events_router.py` exposes `GET /v1/runs/{run_id}/events`.
+  Frontend: `liveEventStream.ts` (a framework-free `EventSource` wrapper,
+  mirroring `runPolling.ts`) + `useRunLiveEvents.ts` (the thin hook,
+  mirroring `useRunSnapshot.ts`) + `InvestigationTraceView.tsx`, reachable
+  at the new `/runs/:runId/trace` route registered in `App.tsx`.
+- **Decision and invariant:** A full subscriber queue drops new events
+  silently (`put_nowait` + catch `QueueFull`) rather than ever blocking the
+  investigation task on a slow browser — this is a diagnostic tap, not a
+  durable log; a browser that connects late sees nothing that happened
+  before it connected, and nothing is persisted. `ALLOWED_EVENT_FIELDS`
+  stayed the closed allowlist boundary it already was: new fields
+  (`tool_id`, `round_number`, `failure_code`, …) were added explicitly
+  rather than opened up, and two diagnostics-dict keys were renamed
+  (`provider`→`llm_provider`, `provider_failure_category`→
+  `failure_category`) to reuse existing allowlisted fields instead of
+  growing the set further. The existing polling dashboard
+  (`RunPollingController`/`useRunSnapshot.ts`/`RunDashboardPage.tsx`) was
+  left completely untouched — the trace view is additive at a separate
+  route, not a replacement.
+- **Failure behavior and trade-off:** The `is_disconnected()` deadlock was
+  a real bug caught by direct reproduction (a probe script hung
+  indefinitely; debug prints proved the generator itself was producing
+  chunks correctly while the client never received them), not a test
+  artifact — it would have deadlocked in production too, not just under
+  test tooling. The manual disconnect check was removed entirely rather
+  than reordered, since Starlette's own cancellation already covers it.
+- **Validation evidence:** Backend: `uv run python -m unittest discover -s
+  tests -v` → 431 tests passed (up from the 418 baseline; new coverage in
+  `test_live_event_broker.py`, `test_structured_event_logger.py`,
+  `test_investigation_live_events.py`, `test_live_events_router.py`,
+  `tests/integration/test_live_events_api.py`). Frontend: `bun run
+  build:web` (type-checks cleanly) and `bun run test:web` → 48 tests
+  passed across 11 files. End-to-end: a same-process check subscribing to
+  the real `app.state.live_event_broker` before calling
+  `InvestigationWorkflowService.continue_persisted_run()` directly (real
+  Postgres-backed `PostgresRunRepository` against the configured Neon
+  database, fake LLM provider) received all 10 expected events live and in
+  order (2× round-planned, 2× round-completed, 6× tool-call-completed),
+  matching the server's own stdout exactly; the existing `GET
+  /v1/runs/{run_id}` polling endpoint was separately confirmed still
+  returning the correct persisted snapshot for the same run. A live HTTP
+  client racing a real uvicorn server lost this race consistently (the
+  fake-provider investigation — including real Postgres writes — completed
+  in roughly 1-1.5s, faster than this dev environment's HTTP round-trip
+  overhead for opening a second connection), which is expected for an
+  artificially fast fake provider and not a defect: a real LLM provider
+  call alone takes 1-10+ seconds, and the realistic browser workflow opens
+  the trace view before triggering a run anyway.
+- **Unresolved question:** Should the live SSE tap eventually gain a
+  small bounded server-side replay buffer (e.g., the last N events per
+  run, still in-process) so a browser that navigates to the trace view a
+  few hundred milliseconds late doesn't see an empty stream for a
+  fast-completing run — or is that scope creep against "diagnostic tap,
+  not event sourcing" until a concrete need shows up?

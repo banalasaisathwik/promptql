@@ -467,3 +467,19 @@ export interface InvestigationRun extends InvestigationRunBase {
 }
 
 export type RuntimeRun = PullRequestMergeReadiness | InvestigationRun
+
+// One structured event from GET /v1/runs/{run_id}/events. The backend closes
+// which fields any event may carry behind an allowlist (see
+// StructuredEventLogger.ALLOWED_EVENT_FIELDS); this type mirrors that
+// envelope/payload split rather than hardcoding every possible field name, so
+// the frontend does not need a matching edit whenever the backend allowlist
+// grows.
+export interface LiveRunEvent {
+  event: string
+  level: string
+  timestamp: string
+  run_id?: string
+  trace_id?: string
+  span_id?: string
+  fields: Record<string, string | number | boolean>
+}

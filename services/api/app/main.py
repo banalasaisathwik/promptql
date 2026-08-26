@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api.v1.connector_router import router as connector_router
+from app.api.v1.live_events_router import router as live_events_router
 from app.api.v1.models import (
     ApiError,
     ApiErrorCode,
@@ -44,7 +45,7 @@ from app.explanations import (
     OpenRouterLLMClient,
     create_llm_client,
 )
-from app.observability import Observability, create_observability
+from app.observability import LiveEventBroker, Observability, create_observability
 from app.runtime import (
     LiveRunTaskRegistry,
     RunPersistenceError,
@@ -196,6 +197,9 @@ def create_app(
         telemetry=app_observability.runtime_telemetry,
     )
     live_run_task_registry = LiveRunTaskRegistry()
+    live_event_broker = LiveEventBroker()
+    if app_observability.event_logger is not None:
+        app_observability.event_logger.set_broker(live_event_broker)
 
 
     @asynccontextmanager
@@ -217,6 +221,7 @@ def create_app(
             await live_run_task_registry.shutdown()
             application.state.run_session_factory = None
             application.state.live_run_task_registry = None
+            application.state.live_event_broker = None
             if engine is not None:
                 engine.dispose()
             if isinstance(github_connector, HttpGitHubConnector):
@@ -250,7 +255,9 @@ def create_app(
     )
     application.state.github_code_source = github_code_source
     application.state.live_run_task_registry = live_run_task_registry
+    application.state.live_event_broker = live_event_broker
     application.include_router(connector_router)
+    application.include_router(live_events_router)
     application.add_exception_handler(
         FixtureNotFoundError,
         fixture_not_found_handler,

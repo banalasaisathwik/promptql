@@ -266,8 +266,9 @@ class AgentExecutor:
                             InvestigationStageResult.FAILED
                         )
                         observation.mark_error(FailureCategory.CONNECTOR_FAILURE)
-            if self._telemetry is not None:
+            if self._telemetry is not None and self._run_id is not None:
                 self._telemetry.record_investigation_tool_call(
+                    self._run_id,
                     str(tool_id),
                     result.outcome.value,
                 )

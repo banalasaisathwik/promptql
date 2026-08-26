@@ -1,6 +1,4 @@
 import asyncio
-import json
-import logging
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -66,8 +64,6 @@ from app.tools import build_tool_adapters, build_tool_registry
 INVESTIGATION_WORKFLOW_NAME = "investigation"
 INVESTIGATION_WORKFLOW_VERSION = "2.19.2"
 DEFAULT_TOOL_CALL_BUDGET = 10
-_HYPOTHESIS_DIAGNOSTIC_LOGGER = logging.getLogger("promptql.runtime")
-_CODE_DIAGNOSIS_LOGGER = logging.getLogger("promptql.runtime")
 
 
 def _hypothesis_failure_diagnostics(
@@ -80,14 +76,14 @@ def _hypothesis_failure_diagnostics(
     details = error.provider_details
     return {
         "event": "investigation.hypothesis.failed",
-        "provider": getattr(provider, "value", provider),
+        "llm_provider": getattr(provider, "value", provider),
         "requested_model": getattr(client, "model", None),
         "prompt_version": HYPOTHESIS_PROMPT_VERSION,
         "facts_count": len(generation_input.facts),
         "missing_information_count": len(generation_input.missing_information),
         "exception_class": type(error).__name__,
         "failure_code": error.code.value,
-        "provider_failure_category": error.provider_failure_category,
+        "failure_category": error.provider_failure_category,
         "http_status": details.http_status if details is not None else None,
         "provider_type": details.provider_type if details is not None else None,
         "provider_code": details.provider_code if details is not None else None,
@@ -116,7 +112,7 @@ def _code_diagnosis_failure_diagnostics(
     details = error.provider_details
     return {
         "event": "investigation.code_diagnosis.failed",
-        "provider": getattr(provider, "value", provider),
+        "llm_provider": getattr(provider, "value", provider),
         "requested_model": getattr(client, "model", None),
         "prompt_version": CODE_DIAGNOSIS_PROMPT_VERSION,
         "hypothesis_count": len(diagnosis_input.hypotheses),
@@ -124,7 +120,7 @@ def _code_diagnosis_failure_diagnostics(
         "location_count": len(diagnosis_input.locations),
         "exception_class": type(error).__name__,
         "failure_code": error.code.value,
-        "provider_failure_category": error.provider_failure_category,
+        "failure_category": error.provider_failure_category,
         "http_status": details.http_status if details is not None else None,
         "provider_type": details.provider_type if details is not None else None,
         "provider_code": details.provider_code if details is not None else None,
@@ -258,6 +254,9 @@ class InvestigationWorkflowService:
         async def save_planned_round(state, planned) -> None:
             snapshot = self._snapshot_from_adaptive(state, store)
             round_number = len(state.rounds) + 1
+            self._telemetry.record_investigation_round(
+                running.run_id, round_number, completed=False
+            )
             pending_round = InvestigationPlanningRoundSnapshot(
                 round_number=round_number,
                 plan_id=f"round-{round_number}",
@@ -293,6 +292,12 @@ class InvestigationWorkflowService:
             )
 
         async def save_completed_round(state) -> None:
+            if state.rounds:
+                self._telemetry.record_investigation_round(
+                    running.run_id,
+                    state.rounds[-1].round_number,
+                    completed=True,
+                )
             self._repository.save(
                 running.model_copy(update={"state": self._snapshot_from_adaptive(state, store)})
             )
@@ -392,16 +397,16 @@ class InvestigationWorkflowService:
                     )
                 hypothesis_metadata = generated.metadata
             except HypothesisGenerationError as error:
-                _HYPOTHESIS_DIAGNOSTIC_LOGGER.error(
-                    json.dumps(
-                        _hypothesis_failure_diagnostics(
-                            hypothesis_generator,
-                            hypothesis_input,
-                            error,
-                        ),
-                        separators=(",", ":"),
-                        sort_keys=True,
-                    )
+                diagnostics = _hypothesis_failure_diagnostics(
+                    hypothesis_generator,
+                    hypothesis_input,
+                    error,
+                )
+                event = diagnostics.pop("event")
+                self._telemetry.record_investigation_diagnostic_failure(
+                    running.run_id,
+                    event,
+                    **diagnostics,
                 )
                 termination_reason = (
                     GroundedTerminationReason.HYPOTHESIS_GENERATION_FAILURE
@@ -466,16 +471,16 @@ class InvestigationWorkflowService:
                     )
                 code_diagnosis_metadata = generated_findings.metadata
             except CodeDiagnosisError as error:
-                _CODE_DIAGNOSIS_LOGGER.error(
-                    json.dumps(
-                        _code_diagnosis_failure_diagnostics(
-                            code_diagnoser,
-                            diagnosis_input,
-                            error,
-                        ),
-                        separators=(",", ":"),
-                        sort_keys=True,
-                    )
+                diagnostics = _code_diagnosis_failure_diagnostics(
+                    code_diagnoser,
+                    diagnosis_input,
+                    error,
+                )
+                event = diagnostics.pop("event")
+                self._telemetry.record_investigation_diagnostic_failure(
+                    running.run_id,
+                    event,
+                    **diagnostics,
                 )
                 termination_reason = GroundedTerminationReason.CODE_DIAGNOSIS_FAILURE
             else:
@@ -532,6 +537,7 @@ class InvestigationWorkflowService:
                 termination_reason,
                 validated_code_findings,
                 developer_recommendations,
+                state.working_memory.evidence,
             )
         completed = running.model_copy(
             update={

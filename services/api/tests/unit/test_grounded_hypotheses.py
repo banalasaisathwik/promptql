@@ -284,6 +284,16 @@ class GroundedRenderingTests(unittest.TestCase):
         self.assertEqual(result.supported_hypotheses, ())
         self.assertIn("not sufficient", result.summary)
 
+    def test_plan_validation_failure_with_no_evidence_does_not_claim_evidence_was_found(self):
+        # A plan can be rejected on round 1, before any evidence or Facts
+        # exist. The summary must not claim evidence was "found" in that case.
+        result = render_grounded_result(
+            (), (), (), GroundedTerminationReason.PLAN_VALIDATION_FAILURE
+        )
+        self.assertEqual(result.supported_hypotheses, ())
+        self.assertNotIn("found relevant evidence", result.summary)
+        self.assertIn("could not proceed far enough to collect evidence", result.summary)
+
     def test_budget_and_provider_termination_reasons_render_different_safe_summaries(self):
         budget_result = render_grounded_result(
             _facts(), (), (), GroundedTerminationReason.BUDGET_EXHAUSTED

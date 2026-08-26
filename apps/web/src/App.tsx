@@ -7,6 +7,7 @@
 import './App.css'
 import { useEffect, useState } from 'react'
 import { InvestigationConsolePage } from './features/inspection/InvestigationConsolePage'
+import { InvestigationTraceView } from './features/inspection/InvestigationTraceView'
 import { RunDashboardPage } from './features/inspection/RunDashboardPage'
 import { runPathFor } from './routing'
 
@@ -17,8 +18,15 @@ function runIdFromPath(pathname: string): string | null {
 }
 
 
+function traceRunIdFromPath(pathname: string): string | null {
+  const match = /^\/runs\/([^/]+)\/trace$/.exec(pathname)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+
 function App() {
   const [pathname, setPathname] = useState(window.location.pathname)
+  const traceRunId = traceRunIdFromPath(pathname)
   const runId = runIdFromPath(pathname)
 
   useEffect(() => {
@@ -28,6 +36,10 @@ function App() {
     window.addEventListener('popstate', updatePathname)
     return () => window.removeEventListener('popstate', updatePathname)
   }, [])
+
+  if (traceRunId) {
+    return <InvestigationTraceView runId={traceRunId} />
+  }
 
   if (runId) {
     return <RunDashboardPage runId={runId} />

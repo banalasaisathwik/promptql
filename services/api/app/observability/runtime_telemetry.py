@@ -1,7 +1,7 @@
 import logging
 from contextlib import contextmanager
 from time import perf_counter_ns
-from typing import Iterator
+from typing import Any, Iterator
 from uuid import UUID
 
 from opentelemetry import metrics, trace
@@ -442,13 +442,25 @@ class RuntimeTelemetry:
         except Exception:
             self._warn_telemetry_failure("metrics")
 
-    def record_investigation_tool_call(self, tool_id: str, outcome: str) -> None:
+    def record_investigation_tool_call(
+        self,
+        run_id: UUID,
+        tool_id: str,
+        outcome: str,
+    ) -> None:
         try:
             labels = {"tool.id": tool_id, "tool.outcome": outcome}
             validate_metric_labels(INVESTIGATION_TOOL_CALLS_METRIC, labels)
             self._investigation_tool_calls.add(1, labels)
         except Exception:
             self._warn_telemetry_failure("metrics")
+        self._event_logger.emit(
+            "investigation.tool.call_completed",
+            logging.INFO if outcome != "failed" else logging.WARNING,
+            run_id=run_id,
+            tool_id=tool_id,
+            tool_outcome=outcome,
+        )
 
     def record_investigation_termination(
         self,
@@ -528,6 +540,44 @@ class RuntimeTelemetry:
                 llm_provider=provider,
                 failure_category=failure_category,
             )
+        except Exception:
+            self._warn_telemetry_failure("logs")
+
+    def record_investigation_round(
+        self,
+        run_id: UUID,
+        round_number: int,
+        *,
+        completed: bool,
+    ) -> None:
+        try:
+            event = (
+                "investigation.round.completed"
+                if completed
+                else "investigation.round.planned"
+            )
+            self._event_logger.emit(
+                event,
+                logging.INFO,
+                run_id=run_id,
+                round_number=round_number,
+                round_completed=completed,
+            )
+        except Exception:
+            self._warn_telemetry_failure("logs")
+
+    def record_investigation_diagnostic_failure(
+        self,
+        run_id: UUID,
+        event: str,
+        **fields: Any,
+    ) -> None:
+        # This funnels the same sanitized diagnostics dict that used to go
+        # straight to the raw "promptql.runtime" logger through the one
+        # StructuredEventLogger.emit() path, so it also reaches any live
+        # SSE subscriber for this run.
+        try:
+            self._event_logger.emit(event, logging.ERROR, run_id=run_id, **fields)
         except Exception:
             self._warn_telemetry_failure("logs")
 
