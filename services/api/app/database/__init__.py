@@ -1,5 +1,3 @@
-pass
-
 from app.database.engine import (
     create_database_engine,
     create_session_factory,

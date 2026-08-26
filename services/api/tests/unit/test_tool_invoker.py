@@ -29,12 +29,6 @@ class _RecordingTool:
 
 
 class ToolInvokerWriteCapabilityTests(unittest.IsolatedAsyncioTestCase):
-    """Covers the read_only enforcement gate added to ToolInvoker.invoke.
-
-    All 8 registered tools are read_only=True today, so this exercises a
-    locally constructed write-capable definition rather than a real tool_id.
-    """
-
     def setUp(self) -> None:
         self.definition = _definition_with(InvestigationToolId.GET_INCIDENT, read_only=False)
 

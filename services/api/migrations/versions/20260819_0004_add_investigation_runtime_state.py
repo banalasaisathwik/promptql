@@ -1,5 +1,3 @@
-"""Store V2 investigation snapshots beside existing workflow runs."""
-
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql

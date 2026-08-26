@@ -187,8 +187,6 @@ class OpenAILLMClient:
         self,
         request: TypedLLMRequest,
     ) -> LLMStructuredResponse:
-        # This adapter translates the provider-neutral request at the SDK edge;
-        # domain callers never need OpenAI response-format names or response objects.
         try:
             response = await self._client.responses.parse(
                 model=self._model,

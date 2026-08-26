@@ -48,10 +48,6 @@ _PLANNER_DIAGNOSTIC_LOGGER = logging.getLogger("promptql.runtime")
 
 
 class ContinuationReason(StrEnum):
-    # IN_PROGRESS is a mid-run placeholder only: on_round_planned and
-    # on_round_completed snapshot the state for persistence before the real
-    # terminal decision exists yet. investigate() never returns this value —
-    # every actual return site below sets a genuine terminal reason.
     IN_PROGRESS = "in_progress"
     COMPLETE = "complete"
     MAX_PLANNING_ROUNDS = "max_planning_rounds"

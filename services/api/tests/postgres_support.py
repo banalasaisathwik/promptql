@@ -1,5 +1,3 @@
-pass
-
 import os
 
 from sqlalchemy.engine import URL
@@ -20,8 +18,6 @@ def _normalized_neon_identity(url: URL) -> tuple[str, int | None, str | None]:
 
 
 def load_safe_test_database_url() -> URL | None:
-    pass
-
     raw_test_url = os.environ.get("TEST_DATABASE_URL", "")
     if not raw_test_url:
         return None

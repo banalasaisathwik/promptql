@@ -78,19 +78,6 @@ class FakeLLMClient:
 
 
 def _default_investigation_output(request: TypedLLMRequest) -> object | None:
-    """Return deterministic fixture proposals for the local investigation demo."""
-
-    # PURPOSE: Give the default local stack realistic typed planner and
-    # hypothesis proposals without making a network call.
-    #
-    # FLOW: Inspect the requested output contract -> read only explicit typed
-    # request fields -> construct that contract. The normal validator and
-    # executor still decide whether a proposal is accepted and executable.
-    #
-    # WATCH OUT: This is fixture behavior, not natural-language intent parsing.
-    # Adding keyword rules here would create a second semantic planner that
-    # production providers and tests could disagree with.
-
     if request.output_model.__name__ == "InvestigationPlan":
         from app.investigations.planning import (
             InvestigationPlan,
@@ -166,8 +153,7 @@ def _default_investigation_output(request: TypedLLMRequest) -> object | None:
             ChangedHunkOverlapsFailureLineFact,
         )
 
-        # The fake may propose causality only from the same typed Fact
-        # relationship required by the deterministic production validator.
+
         facts = getattr(request.input, "facts", ())
         for changed_file in (
             fact for fact in facts if isinstance(fact, ChangedFileFact)
@@ -211,9 +197,7 @@ def _default_investigation_output(request: TypedLLMRequest) -> object | None:
             SuspectedCodeFinding,
         )
 
-        # The fake copies the backend-built support bundle and selects a real
-        # stack-frame Evidence ID. It still returns an untrusted candidate that
-        # must pass the same validator used for a live provider.
+
         hypotheses = getattr(request.input, "hypotheses", ())
         locations = getattr(request.input, "locations", ())
         support_bundles = getattr(request.input, "support_bundles", ())

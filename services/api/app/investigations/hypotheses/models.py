@@ -1,5 +1,3 @@
-"""Strict contracts for untrusted causal-hypothesis proposals and grounding."""
-
 from enum import StrEnum
 from typing import Annotated
 
@@ -22,8 +20,6 @@ class HypothesisKind(StrEnum):
 
 
 class CandidateHypothesis(ContractModel):
-    """A schema-valid proposal that is still untrusted until deterministic grounding."""
-
     hypothesis_id: InvestigationIdentifier
     kind: HypothesisKind
     subject: NonEmptyString
@@ -37,8 +33,6 @@ class CandidateHypothesis(ContractModel):
 
 
 class HypothesisGenerationInput(ContractModel):
-    """The minimized, fact-first state allowed to cross the LLM boundary."""
-
     investigation_goal: NonEmptyString
     facts: FactSet = ()
     missing_information: tuple[MissingInformation, ...] = Field(

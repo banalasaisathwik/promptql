@@ -1,5 +1,3 @@
-"""Typed contracts for bounded, untrusted code-diagnosis proposals."""
-
 from enum import StrEnum
 from typing import Annotated, Self
 
@@ -95,8 +93,6 @@ class CodeDiagnosisSupport(ContractModel):
 
 
 class CodeDiagnosisHypothesis(ContractModel):
-    # This minimized projection gives the provider only accepted hypothesis
-    # fields and avoids making the code-diagnosis package own hypothesis models.
     hypothesis_id: InvestigationIdentifier
     kind: NonEmptyString
     subject: NonEmptyString
@@ -132,13 +128,11 @@ class CodeFindingCategory(StrEnum):
 
 
 class SuspectedCodeFinding(ContractModel):
-    """A model proposal that has not crossed deterministic grounding."""
-
     finding_id: InvestigationIdentifier
     hypothesis_id: InvestigationIdentifier
     file_path: NonEmptyString
-    # The provider selects an observed identity, not a coordinate. Numeric line
-    # and function fields exist only on ValidatedCodeFinding, after resolution.
+
+
     location_evidence_id: InvestigationIdentifier
     category: CodeFindingCategory
     supporting_fact_ids: Annotated[

@@ -35,8 +35,6 @@ class LLMProviderFailureCategory(StrEnum):
 
 @dataclass(frozen=True)
 class LLMProviderErrorDetails:
-    """Allowlisted provider metadata that is safe to surface in diagnostics."""
-
     http_status: int | None = None
     provider_type: str | None = None
     provider_code: str | None = None

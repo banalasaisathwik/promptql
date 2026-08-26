@@ -1,5 +1,3 @@
-"""Deterministic static validation for typed investigation-plan proposals."""
-
 from collections.abc import Iterable
 from enum import StrEnum
 from heapq import heappop, heappush
@@ -50,8 +48,6 @@ class PlanValidationFailure(ContractModel):
 
 
 class ValidatedPlan(ContractModel):
-    # PURPOSE: Preserve the proposal unchanged while recording the deterministic
-    # order that a future V2.9 executor may consume; this class never executes it.
     plan: InvestigationPlan
     topological_step_ids: tuple[PlanStepIdentifier, ...]
 
@@ -73,7 +69,6 @@ class PlanValidationResult(ContractModel):
 
 
 def _annotation_is_compatible(source: Any, destination: Any) -> bool:
-    """Accept exact annotations and a non-optional source for an optional input."""
     if source == destination:
         return True
     destination_origin = get_origin(destination)
@@ -83,8 +78,6 @@ def _annotation_is_compatible(source: Any, destination: Any) -> bool:
 
 
 class PlanValidator:
-    """Validate an untrusted plan against registry metadata and caller policy."""
-
     def __init__(self, registry: ToolRegistry) -> None:
         self._registry = registry
 
@@ -93,10 +86,6 @@ class PlanValidator:
         plan: InvestigationPlan,
         allowed_tools: Iterable[ToolDefinition],
     ) -> PlanValidationResult:
-        # FLOW: Check bounded identity and permission rules first, then build the
-        # dependency graph, then inspect references against static contracts. Each
-        # stage appends sanitized failures instead of throwing, so callers receive
-        # one deterministic all-or-nothing result for the untrusted proposal.
         allowed_tool_ids = {definition.tool_id for definition in allowed_tools}
         failures: list[PlanValidationFailure] = []
         steps_by_id: dict[str, object] = {}
@@ -237,9 +226,6 @@ class PlanValidator:
 
     @staticmethod
     def _topological_order(graph, in_degree, plan: InvestigationPlan):
-        # Kahn's algorithm repeatedly removes nodes with no unmet dependencies.
-        # Keeping original step positions in the heap makes equally-ready steps
-        # deterministic without adding scheduling or parallel-execution semantics.
         step_position = {step.step_id: index for index, step in enumerate(plan.steps)}
         ready: list[tuple[int, str]] = []
         for step_id, degree in in_degree.items():
@@ -290,9 +276,6 @@ class PlanValidator:
 
     @staticmethod
     def _validate_reference(step, argument_name, reference, destination_annotation, steps_by_id, definitions_by_step_id, failures):
-        # A declared control dependency is separate from data flow: the reference
-        # states what value is consumed, while `depends_on` states when it is safe
-        # to consume it. V2.8 rejects disagreement rather than rewriting the plan.
         source_step = steps_by_id.get(reference.step_id)
         if source_step is None:
             failures.append(

@@ -12,8 +12,6 @@ from app.investigations.fact_derivation._ids import fact_id, references
 def derive_deployment_code_facts(
     evidence: tuple[Evidence, ...],
 ) -> tuple[DeploymentReferencesCommitFact | CommitAssociatedWithPullRequestFact, ...]:
-    # These are exact Git identities. In particular, equality to a PR head or
-    # merge SHA establishes association, not that the PR caused the incident.
     facts: list[DeploymentReferencesCommitFact | CommitAssociatedWithPullRequestFact] = []
     deployments = [item for item in evidence if isinstance(item.content, DeploymentEvidenceContent)]
     commits = [item for item in evidence if isinstance(item.content, CommitEvidenceContent)]

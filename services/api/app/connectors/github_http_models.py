@@ -1,5 +1,3 @@
-pass
-
 from typing import Any, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -13,8 +11,6 @@ CommitSha = Annotated[
 
 
 class GitHubResponseModel(BaseModel):
-    pass
-
     model_config = ConfigDict(extra="ignore", strict=True)
 
 

@@ -97,13 +97,9 @@ class GroqLLMClient:
             return None
         return getattr(choices[0], "message", None)
 
-    # PURPOSE: Translate an SDK/provider error into an explicit allowlist.
-    #
-    # SECURITY: The raw body and failed generation are inspected only to derive
-    # stable type/code fields and a length. Neither payload crosses this method.
+
     @classmethod
     def _safe_error_details(cls, error: Exception) -> LLMProviderErrorDetails | None:
-        """Keep diagnostic fields useful without retaining a provider payload."""
         status_code = getattr(error, "status_code", None)
         body = getattr(error, "body", None)
         payload = body if isinstance(body, dict) else {}
@@ -211,11 +207,7 @@ class GroqLLMClient:
         self,
         request: TypedLLMRequest,
     ) -> LLMStructuredResponse:
-        # Keep Groq's chat-completions syntax inside its adapter while sharing the
-        # same validated request contract used by other providers.
         try:
-            # Build the request separately so an inherited compatibility adapter
-            # can omit Groq-only options without duplicating typed parsing logic.
             typed_request: dict[str, object] = {
                 "model": self._model,
                 "messages": (
@@ -236,8 +228,6 @@ class GroqLLMClient:
         except PermissionDeniedError:
             raise LLMProviderError(LLMProviderFailureCategory.PERMISSION) from None
         except RateLimitError:
-            # The runtime owns retries. The adapter makes one attempt and
-            # preserves the typed rate-limit category for that policy layer.
             raise LLMProviderError(LLMProviderFailureCategory.RATE_LIMIT) from None
         except APITimeoutError:
             raise LLMProviderError(LLMProviderFailureCategory.TIMEOUT) from None

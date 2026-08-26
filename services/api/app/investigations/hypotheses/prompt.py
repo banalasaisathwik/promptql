@@ -1,5 +1,3 @@
-"""Build the minimized hypothesis prompt from the completed adaptive state."""
-
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -17,11 +15,6 @@ def build_hypothesis_generation_input(
     telemetry: RuntimeTelemetry | None = None,
     run_id: UUID | None = None,
 ) -> HypothesisGenerationInput:
-    """Keep Facts primary and omit raw evidence, tool outputs, and execution history."""
-
-    # Sort stable IDs before crossing the probabilistic boundary. Equivalent
-    # completed states therefore produce reviewable, deterministic prompt input.
-    # `question` remains the user goal; Facts still constrain any accepted claim.
     generation_input = HypothesisGenerationInput(
         investigation_goal=request.question,
         facts=tuple(sorted(state.facts, key=lambda fact: fact.fact_id)),

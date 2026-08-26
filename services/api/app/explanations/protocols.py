@@ -19,9 +19,6 @@ class LLMClient(Protocol):
 
 
 class TypedLLMClient(Protocol):
-    # PURPOSE: Define the structural interface used by new typed LLM tasks.
-    # Like a TypeScript interface, Protocol describes the required shape, but
-    # concrete providers still perform their own runtime SDK calls and parsing.
     provider: LLMProviderName
     model: str
 

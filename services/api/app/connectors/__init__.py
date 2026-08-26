@@ -52,7 +52,6 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Delay V2 fake imports so domain models can import connector contracts."""
     if name in {"FakeGitHubConnector", "FakeJiraConnector"}:
         from app.connectors.fakes import FakeGitHubConnector, FakeJiraConnector
 

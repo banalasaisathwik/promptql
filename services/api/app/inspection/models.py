@@ -1,5 +1,3 @@
-pass
-
 from app.connectors.fixture_catalog import FixtureScenarioId
 from app.connectors.models import (
     ConnectorRequest,
@@ -11,22 +9,16 @@ from app.connectors.models import (
 
 
 class FixtureScenarioItem(ContractModel):
-    pass
-
     id: FixtureScenarioId
     label: NonEmptyString
     request: ConnectorRequest
 
 
 class FixtureScenarioCatalog(ContractModel):
-    pass
-
     items: tuple[FixtureScenarioItem, ...]
 
 
 class PullRequestInspection(ContractModel):
-    pass
-
     request: ConnectorRequest
     github: GitHubPullRequest
     jira: JiraIssue

@@ -22,17 +22,10 @@ from app.investigations.planning.models import (
 
 
 class TypedLLMPlanner:
-    # PURPOSE: Turn an LLM proposal into a strict plan contract, stopping before
-    # any execution. `await` only waits for the provider; no tool adapter is held
-    # or called by this service.
-    """Ask an injected LLM client for a typed proposal; never execute the proposal."""
-
     def __init__(self, client: TypedLLMClient) -> None:
         self._client = client
 
     async def plan(self, planner_input: PlannerInput) -> PlannedInvestigation:
-        # Provider failure, an invalid outer response, and invalid plan fields are
-        # separate outcomes so future runtime policy can react to each safely.
         try:
             response = await self._client.generate_typed(
                 TypedLLMRequest(

@@ -40,9 +40,8 @@ PlanReason = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
 ]
-# Pydantic still validates Python `int | float` values locally. `WithJsonSchema`
-# changes only the schema sent to providers, preventing overlapping `integer` and
-# `number` branches that strict structured-output APIs treat as ambiguous.
+
+
 NumericLiteral = Annotated[
     int | float,
     WithJsonSchema({"type": "number"}),
@@ -50,8 +49,8 @@ NumericLiteral = Annotated[
 
 LiteralValue = str | NumericLiteral | bool | None
 MAX_PLAN_STEPS = 5
-# Adaptive execution uses a narrower horizon without changing the established
-# V2.7/V2.8 contract for callers that still validate a five-step plan.
+
+
 MAX_ADAPTIVE_PLAN_STEPS = 3
 
 
@@ -60,9 +59,6 @@ class PlannerToolInputField(ContractModel):
     required: bool
 
 
-# The compact field list remains useful to readers, while the exact schemas give
-# the model the same argument and step-output vocabulary enforced later by
-# `PlanValidator`. These are backend-owned capabilities, never model proposals.
 class PlannerToolDefinition(ContractModel):
     tool_id: InvestigationToolId
     description: NonEmptyString
@@ -80,8 +76,6 @@ class CompactEvidenceContext(ContractModel):
 
 
 class ActionSummary(ContractModel):
-    """Safe, compact record of one completed logical action for replanning."""
-
     tool_id: InvestigationToolId
     outcome: ToolOutcome
     produced_new_evidence: bool
@@ -89,8 +83,6 @@ class ActionSummary(ContractModel):
 
 
 class PlannerInput(ContractModel):
-    # PURPOSE: Bound what untrusted model reasoning can see to the state needed
-    # for choosing evidence work; it is not an InvestigationResult replacement.
     investigation_goal: NonEmptyString
     request_context: InvestigationRequest | None = None
     facts: FactSet = ()
@@ -114,9 +106,6 @@ class StepOutputRef(ContractModel):
     field: PlanFieldName
 
 
-# The value tag is part of the plan contract, not advisory model prose. Emit it
-# as a JSON Schema discriminator so a provider must choose one complete branch
-# instead of mixing fields from literal and step-output-reference values.
 PlanArgumentValue = Annotated[
     Literal | StepOutputRef,
     Field(discriminator="value_kind"),
@@ -146,8 +135,6 @@ class PlanStep(ContractModel):
 
 
 class InvestigationPlan(ContractModel):
-    # PURPOSE: Represent a schema-valid proposal. V2.8 owns semantic checks such
-    # as duplicate identities and graph legality; V2.9 will decide execution.
     steps: tuple[PlanStep, ...] = Field(min_length=1, max_length=MAX_PLAN_STEPS)
 
 
@@ -169,7 +156,5 @@ class PlannerMetadata(ContractModel):
 
 
 class PlannedInvestigation(ContractModel):
-    # Metadata belongs beside the proposal so audits can identify the model and
-    # prompt without making either one part of the authoritative plan itself.
     plan: InvestigationPlan
     metadata: PlannerMetadata

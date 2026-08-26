@@ -1,5 +1,3 @@
-pass
-
 import asyncio
 import unittest
 
@@ -29,14 +27,7 @@ from pydantic import ValidationError
 
 
 class ConnectorContractTests(unittest.TestCase):
-    pass
-
     def test_all_predefined_fixtures_are_valid_contract_models(self) -> None:
-        pass
-
-
-
-
         for fixture in GITHUB_FIXTURES.values():
             self.assertEqual(
                 GitHubPullRequest.model_validate(fixture.model_dump()),
@@ -47,8 +38,6 @@ class ConnectorContractTests(unittest.TestCase):
             self.assertEqual(JiraIssue.model_validate(fixture.model_dump()), fixture)
 
     def test_invalid_enum_values_fail_validation(self) -> None:
-        pass
-
         github_fixture = GITHUB_FIXTURES[MERGE_READY_REQUEST].model_dump()
         github_fixture["mergeability"] = "sometimes"
         jira_fixture = JIRA_FIXTURES[MERGE_READY_REQUEST].model_dump()
@@ -60,8 +49,6 @@ class ConnectorContractTests(unittest.TestCase):
             JiraIssue.model_validate(jira_fixture)
 
     def test_all_requested_scenarios_have_explicit_fixture_evidence(self) -> None:
-        pass
-
         self.assertFalse(GITHUB_FIXTURES[MERGE_READY_REQUEST].is_draft)
         self.assertTrue(GITHUB_FIXTURES[DRAFT_REQUEST].is_draft)
         self.assertIn(
@@ -89,8 +76,6 @@ class ConnectorContractTests(unittest.TestCase):
         )
 
     def test_invalid_pr_numbers_fail_validation(self) -> None:
-        pass
-
         for invalid_number in (0, -1, True, "1"):
             with self.subTest(pr_number=invalid_number):  # noqa: SIM117
                 with self.assertRaises(ValidationError):
@@ -101,8 +86,6 @@ class ConnectorContractTests(unittest.TestCase):
                     )
 
     def test_unknown_github_fixture_raises_typed_error(self) -> None:
-        pass
-
         request = ConnectorRequest(
             repository_owner="acme",
             repository_name="unknown",
@@ -116,8 +99,6 @@ class ConnectorContractTests(unittest.TestCase):
         self.assertEqual(raised.exception.request, request)
 
     def test_unknown_jira_fixture_raises_typed_error(self) -> None:
-        pass
-
         with self.assertRaises(FixtureNotFoundError) as raised:
             asyncio.run(FakeJiraConnector().get_issue("UNKNOWN-404"))
 
@@ -126,10 +107,6 @@ class ConnectorContractTests(unittest.TestCase):
         self.assertNotIn("UNKNOWN-404", str(raised.exception))
 
     def test_identical_inputs_always_return_identical_results(self) -> None:
-        pass
-
-
-
         first_request = ConnectorRequest.model_validate(
             MERGE_READY_REQUEST.model_dump()
         )

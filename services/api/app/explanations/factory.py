@@ -19,9 +19,6 @@ def create_llm_client(settings: LLMSettings, model: str | None = None) -> LLMCli
         return FakeLLMClient()
 
 
-    # PURPOSE: Keep provider authentication separate from task model choice.
-    # The caller may supply a deterministic task-policy result, while V1 uses
-    # the configured default model through the same factory and adapter path.
     selected_model = model or settings.model
     if settings.api_key is None or selected_model is None:
         raise LLMConfigurationError("LLM provider settings are incomplete.")

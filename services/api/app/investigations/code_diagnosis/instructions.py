@@ -1,6 +1,3 @@
-"""Versioned instructions for constrained code-diagnosis proposals."""
-
-
 CODE_DIAGNOSIS_PROMPT_ID = "investigation-code-diagnosis"
 CODE_DIAGNOSIS_PROMPT_VERSION = "v2-completion.4"
 CODE_DIAGNOSIS_SYSTEM_INSTRUCTIONS = """Propose at most three suspected code findings from the supplied validated hypotheses, Facts, and bounded code locations.

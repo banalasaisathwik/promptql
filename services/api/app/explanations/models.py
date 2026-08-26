@@ -43,9 +43,6 @@ class LLMTokenUsage(ContractModel):
 
 
 class LLMStructuredResponse(ContractModel):
-    # The configured model is the request; `resolved_model` is the provider's
-    # answer about what served it. Neither identity makes the output trusted.
-    # Token counts are provider measurements and may honestly be unavailable.
     output: object
     token_usage: LLMTokenUsage | None = None
     resolved_model: str | None = None
@@ -53,11 +50,6 @@ class LLMStructuredResponse(ContractModel):
 
 @dataclass(frozen=True)
 class TypedLLMRequest:
-    # PURPOSE: Carry the three provider-independent pieces every structured
-    # generation needs: instructions, validated input, and a Pydantic output shape.
-    # This keeps planning code from importing an SDK or choosing provider syntax.
-    """A provider-neutral structured generation request for a bounded domain task."""
-
     system_instructions: str
     input: BaseModel
     output_model: type[BaseModel]

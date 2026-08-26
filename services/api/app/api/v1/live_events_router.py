@@ -1,13 +1,3 @@
-"""Server-Sent Events stream of live structured runtime events for one run.
-
-This is a diagnostic tap on events that already exist (see
-app/observability/live_event_broker.py), not a durable event log: a
-browser that connects late sees nothing that happened before it
-connected, and the stream carries no historical replay. The existing
-polling endpoint (`GET /v1/runs/{run_id}`) remains the source of the
-durable, persisted run snapshot.
-"""
-
 import asyncio
 import json
 from collections.abc import AsyncIterator
@@ -34,12 +24,6 @@ async def _stream_events(
     *,
     poll_interval_seconds: float = KEEP_ALIVE_INTERVAL_SECONDS,
 ) -> AsyncIterator[str]:
-    # No manual disconnect check here: Starlette's StreamingResponse already
-    # runs a concurrent task that listens for client disconnect and cancels
-    # this generator when it happens (the `finally` below still runs on that
-    # cancellation). Calling request.is_disconnected() from inside the body
-    # generator too would be a second concurrent reader of the same ASGI
-    # receive channel and deadlocks against Starlette's own listener.
     subscriber_key = str(run_id)
     queue = broker.subscribe(subscriber_key)
     try:
@@ -49,9 +33,6 @@ async def _stream_events(
                     queue.get(), timeout=poll_interval_seconds
                 )
             except asyncio.TimeoutError:
-                # A comment line keeps intermediaries (proxies, browsers)
-                # from timing out an idle SSE connection; it is ignored by
-                # EventSource clients since it carries no "data:" field.
                 yield ": keep-alive\n\n"
                 continue
             yield f"data: {json.dumps(event, separators=(',', ':'), sort_keys=True)}\n\n"

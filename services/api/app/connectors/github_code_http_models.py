@@ -40,8 +40,8 @@ class GitHubCodePullRequestResponse(GitHubCodeResponseModel):
     title: RequiredString
     state: Literal["open", "closed"]
     merged: bool
-    # Watch out: `| None` accepts JSON null, while the default also accepts an
-    # omitted key. GitHub legitimately omits this field for some pull requests.
+
+
     merge_commit_sha: CommitSha | None = None
     head: GitHubCodeBranchResponse
     base: GitHubCodeBranchResponse

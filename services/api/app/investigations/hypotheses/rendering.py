@@ -1,5 +1,3 @@
-"""Deterministic, Fact-grounded rendering for validated hypotheses."""
-
 from enum import StrEnum
 
 from app.connectors.models import ContractModel, NonEmptyString
@@ -31,8 +29,8 @@ class GroundedTerminationReason(StrEnum):
     PLANNER_FAILURE = "planner_failure"
     HYPOTHESIS_GENERATION_FAILURE = "hypothesis_generation_failure"
     CODE_DIAGNOSIS_FAILURE = "code_diagnosis_failure"
-    # Older V2.19 JSON snapshots used this broader value. Retaining it keeps
-    # persisted runs readable while new runs record the precise failed stage.
+
+
     PROVIDER_FAILURE = "provider_failure"
     PLAN_VALIDATION_FAILURE = "plan_validation_failure"
 
@@ -59,8 +57,6 @@ class GroundedCodeFinding(ContractModel):
 
 
 class GroundedInvestigationResult(ContractModel):
-    """The compact user-facing result produced from validated runtime state."""
-
     termination_reason: GroundedTerminationReason
     summary: NonEmptyString
     supported_hypotheses: tuple[GroundedHypothesis, ...] = ()
@@ -71,7 +67,7 @@ class GroundedInvestigationResult(ContractModel):
 
 
 class GroundingRenderError(ValueError):
-    """Raised when a supposedly validated result violates its support boundary."""
+    pass
 
 
 def render_grounded_result(
@@ -83,17 +79,6 @@ def render_grounded_result(
     recommendations: tuple[DeveloperRecommendation, ...] = (),
     evidence: tuple[InvestigationIdentifier, ...] = (),
 ) -> GroundedInvestigationResult:
-    # PURPOSE: Turn validated causal structure into the only final wording that
-    # the investigation API and UI may expose.
-    #
-    # FLOW: Index typed Facts -> verify every accepted hypothesis reference ->
-    # choose a fixed template -> return compact structured output. The candidate
-    # rationale and any provider prose never enter this function.
-    #
-    # WHY: Deterministic rendering makes the same validated state produce the
-    # same result and prevents a second unconstrained model call from adding an
-    # unsupported causal claim.
-
     facts_by_id = {fact.fact_id: fact for fact in facts}
     rendered_hypotheses: list[GroundedHypothesis] = []
     key_fact_ids: list[str] = []
@@ -164,10 +149,6 @@ def _render_summary(
             "to support a causal hypothesis."
         )
     else:
-        # A run can terminate (e.g. plan_validation_failure on round 1) before
-        # any evidence is ever collected. The general "found relevant evidence"
-        # conclusion would misrepresent that as an evaluated-and-insufficient
-        # outcome rather than a run that never got to evaluate anything.
         conclusion = (
             "The investigation could not proceed far enough to collect evidence."
         )
@@ -191,8 +172,8 @@ def _render_summary(
         GroundedTerminationReason.CODE_DIAGNOSIS_FAILURE: (
             "A causal hypothesis was grounded, but structured code diagnosis was unavailable. "
         ),
-        # This branch renders historical snapshots only; current workflow code
-        # selects PLANNER_FAILURE or HYPOTHESIS_GENERATION_FAILURE instead.
+
+
         GroundedTerminationReason.PROVIDER_FAILURE: (
             "The investigation could not complete because a configured model provider was unavailable. "
         ),
@@ -208,8 +189,6 @@ def _render_code_findings(
     hypotheses: tuple[ValidatedHypothesis, ...],
     facts_by_id: dict[str, object],
 ) -> tuple[GroundedCodeFinding, ...]:
-    # PURPOSE: Cross the final presentation boundary using only accepted domain
-    # values. The LLM's explanation field is intentionally no longer available.
     hypothesis_ids = {item.hypothesis_id for item in hypotheses}
     rendered: list[GroundedCodeFinding] = []
     for finding in findings:
@@ -256,8 +235,6 @@ def _validate_recommendations(
     recommendations: tuple[DeveloperRecommendation, ...],
     findings: tuple[ValidatedCodeFinding, ...],
 ) -> None:
-    # WATCH OUT: A recommendation is safe wording, but its references still
-    # must belong to the exact finding that caused the template to be selected.
     findings_by_id = {item.finding_id: item for item in findings}
     for recommendation in recommendations:
         finding = findings_by_id.get(recommendation.finding_id)
@@ -272,8 +249,6 @@ def _validate_recommendations(
 
 
 def render_fact_summary(fact: object) -> str:
-    """Return bounded detail for a Fact selected by a validated hypothesis."""
-
     if isinstance(fact, ChangedFileFact):
         return f"Changed file: {fact.path}."
     if isinstance(fact, ChangedFileMatchesFailureFileFact):

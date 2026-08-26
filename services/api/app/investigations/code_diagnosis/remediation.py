@@ -1,5 +1,3 @@
-"""Deterministic developer recommendations from validated code findings."""
-
 from hashlib import sha256
 
 from app.investigations.code_diagnosis.models import (
@@ -33,14 +31,6 @@ _CATEGORY_RECOMMENDATION = {
 def build_developer_recommendations(
     findings: tuple[ValidatedCodeFinding, ...],
 ) -> tuple[DeveloperRecommendation, ...]:
-    # PURPOSE: Produce bounded, read-only next steps from accepted findings.
-    #
-    # FLOW: Add a universal inspection action -> optionally map the closed
-    # finding category to one focused check -> add a regression-test action.
-    # Candidate explanations and suggestions are intentionally absent.
-    #
-    # WATCH OUT: These are developer recommendations, never executable tools or
-    # proof that the suspected category is the actual production root cause.
     recommendations: list[DeveloperRecommendation] = []
     for finding in findings:
         actions = [

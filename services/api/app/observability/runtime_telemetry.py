@@ -38,17 +38,11 @@ from app.observability.structured_logging import (
 )
 from app.runtime.models import MergeReadinessRun, RunStatus, WorkflowStepName
 
-# app.explanations imports app.observability at module scope (for
-# ObservedRunRepository etc.), so importing app.explanations.models here at
-# runtime would re-enter this package mid-initialization. The type is only
-# needed for the annotation below, so TYPE_CHECKING avoids the cycle.
+
 if TYPE_CHECKING:
     from app.explanations.models import LLMTokenUsage
 
 
-# SECURITY: Attribute names are closed before values reach an exporter. Adding
-# a new backend destination therefore cannot accidentally widen the data sent;
-# callers still cannot attach prompts, code, Evidence, or exception messages.
 SPAN_ATTRIBUTE_ALLOWLIST = frozenset(
     {
         "promptql.run.id",
@@ -100,9 +94,8 @@ SPAN_ATTRIBUTE_ALLOWLIST = frozenset(
     }
 )
 SUPPORTED_WORKFLOWS = frozenset({("merge_readiness", "1"), ("investigation", "2.19.2")})
-# Roles that may build a typed LLM input via a ContextBuilder-style function.
-# This is purely observational (char_count is a cheap size proxy, not a token
-# count) and carries no truncation or budget decision.
+
+
 SUPPORTED_CONTEXT_ROLES = frozenset({"planner", "hypothesis", "code_diagnosis"})
 SUPPORTED_LLM_PROVIDERS = frozenset({"fake", "gemini", "groq", "openai", "openrouter"})
 SUPPORTED_LLM_FAILURE_CATEGORIES = frozenset(
@@ -119,12 +112,8 @@ SUPPORTED_LLM_FAILURE_CATEGORIES = frozenset(
         "unexpected",
     }
 )
-# Mirrors app.investigations.planning.validation.PlanValidationFailureCode as
-# literal strings (matching the SUPPORTED_LLM_FAILURE_CATEGORIES convention
-# above) so this observability module never imports a domain validator type.
-# "adaptive_plan_too_large" is not a PlanValidator code: it is the adaptive
-# runtime's own per-round step-count rejection, raised before the plan ever
-# reaches PlanValidator.
+
+
 SUPPORTED_PLAN_VALIDATION_FAILURE_CODES = frozenset(
     {
         "plan_too_large",
@@ -384,9 +373,6 @@ class RuntimeTelemetry:
         resolved_model: str | None = None,
         prompt_version: str | None = None,
     ) -> Iterator[SpanObservation]:
-        # FLOW: Build bounded correlation metadata -> open the child span -> let
-        # domain code run -> convert uncategorized exceptions -> always record
-        # duration. The context manager observes; it never decides or recovers.
         attributes: dict[str, str | int] = {
             "promptql.run.id": str(run_id),
             "promptql.workflow.name": "investigation",
@@ -583,10 +569,6 @@ class RuntimeTelemetry:
         event: str,
         **fields: Any,
     ) -> None:
-        # This funnels the same sanitized diagnostics dict that used to go
-        # straight to the raw "promptql.runtime" logger through the one
-        # StructuredEventLogger.emit() path, so it also reaches any live
-        # SSE subscriber for this run.
         try:
             self._event_logger.emit(event, logging.ERROR, run_id=run_id, **fields)
         except Exception:
@@ -600,9 +582,6 @@ class RuntimeTelemetry:
         *,
         round_number: int | None = None,
     ) -> None:
-        # Observational only: a character-count proxy for the serialized LLM
-        # input, so real context-growth data exists before any future
-        # truncation/budget decision is made. No cap or drop logic here.
         try:
             if role not in SUPPORTED_CONTEXT_ROLES:
                 raise ValueError("context role is not approved for logs")
@@ -625,10 +604,6 @@ class RuntimeTelemetry:
         *,
         round_number: int | None = None,
     ) -> None:
-        # Additive alongside context.size_measured: this reports the real
-        # provider-reported token counts after the call, not an estimate.
-        # A provider that omits usage reporting yields None; there is
-        # nothing to log in that case.
         if token_usage is None:
             return
         try:

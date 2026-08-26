@@ -1,11 +1,7 @@
-pass
-
 from uuid import UUID
 
 
 class RunRepositoryError(RuntimeError):
-    pass
-
     def __init__(self, message: str, run_id: UUID | None = None) -> None:
         super().__init__(message)
         self.run_id = run_id

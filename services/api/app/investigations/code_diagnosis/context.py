@@ -1,5 +1,3 @@
-"""Deterministic minimization of code Evidence for diagnosis generation."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -32,17 +30,6 @@ def _normalized_path(path: str) -> str:
 
 
 class CodeContextBuilder:
-    """Build stable, bounded context only for already validated hypotheses."""
-
-    # PURPOSE: Minimize accumulated investigation state before it crosses the
-    # code-diagnosis LLM boundary.
-    #
-    # FLOW: Select accepted-hypothesis paths -> retain only their supporting
-    # Facts -> precompute exact support bundles -> normalize relevant Evidence
-    # into capped changed-file, hunk, and stack-frame locations.
-    #
-    # SECURITY: Code lines are untrusted external data. Only relevant hunks are
-    # included, with hard limits on location count, line count, and line width.
     def build(
         self,
         request: InvestigationRequest,
@@ -107,9 +94,6 @@ def _support_bundle(
     hypothesis: ValidatedHypothesis,
     facts_by_id: dict[str, object],
 ) -> CodeDiagnosisSupport:
-    # WHY HERE: Repeating this small deterministic join saves the model from
-    # reconstructing Fact-to-Evidence relationships. The validator later
-    # requires exact equality, so convenience never becomes authority.
     evidence_ids: list[str] = []
     for fact_id in hypothesis.supporting_fact_ids:
         fact = facts_by_id.get(fact_id)

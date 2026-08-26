@@ -70,4 +70,4 @@ class MergeReadinessResponse(MergeReadinessRun):
 
 
 class InvestigationResponse(InvestigationRun):
-    """HTTP representation of a V2 investigation snapshot."""
+    pass

@@ -1,5 +1,3 @@
-"""Secret-safe, explicitly paid OpenRouter provider-boundary diagnostics."""
-
 import argparse
 import asyncio
 import json
@@ -53,8 +51,8 @@ from app.workflows import InvestigationWorkflowService
 OPENROUTER_CHAT_COMPLETIONS_ENDPOINT = (
     f"{OPENROUTER_OPENAI_BASE_URL}/chat/completions"
 )
-# Watch out: `workflow` remains a separately acknowledged stage. Including its
-# five-call bound in `all` would silently expand the established component probe.
+
+
 COMPONENT_STAGES = (
     "plain",
     "typed",
@@ -79,14 +77,6 @@ class SmokeOutput(BaseModel):
     message: str
 
 
-# PURPOSE: Preserve the original SDK exception for local diagnosis while the
-# production adapter continues translating it to a safe LLMProviderError.
-#
-# FLOW: Forward the same `.parse()` call -> remember an exception if raised ->
-# re-raise it unchanged so normal adapter behavior still runs.
-#
-# WHY: This decorator-like test seam exposes status/schema details without
-# broadening any production API error or retaining prompts and responses.
 class RecordingParseCompletions:
     def __init__(self, completions: object) -> None:
         self._completions = completions
@@ -115,8 +105,6 @@ class RecordingSDKClient:
 
 
 def resolved_configuration(settings: LLMSettings) -> dict[str, object]:
-    # Report only routing decisions and key presence. The secret itself never
-    # enters the returned dictionary, even though LLMSettings holds it.
     is_openrouter = settings.provider is LLMProvider.OPENROUTER
     return {
         "provider": settings.provider.value,
@@ -202,8 +190,6 @@ def _failure_result(
     api_method: str,
     provider_category: str | None = None,
 ) -> dict[str, object]:
-    # This allowlist is the diagnostic's security boundary: select known status
-    # fields, redact messages, and omit headers, requests, prompts, and bodies.
     payload = _provider_error_payload(error)
     upstream_fields = _upstream_error_fields(payload)
     provider_message = payload.get("message")
@@ -263,8 +249,6 @@ def _typed_client(
 
 
 async def run_plain_call(settings: LLMSettings) -> dict[str, object]:
-    # The first live gate uses ordinary Chat Completions. A failure here belongs
-    # to connectivity/auth/account/model access, before schema handling exists.
     model = settings.model_for(LLMTask.PLANNING)
     client = _sdk_client(settings)
     try:
@@ -274,9 +258,8 @@ async def run_plain_call(settings: LLMSettings) -> dict[str, object]:
             max_tokens=16,
             timeout=settings.request_timeout_seconds,
         )
-        # A returned choice proves the plain transport/auth/model-access path.
-        # Some reasoning models can spend a tiny allowance before producing
-        # visible content; the next typed stage owns content/schema validation.
+
+
         if not response.choices:
             return {
                 "stage": "plain",
@@ -312,8 +295,6 @@ async def run_plain_call(settings: LLMSettings) -> dict[str, object]:
 
 
 async def run_typed_call(settings: LLMSettings) -> dict[str, object]:
-    # The tiny schema isolates `.generate_typed()` compatibility from the much
-    # larger planner contract. Local Pydantic validation checks the envelope again.
     model = settings.model_for(LLMTask.PLANNING)
     client, recording_client = _typed_client(settings, model)
     try:
@@ -490,9 +471,6 @@ async def run_hypothesis_call(settings: LLMSettings) -> dict[str, object]:
 
 
 def _code_diagnosis_fixture():
-    # Build the diagnostic through the same Evidence -> Fact -> validated
-    # hypothesis -> bounded context path as production. No model-written value
-    # is pre-approved merely to make the live smoke pass.
     evidence = (
         *CHANGED_FILE_EVIDENCE_FIXTURES[FIXTURE_PULL_REQUEST],
         FAILURE_LOCATION_EVIDENCE_FIXTURES[FAILURE_LOCATION_REQUEST],
@@ -538,11 +516,6 @@ def _code_diagnosis_fixture():
 async def run_code_diagnosis_call(
     settings: LLMSettings,
 ) -> dict[str, object]:
-    # A schema-valid response is only the provider gate. Phase success also
-    # requires at least one candidate to cross deterministic grounding; output
-    # retains counts and stable rejection codes, never candidate/code content.
-    # Resolve configuration before constructing the SDK client, so an absent
-    # task model is a local, zero-cost failure rather than a network attempt.
     try:
         model = settings.model_for(LLMTask.CODE_DIAGNOSIS)
     except LLMConfigurationError as error:
@@ -616,11 +589,6 @@ async def run_code_diagnosis_call(
 
 
 async def run_workflow_call(settings: LLMSettings) -> dict[str, object]:
-    # Purpose: Prove the complete provider-backed production workflow without
-    # requiring PostgreSQL or live connectors to be healthy at the same time.
-    # Flow: Task-routed clients propose plans, hypotheses, and code findings;
-    # fake read-only connectors supply stable Evidence; production validators,
-    # budgets, persistence contracts, and rendering decide the safe result.
     models = {
         "planning": settings.model_for(LLMTask.PLANNING),
         "hypothesis_generation": settings.model_for(LLMTask.HYPOTHESIS_GENERATION),
@@ -648,8 +616,8 @@ async def run_workflow_call(settings: LLMSettings) -> dict[str, object]:
         terminal = await workflow.continue_persisted_run(pending)
         state = terminal.state
         result = terminal.result
-        # Why here: A completed run can sensibly stop after no progress, a round
-        # limit, or budget exhaustion while retaining a fully grounded result.
+
+
         successful_termination_reasons = {
             GroundedTerminationReason.COMPLETED,
             GroundedTerminationReason.NO_PROGRESS,
@@ -689,8 +657,6 @@ async def run_workflow_call(settings: LLMSettings) -> dict[str, object]:
             ),
         }
     except Exception as error:
-        # Watch out: Unexpected failures expose only their class. Exception text
-        # could contain provider or source payloads and is never diagnostic output.
         return {
             "stage": "workflow",
             "status": "FAIL",
@@ -725,8 +691,6 @@ async def run_stage(stage: str, settings: LLMSettings) -> list[dict[str, object]
     )
     results: list[dict[str, object]] = []
     for requested_stage in requested_stages:
-        # `all` is intentionally fail-fast: a later, more complex call cannot
-        # explain a provider boundary that already failed at an earlier gate.
         result = await stage_calls[requested_stage](settings)
         results.append(result)
         if result["status"] != "PASS":
@@ -760,8 +724,6 @@ def main() -> int:
         }, indent=2))
         return 2
     if arguments.stage in PAID_STAGES and not arguments.acknowledge_paid_call:
-        # Local credentials do not imply authorization to spend them. Every
-        # network-capable invocation must opt in at the command line.
         print(json.dumps({
             "stage": arguments.stage,
             "status": "NOT_RUN",

@@ -65,10 +65,7 @@ INVESTIGATION_WORKFLOW_NAME = "investigation"
 INVESTIGATION_WORKFLOW_VERSION = "2.19.2"
 DEFAULT_TOOL_CALL_BUDGET = 10
 
-# Tools the adaptive planner may select for this workflow. Named explicitly
-# rather than passing the full registry, so adding a tool to the registry
-# does not silently grant it to every investigation — a new tool_id must be
-# added here as a deliberate decision.
+
 ADAPTIVE_INVESTIGATION_ALLOWED_TOOL_IDS: tuple[InvestigationToolId, ...] = (
     InvestigationToolId.GET_COMMIT,
     InvestigationToolId.GET_DEPLOYMENTS,
@@ -610,10 +607,6 @@ class InvestigationWorkflowService:
         return failed
 
     def _cancel(self, running: InvestigationRun) -> InvestigationRun:
-        # Round-boundary callbacks already persisted the latest snapshot
-        # durably (save_planned_round/save_completed_round); re-read it so
-        # cancellation keeps that progress instead of reverting to the empty
-        # snapshot `running` was constructed with at the start of this run.
         latest = self._repository.get(running.run_id)
         base = latest if isinstance(latest, InvestigationRun) else running
         cancelled = base.model_copy(

@@ -115,11 +115,6 @@ def get_investigation_workflow(
     request: Request,
     run_repository: Annotated[RunRepository, Depends(get_run_repository)],
 ) -> InvestigationWorkflowService:
-    # The application boundary already resolved task-to-model policy. The HTTP
-    # route only passes those provider-neutral typed clients into the workflow;
-    # it never receives a provider key, URL, or model-selection decision.
-    # RuntimeTelemetry follows that same dependency boundary, so the workflow
-    # remains testable with its no-op default and never creates an exporter.
     return InvestigationWorkflowService(
         run_repository,
         request.app.state.investigation_hypothesis_client,
@@ -277,9 +272,6 @@ async def _continue_investigation(
     try:
         await workflow.continue_persisted_run(pending_run)
     except asyncio.CancelledError:
-        # The workflow already persists status=cancelled before this
-        # propagates (see InvestigationWorkflowService._cancel). Re-raise so
-        # the task genuinely ends up cancelled rather than looking swallowed.
         raise
     except Exception:
         return
@@ -302,9 +294,6 @@ async def get_runtime_run(
         Depends(get_merge_readiness_explanation_service),
     ],
 ) -> MergeReadinessResponse | InvestigationResponse | JSONResponse:
-    # The endpoint returns the persisted current snapshot. Selecting the typed
-    # response variant from the backend-owned workflow name keeps V1 and V2
-    # clients on one polling resource without client-side semantic inference.
     stored_run = run_repository.get(run_id)
     if stored_run is None:
         error = ApiError(

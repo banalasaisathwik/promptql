@@ -1,21 +1,15 @@
-pass
-
 from enum import StrEnum
 
 from app.connectors.models import ContractModel, NonEmptyString
 
 
 class MergeReadinessDecision(StrEnum):
-    pass
-
     READY = "ready"
     BLOCKED = "blocked"
     UNKNOWN = "unknown"
 
 
 class PolicyReasonCode(StrEnum):
-    pass
-
     READY = "ready"
     PR_IS_DRAFT = "pr_is_draft"
     PR_CLOSED_UNMERGED = "pr_closed_unmerged"
@@ -31,8 +25,6 @@ class PolicyReasonCode(StrEnum):
 
 
 class PendingActionCode(StrEnum):
-    pass
-
     MARK_PR_READY = "mark_pr_ready"
     REOPEN_PR = "reopen_pr"
     RESOLVE_MERGE_CONFLICT = "resolve_merge_conflict"
@@ -47,15 +39,11 @@ class PendingActionCode(StrEnum):
 
 
 class EvidenceSource(StrEnum):
-    pass
-
     GITHUB = "github"
     JIRA = "jira"
 
 
 class EvidenceReference(ContractModel):
-    pass
-
     reference_id: NonEmptyString
     source: EvidenceSource
     field: NonEmptyString
@@ -63,24 +51,18 @@ class EvidenceReference(ContractModel):
 
 
 class PolicyFinding(ContractModel):
-    pass
-
     reason_code: PolicyReasonCode
     message: NonEmptyString
     evidence_reference_ids: tuple[NonEmptyString, ...]
 
 
 class PendingAction(ContractModel):
-    pass
-
     action_code: PendingActionCode
     reason_code: PolicyReasonCode
     message: NonEmptyString
 
 
 class MergeReadinessResult(ContractModel):
-    pass
-
     decision: MergeReadinessDecision
     summary: NonEmptyString
     reason_code: PolicyReasonCode

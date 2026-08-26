@@ -94,10 +94,6 @@ class StructuredEventLogger:
         self._broker: LiveEventBroker | None = None
 
     def set_broker(self, broker: LiveEventBroker | None) -> None:
-        # WHY A SETTER: the broker is an app.state-scoped singleton created
-        # after this logger (see create_app() in main.py), so it cannot be
-        # threaded through the constructor at construction time the way the
-        # underlying logging.Logger is.
         self._broker = broker
 
     def emit(self, event: str, level: int = logging.INFO, **fields: Any) -> None:

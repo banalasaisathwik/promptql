@@ -54,8 +54,6 @@ class InvestigationPlanningRoundSnapshot(ContractModel):
 
 
 class WorkingMemory(ContractModel):
-    """Semantic investigation knowledge: what the investigation has learned."""
-
     evidence: tuple[InvestigationIdentifier, ...] = ()
     evidence_content: tuple[Evidence, ...] = ()
     facts: FactSet = ()
@@ -67,8 +65,6 @@ class WorkingMemory(ContractModel):
 
 
 class ExecutionState(ContractModel):
-    """Pure execution bookkeeping: how the run has progressed."""
-
     rounds: tuple[InvestigationPlanningRoundSnapshot, ...] = ()
     hypothesis_generation_metadata: HypothesisGenerationMetadata | None = None
     rejected_hypothesis_count: Annotated[int, Field(ge=0)] = 0

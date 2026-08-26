@@ -1,12 +1,7 @@
-"""Sanitized failures at the hypothesis-generation boundary."""
-
 from app.explanations.errors import LLMProviderErrorDetails
 from app.investigations.hypotheses.models import HypothesisGenerationFailureCode
 
 
-# PURPOSE: Preserve the failure category after the provider adapter sanitizes it.
-# The workflow can log safe diagnostics while still presenting one stable domain
-# failure to rendering code; raw SDK exceptions never cross this boundary.
 class HypothesisGenerationError(RuntimeError):
     def __init__(
         self,

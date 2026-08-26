@@ -1,5 +1,3 @@
-pass
-
 from app.policy.evaluator import evaluate_merge_readiness
 from app.policy.models import (
     EvidenceReference,

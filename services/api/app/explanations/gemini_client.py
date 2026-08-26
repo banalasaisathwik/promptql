@@ -254,8 +254,6 @@ class GeminiLLMClient:
         self,
         request: TypedLLMRequest,
     ) -> LLMStructuredResponse:
-        # The generic path intentionally bypasses V1's explanation-specific index
-        # mapping, because the caller provides this task's own output model.
         try:
             response = await self._client.beta.chat.completions.parse(
                 model=self._model,

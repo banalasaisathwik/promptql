@@ -1,5 +1,3 @@
-pass
-
 from types import MappingProxyType
 from typing import Any
 
@@ -22,8 +20,6 @@ from app.connectors.models import (
     PullRequestState,
     RequiredCheck,
 )
-
-
 
 
 _AUTHOR = GitHubUser(login="octo-author")
@@ -58,13 +54,9 @@ _BASE_GITHUB_FIXTURE = GitHubPullRequest(
 
 
 def _github_fixture(**updates: Any) -> GitHubPullRequest:
-    pass
-
     fixture_data = _BASE_GITHUB_FIXTURE.model_dump()
     fixture_data.update(updates)
     return GitHubPullRequest.model_validate(fixture_data)
-
-
 
 
 GITHUB_FIXTURES = MappingProxyType(

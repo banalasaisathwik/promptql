@@ -1,5 +1,3 @@
-"""Pure grounding rules for untrusted code-finding candidates."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -28,17 +26,6 @@ def _normalized_path(path: str) -> str:
 
 
 class DeterministicCodeFindingValidator:
-    """Accept only code locations that resolve through current trusted state."""
-
-    # PURPOSE: Turn an untrusted semantic proposal into a location-backed domain
-    # value without consulting a model, network, or mutable external source.
-    #
-    # FLOW: Index trusted state -> reject one stable reason per candidate ->
-    # resolve the selected Evidence identity -> copy its authoritative location
-    # fields into a new ValidatedCodeFinding.
-    #
-    # WHY: This is analogous to validating an incoming TypeScript DTO and then
-    # loading the authoritative database row instead of trusting copied fields.
     def validate(
         self,
         candidates: tuple[SuspectedCodeFinding, ...],
@@ -104,8 +91,8 @@ class DeterministicCodeFindingValidator:
             if fact is None:
                 return CodeFindingValidationFailureCode.UNKNOWN_SUPPORTING_FACT
             selected_facts.append(fact)
-        # Exact equality prevents plausible but unrelated existing entities from
-        # being smuggled into the final finding as extra "support."
+
+
         if set(hypothesis.supporting_fact_ids) != set(candidate.supporting_fact_ids):
             return CodeFindingValidationFailureCode.HYPOTHESIS_SUPPORT_MISMATCH
 
@@ -160,8 +147,6 @@ def _validated_finding(
     candidate: SuspectedCodeFinding,
     evidence_by_id: dict[str, Evidence],
 ) -> ValidatedCodeFinding:
-    # The candidate cannot carry these coordinates. They enter the validated
-    # model only by resolving a previously observed Evidence object.
     location = evidence_by_id[candidate.location_evidence_id]
     content = location.content
     line_number = None

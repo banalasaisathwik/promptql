@@ -8,8 +8,6 @@ from app.investigations.fact_derivation._ids import fact_id, references
 
 
 def derive_temporal_facts(evidence: tuple[Evidence, ...]) -> tuple[DeploymentPrecededIncidentFact, ...]:
-    # Strict ordering avoids treating equal provider timestamps as evidence of
-    # precedence; the fact is temporal association, never causation.
     facts: list[DeploymentPrecededIncidentFact] = []
     deployments = [item for item in evidence if isinstance(item.content, DeploymentEvidenceContent)]
     incidents = [item for item in evidence if isinstance(item.content, IncidentEvidenceContent)]

@@ -1,5 +1,3 @@
-"""Bounded tracing, metrics, and structured logging for runtime execution."""
-
 from app.observability.contracts import (
     FailureCategory,
     InvestigationStage,

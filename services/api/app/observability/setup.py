@@ -261,8 +261,6 @@ def _disabled_observability(
 def _langfuse_exporter_configuration(
     settings: TelemetrySettings,
 ) -> tuple[str, dict[str, str]]:
-    # SECURITY: Credentials become an HTTP header only at the exporter edge.
-    # They never enter span attributes, metrics, domain models, or settings repr.
     if (
         settings.langfuse_base_url is None
         or settings.langfuse_public_key is None
@@ -368,9 +366,6 @@ def create_observability(
             )
 
         if resolved_settings.langfuse_enabled:
-            # DESIGN: Reuse the same tracer provider and bounded spans. A second
-            # processor is fan-out, not a parallel event or decision system;
-            # Langfuse receives traces only while general OTLP retains metrics.
             _quiet_otlp_internal_loggers()
             langfuse_endpoint, langfuse_headers = (
                 _langfuse_exporter_configuration(resolved_settings)

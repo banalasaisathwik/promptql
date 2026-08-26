@@ -1,5 +1,3 @@
-pass
-
 from copy import deepcopy
 import unittest
 
@@ -55,8 +53,6 @@ def protection_response():
 
 
 class GitHubResponses:
-    pass
-
     def __init__(self) -> None:
         self.pull = pull_response()
         self.reviews: list[dict] = []

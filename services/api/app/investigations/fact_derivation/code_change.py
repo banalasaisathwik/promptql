@@ -11,8 +11,6 @@ from app.investigations.fact_derivation._ids import fact_id, references
 
 
 def _normalized_path(path: str) -> str:
-    # Normalize only separators and a harmless leading './'; fuzzy matching
-    # would turn a plausible file name into an unsupported fact.
     return path.replace("\\", "/").removeprefix("./")
 
 
@@ -22,16 +20,14 @@ def derive_code_failure_facts(
     ChangedFileFact | ChangedFileMatchesFailureFileFact | ChangedHunkOverlapsFailureLineFact,
     ...,
 ]:
-    # A hunk is useful only when a patch exists and its new-file range contains
-    # the observed failure line. A deletion range (new_count == 0) has no new line.
     facts: list[
         ChangedFileFact | ChangedFileMatchesFailureFileFact | ChangedHunkOverlapsFailureLineFact
     ] = []
     changed_files = [item for item in evidence if isinstance(item.content, ChangedFileEvidenceContent)]
     hunks = [item for item in evidence if isinstance(item.content, DiffHunkEvidenceContent)]
     frames = [item for item in evidence if isinstance(item.content, StackFrameEvidenceContent)]
-    # Each observed changed file is a first-class Fact. Relationship facts below
-    # can then prove that a particular changed path also matches the failure.
+
+
     for changed_file in changed_files:
         facts.append(
             ChangedFileFact(

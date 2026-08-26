@@ -185,10 +185,6 @@ class PlanValidatorTests(unittest.TestCase):
         self.assertIn(PlanValidationFailureCode.REFERENCE_TYPE_MISMATCH, self._codes(incompatible))
 
     def test_named_subset_allows_permitted_tools_and_rejects_the_rest(self) -> None:
-        # Mirrors the explicit allowlist workflows/investigation.py now passes
-        # instead of the full registry: a plan step naming a tool outside the
-        # named subset is rejected even though the tool is registered and the
-        # plan is otherwise well-formed.
         allowed_subset = tuple(
             definition for definition in TOOL_DEFINITIONS
             if definition.tool_id != "get_jira_issue"

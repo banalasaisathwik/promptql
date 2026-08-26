@@ -37,23 +37,13 @@ class LLMProvider(StrEnum):
 
 
 class LLMTask(StrEnum):
-    """Stable, deterministic names for the small set of model-owned workloads."""
-
     PLANNING = "planning"
     HYPOTHESIS_GENERATION = "hypothesis_generation"
     CODE_DIAGNOSIS = "code_diagnosis"
 
 
-# PURPOSE: Map each bounded LLM task to configuration, without inspecting the
-# request or introducing a probabilistic router.
-#
-# FLOW: Prefer the task-specific model -> fall back to the shared default -> fail
-# startup when neither exists. The returned string is still only a requested
-# model; the provider may report a separate resolved serving model.
 @dataclass(frozen=True)
 class ModelPolicy:
-    """Resolve a configured model without interpreting request content."""
-
     default_model: str | None
     planner_model: str | None
     hypothesis_model: str | None
@@ -237,9 +227,6 @@ def _validate_otlp_endpoint(raw_endpoint: str) -> str | None:
 
 
 def _validate_langfuse_base_url(raw_url: str) -> str:
-    # SECURITY: Accept an origin, not an arbitrary ingestion URL. This prevents
-    # a committed path/query/user-info value from smuggling credentials or
-    # silently producing a different endpoint when setup appends its fixed path.
     base_url = raw_url.strip().rstrip("/")
     parsed_url = urlsplit(base_url)
     local_hosts = {"127.0.0.1", "localhost", "::1"}
@@ -433,8 +420,8 @@ class LLMSettings:
             variable_prefix = "OPENAI"
 
         api_key = os.environ.get(f"{variable_prefix}_API_KEY", "").strip() or None
-        # PROMPTQL_DEFAULT_MODEL is provider-neutral. The older provider-specific
-        # setting remains a compatibility fallback for existing V1 deployments.
+
+
         model = (
             os.environ.get("PROMPTQL_DEFAULT_MODEL", "").strip()
             or os.environ.get(f"{variable_prefix}_MODEL", "").strip()
@@ -453,8 +440,8 @@ class LLMSettings:
                     f"{variable_prefix}_API_KEY is required when the LLM "
                     f"provider is {provider.value}."
                 )
-            # Without a shared default, validate the whole investigation model
-            # set at startup instead of discovering one missing stage mid-run.
+
+
             task_models_complete = all(
                 (planner_model, hypothesis_model, code_diagnosis_model)
             )
@@ -495,8 +482,6 @@ class LLMSettings:
 
 @dataclass(frozen=True)
 class TelemetrySettings:
-    # Langfuse is independent from general OTLP export. `repr=False` prevents a
-    # routine settings log or assertion failure from printing project keys.
     enabled: bool
     console_enabled: bool
     service_name: str

@@ -1,6 +1,3 @@
-"""Versioned instructions for constrained hypothesis generation."""
-
-
 HYPOTHESIS_PROMPT_ID = "investigation-hypothesis-generation"
 HYPOTHESIS_PROMPT_VERSION = "v2.17.1"
 HYPOTHESIS_SYSTEM_INSTRUCTIONS = """Generate at most three candidate hypotheses from the supplied Facts.

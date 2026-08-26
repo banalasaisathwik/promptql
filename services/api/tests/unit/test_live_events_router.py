@@ -38,11 +38,6 @@ class StreamEventsTests(unittest.IsolatedAsyncioTestCase):
         await generator.aclose()
 
     async def test_cancelling_the_stream_unsubscribes_from_the_broker(self) -> None:
-        # This is what Starlette's StreamingResponse does on client disconnect:
-        # it cancels the task driving this generator's __anext__(), which
-        # should run the generator's `finally` and unsubscribe cleanly -
-        # the endpoint itself performs no manual disconnect polling (see the
-        # module docstring for why that would deadlock).
         broker = LiveEventBroker()
         run_id = uuid4()
         generator = _stream_events(broker, run_id)

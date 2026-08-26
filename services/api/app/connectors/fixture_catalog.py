@@ -1,20 +1,14 @@
-pass
-
 from dataclasses import dataclass
 from enum import StrEnum
 
 from app.connectors.models import ConnectorRequest
 
 
-                                                                             
-                                                                              
 FIXTURE_REPOSITORY_OWNER = "acme"
 FIXTURE_REPOSITORY_NAME = "analytics"
 
 
 def _request(pr_number: int) -> ConnectorRequest:
-    pass
-
     return ConnectorRequest(
         repository_owner=FIXTURE_REPOSITORY_OWNER,
         repository_name=FIXTURE_REPOSITORY_NAME,
@@ -22,8 +16,6 @@ def _request(pr_number: int) -> ConnectorRequest:
     )
 
 
-                                                                            
-                                       
 MERGE_READY_REQUEST = _request(1)
 DRAFT_REQUEST = _request(2)
 FAILED_CI_REQUEST = _request(3)
@@ -35,8 +27,6 @@ JIRA_IN_PROGRESS_REQUEST = _request(8)
 
 
 class FixtureScenarioId(StrEnum):
-    pass
-
     MERGE_READY = "merge-ready"
     DRAFT = "draft"
     FAILED_CI = "failed-ci"
@@ -49,15 +39,11 @@ class FixtureScenarioId(StrEnum):
 
 @dataclass(frozen=True)
 class FixtureScenario:
-    pass
-
     id: FixtureScenarioId
     label: str
     request: ConnectorRequest
 
 
-                                                                                
-                                                                      
 FIXTURE_SCENARIOS = (
     FixtureScenario(FixtureScenarioId.MERGE_READY, "Merge ready", MERGE_READY_REQUEST),
     FixtureScenario(FixtureScenarioId.DRAFT, "Draft", DRAFT_REQUEST),

@@ -285,8 +285,6 @@ class GroundedRenderingTests(unittest.TestCase):
         self.assertIn("not sufficient", result.summary)
 
     def test_plan_validation_failure_with_no_evidence_does_not_claim_evidence_was_found(self):
-        # A plan can be rejected on round 1, before any evidence or Facts
-        # exist. The summary must not claim evidence was "found" in that case.
         result = render_grounded_result(
             (), (), (), GroundedTerminationReason.PLAN_VALIDATION_FAILURE
         )

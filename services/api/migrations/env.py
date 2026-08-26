@@ -1,5 +1,3 @@
-pass
-
 import os
 
 from alembic import context
@@ -13,8 +11,6 @@ target_metadata = DatabaseModel.metadata
 
 
 def migration_url():
-    pass
-
     return parse_postgresql_url(
         os.environ.get("DATABASE_MIGRATION_URL", ""),
         "DATABASE_MIGRATION_URL",
@@ -22,8 +18,6 @@ def migration_url():
 
 
 def run_migrations_offline() -> None:
-    pass
-
     context.configure(
         url=migration_url(),
         target_metadata=target_metadata,
@@ -36,8 +30,6 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    pass
-
     engine = create_engine(
         migration_url(),
         poolclass=pool.NullPool,

@@ -1,5 +1,3 @@
-"""Sanitized failures at the code-diagnosis generation boundary."""
-
 from app.explanations.errors import LLMProviderErrorDetails
 from app.investigations.code_diagnosis.models import CodeDiagnosisFailureCode
 

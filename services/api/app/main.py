@@ -160,24 +160,18 @@ def create_app(
     else:
         resolved_llm_settings = llm_settings or LLMSettings.from_environment()
         if resolved_llm_settings.provider is LLMProvider.FAKE:
-            # Fake mode intentionally has neither a model nor a ModelPolicy.
-            # Branch before `model_for()` so Python never evaluates that
-            # non-fake-only lookup while constructing the local/test client.
             selected_llm_client = create_llm_client(resolved_llm_settings)
             investigation_planner_client = selected_llm_client
             investigation_hypothesis_client = selected_llm_client
             investigation_code_diagnosis_client = selected_llm_client
         else:
-            # V1 explanations have no separate task policy yet. When this service
-            # starts with investigation-only task models, use planning as the
-            # explicit compatibility choice instead of requiring a hidden global ID.
             selected_llm_client = create_llm_client(
                 resolved_llm_settings,
                 resolved_llm_settings.model
                 or resolved_llm_settings.model_for(LLMTask.PLANNING),
             )
-            # The policy is deterministic: the same task and settings always
-            # construct a client for the same requested model.
+
+
             investigation_planner_client = create_llm_client(
                 resolved_llm_settings,
                 resolved_llm_settings.model_for(LLMTask.PLANNING),
@@ -186,8 +180,8 @@ def create_app(
                 resolved_llm_settings,
                 resolved_llm_settings.model_for(LLMTask.HYPOTHESIS_GENERATION),
             )
-            # WHY HERE: Client construction is the credential/model boundary;
-            # the workflow receives only the provider-neutral typed protocol.
+
+
             investigation_code_diagnosis_client = create_llm_client(
                 resolved_llm_settings,
                 resolved_llm_settings.model_for(LLMTask.CODE_DIAGNOSIS),

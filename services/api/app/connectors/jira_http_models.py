@@ -1,5 +1,3 @@
-pass
-
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
@@ -9,8 +7,6 @@ RequiredString = Annotated[str, StringConstraints(min_length=1)]
 
 
 class JiraResponseModel(BaseModel):
-    pass
-
     model_config = ConfigDict(extra="ignore", strict=True)
 
 

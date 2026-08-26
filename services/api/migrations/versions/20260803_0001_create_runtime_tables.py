@@ -1,5 +1,3 @@
-pass
-
 from collections.abc import Sequence
 
 from alembic import op

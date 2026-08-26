@@ -30,8 +30,6 @@ SleepFunction = Callable[[float], Awaitable[None]]
 
 
 def _requested_models(settings: LLMSettings) -> dict[str, str]:
-    # Purpose: Resolve the same task-specific model policy used by production
-    # before any client exists, which lets preflight remain network-free.
     if settings.provider is LLMProvider.FAKE:
         return {
             "planning": "deterministic-fake-v1",
@@ -85,8 +83,6 @@ def _create_clients(
 
 
 async def _close_clients(clients: tuple[LLMClient, ...]) -> None:
-    # Key syntax: The temporary dict deduplicates a shared fake client by object
-    # identity, so one resource is never closed three times.
     for client in {id(item): item for item in clients}.values():
         close = getattr(client, "aclose", None)
         if callable(close):
@@ -118,8 +114,6 @@ def _default_report_path(dataset, provider: LLMProvider) -> Path:
 
 
 def _write_report(path: Path, report) -> None:
-    # Why here: Replace-after-write avoids leaving a partially serialized report
-    # if the process stops during the write.
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_suffix(path.suffix + ".tmp")
     temporary_path.write_text(
@@ -143,8 +137,8 @@ def format_investigation_eval_summary(report) -> str:
             f"planned/completed: {metrics.planned_samples}/{metrics.completed_samples}",
             rate("provider success", metrics.provider_success),
             rate("schema valid after provider success", metrics.schema_valid),
-            # Flow: A workflow-generation outage is reported before quality; its
-            # quality denominator is then empty rather than a misleading zero.
+
+
             rate(
                 "trajectory generation success",
                 metrics.trajectory_generation_success,
@@ -180,8 +174,6 @@ async def run_investigation_eval(
     client_factory: ClientFactory = create_llm_client,
     sleep: SleepFunction = asyncio.sleep,
 ):
-    # Watch out: This gate runs before client construction. A configured real
-    # provider cannot make a paid request without explicit acknowledgement.
     validate_execution_mode(
         settings,
         acknowledge_paid_calls=acknowledge_paid_calls,
@@ -244,8 +236,6 @@ async def _run_cli(arguments: argparse.Namespace) -> int:
     report_path = arguments.report or _default_report_path(dataset, settings.provider)
     planned_samples = len(dataset.cases) * identity.samples_per_case
     if arguments.preflight:
-        # Purpose: Make cost exposure reviewable without constructing a provider
-        # client or sending any repository context over the network.
         print(f"dataset={dataset.dataset_id}")
         print(f"case_count={len(dataset.cases)}")
         print(f"samples_per_case={identity.samples_per_case}")

@@ -1,5 +1,3 @@
-"""Pure, generic relationship validation for untrusted hypothesis candidates."""
-
 from app.investigations.hypotheses.models import (
     CandidateHypothesis,
     HypothesisKind,
@@ -17,15 +15,6 @@ from app.investigations.models import (
 
 
 class DeterministicHypothesisValidator:
-    """Accept only candidates whose selected facts satisfy a family-specific predicate."""
-
-    # PURPOSE: Decide accepted/rejected state using only supplied typed Facts.
-    #
-    # FLOW: Index the current FactSet -> inspect candidates in input order ->
-    # record one stable rejection reason or construct a validated copy.
-    #
-    # WHY: The pure function has no provider/LLM dependency, so the same input
-    # always produces the same result and no parsed proposal can bypass policy.
     def validate(
         self, candidates: tuple[CandidateHypothesis, ...], facts: FactSet
     ) -> HypothesisValidationResult:
@@ -62,9 +51,7 @@ class DeterministicHypothesisValidator:
                 return HypothesisValidationFailureCode.UNKNOWN_SUPPORTING_FACT
             selected_facts.append(fact)
 
-        # The family rule is expressed in normalized relations, not technology
-        # names: the candidate's file-path subject must be both changed and tied
-        # to the observed failure location by the selected Facts.
+
         changed_file_support = any(
             isinstance(fact, ChangedFileFact) and fact.path == candidate.subject
             for fact in selected_facts

@@ -24,10 +24,6 @@ CHANGED_FILE_FACT_ID = "fact:changed-file:5acca6b6bb3082cf"
 FAILURE_FILE_FACT_ID = "fact:changed-file-matches-failure-file:8096dd2d5ac22ba8"
 
 
-# Purpose: Give both splits the same deterministic fixture contract with distinct
-# questions, so holdout execution stays separate without inventing new evidence.
-# Watch out: This first catalog measures one incident family; more samples improve
-# repeatability for that fixture but do not create broader incident coverage.
 def _case(case_id: str, question: str) -> InvestigationEvalCase:
     return InvestigationEvalCase(
         case_id=case_id,
@@ -72,8 +68,6 @@ def _case(case_id: str, question: str) -> InvestigationEvalCase:
 def build_investigation_eval_dataset(
     split: EvalDatasetSplit,
 ) -> InvestigationEvalDataset:
-    # Key syntax: The conditional expression chooses the split-specific question,
-    # while all stable Evidence/Fact labels remain centralized in `_case()`.
     case = (
         _case(
             "checkout-500-development",

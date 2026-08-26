@@ -1,5 +1,3 @@
-"""Provider-neutral generation of untrusted code-finding candidates."""
-
 from pydantic import ValidationError
 
 from app.explanations import (
@@ -24,8 +22,6 @@ from app.investigations.code_diagnosis.models import (
 
 
 class TypedLLMCodeDiagnoser:
-    """Request typed candidates without granting them domain authority."""
-
     def __init__(self, client: TypedLLMClient) -> None:
         self._client = client
 
@@ -33,14 +29,6 @@ class TypedLLMCodeDiagnoser:
         self,
         diagnosis_input: CodeDiagnosisInput,
     ) -> GeneratedCodeFindings:
-        # PURPOSE: Own provider transport and schema validation only.
-        #
-        # FLOW: Send the bounded CodeDiagnosisInput -> validate the shared
-        # response envelope -> validate the candidate schema -> attach safe
-        # provider/model/prompt identity. Semantic grounding happens elsewhere.
-        #
-        # WATCH OUT: Successful Pydantic parsing proves shape, not that any
-        # hypothesis, Fact, Evidence ID, category, or location is supported.
         try:
             response = await self._client.generate_typed(
                 TypedLLMRequest(

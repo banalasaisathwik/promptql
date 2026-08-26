@@ -252,10 +252,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        # Simulates the real incident: round 2 finishes and persists its
-        # snapshot (on_round_completed fires normally), then the surrounding
-        # task is cancelled (app shutdown/restart) before investigate()
-        # returns a real terminal reason.
+
         async def cancelled_after_round_two(
             self,
             investigation_goal,
@@ -414,10 +411,6 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(completed.state.working_memory.evidence), 0)
 
     def test_missing_structured_sources_is_rejected_before_construction(self):
-        # A request with no grounding reference used to reach the workflow and
-        # complete with an empty state (nothing for the planner to anchor a
-        # plan to). InvestigationRequest now rejects that shape immediately,
-        # so the wasted planning round-trip never happens.
         with self.assertRaises(ValidationError):
             InvestigationRequest(
                 repository_owner="octo-org",

@@ -5,7 +5,6 @@ from app.investigations.fact_derivation.temporal import derive_temporal_facts
 
 
 def derive_facts(evidence: tuple[Evidence, ...]) -> FactSet:
-    """Combine independently testable deterministic relationship rules."""
     facts = (
         *derive_temporal_facts(evidence),
         *derive_deployment_code_facts(evidence),

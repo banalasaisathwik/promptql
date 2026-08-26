@@ -14,9 +14,6 @@ from app.investigations.hypotheses import GroundedTerminationReason, HypothesisK
 from app.tools import InvestigationToolId
 
 
-# Purpose: Keep reference labels separate from observations produced by a run.
-# Why here: The frozen contract makes a dataset version reviewable and prevents a
-# grader from silently deriving its expected answer from the candidate output.
 class InvestigationEvalCase(ContractModel):
     case_id: NonEmptyString
     request: InvestigationRequest
@@ -51,9 +48,6 @@ class ProviderBoundaryObservation(ContractModel):
     resolved_model: NonEmptyString | None = None
 
 
-# Purpose: Record quality at the component boundary before aggregating a sample.
-# Watch out: These booleans do not replace provider/schema observations; a
-# transport failure must remain distinguishable from a bad reasoning candidate.
 class InvestigationComponentObservation(ContractModel):
     planner_valid: bool
     planner_useful: bool
@@ -108,8 +102,8 @@ class InvestigationEvalMetrics(ContractModel):
     completed_samples: int = Field(ge=0)
     provider_success: CountRate
     schema_valid: CountRate
-    # Purpose: Keep workflow generation availability out of trajectory reasoning
-    # quality, just as component provider/schema rates have separate denominators.
+
+
     trajectory_generation_success: CountRate
     component_quality: CountRate
     trajectory_quality: CountRate
@@ -125,9 +119,6 @@ class InvestigationEvalMetrics(ContractModel):
     estimated_cost: float | None = Field(default=None, ge=0)
 
 
-# Purpose: Persist only bounded experiment identity and aggregate measurements.
-# Watch out: Questions, Evidence, code, prompts, and model output intentionally
-# have no field in this report contract, so ordinary artifacts cannot leak them.
 class InvestigationEvalRunIdentity(ContractModel):
     dataset_id: NonEmptyString
     dataset_version: NonEmptyString
