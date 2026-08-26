@@ -1,8 +1,8 @@
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any, Self
+from typing import Annotated, Any, Self
 
-from pydantic import ConfigDict, ValidationError, model_validator
+from pydantic import ConfigDict, Field, ValidationError, model_validator
 
 from app.connectors.models import (
     ContractModel,
@@ -48,6 +48,7 @@ class ToolFailureCode(StrEnum):
     INCOMPLETE_RESULT = "incomplete_result"
     CONFIGURATION_ERROR = "configuration_error"
     SOURCE_FAILURE = "source_failure"
+    WRITE_CAPABILITY_NOT_GRANTED = "write_capability_not_granted"
 
 
 class ToolFailure(ContractModel):
@@ -153,6 +154,7 @@ class ToolDefinition(ContractModel):
 
     plan_output_model: type[ContractModel]
     read_only: bool = True
+    timeout_seconds: Annotated[float, Field(gt=0)] | None = None
 
     @property
     def input_schema(self) -> dict[str, Any]:
@@ -221,5 +223,6 @@ TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         input_model=TelemetryWindowEvidenceRequest,
         output_model=ToolResult,
         plan_output_model=QueryTelemetryPlanOutput,
+        timeout_seconds=30.0,
     ),
 )

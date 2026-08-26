@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
@@ -45,9 +46,16 @@ class EvidenceAccumulator:
 
 
 class ToolInvoker:
-    def __init__(self, registry: ToolRegistry, tools: Mapping[str, InvestigationTool]) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        tools: Mapping[str, InvestigationTool],
+        *,
+        allow_write_tools: bool = False,
+    ) -> None:
         self._registry = registry
         self._tools = tools
+        self._allow_write_tools = allow_write_tools
 
     async def invoke(
         self,
@@ -65,7 +73,30 @@ class ToolInvoker:
                     "message": "the registered tool has no available capability",
                 },
             )
-        return await tool.execute(arguments)
+        if not definition.read_only and not self._allow_write_tools:
+            return ToolResult(
+                tool_id=tool_id,
+                outcome=ToolOutcome.FAILED,
+                failure={
+                    "code": ToolFailureCode.WRITE_CAPABILITY_NOT_GRANTED,
+                    "message": "this invoker was not granted write tool capability",
+                },
+            )
+        if definition.timeout_seconds is None:
+            return await tool.execute(arguments)
+        try:
+            return await asyncio.wait_for(
+                tool.execute(arguments), timeout=definition.timeout_seconds
+            )
+        except TimeoutError:
+            return ToolResult(
+                tool_id=tool_id,
+                outcome=ToolOutcome.FAILED,
+                failure={
+                    "code": ToolFailureCode.TIMEOUT,
+                    "message": "the tool did not complete within its configured timeout",
+                },
+            )
 
 
 class DeterministicBaseline:

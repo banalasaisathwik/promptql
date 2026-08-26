@@ -184,6 +184,28 @@ class PlanValidatorTests(unittest.TestCase):
         self.assertIn(PlanValidationFailureCode.UNKNOWN_OUTPUT_FIELD, self._codes(unknown_field))
         self.assertIn(PlanValidationFailureCode.REFERENCE_TYPE_MISMATCH, self._codes(incompatible))
 
+    def test_named_subset_allows_permitted_tools_and_rejects_the_rest(self) -> None:
+        # Mirrors the explicit allowlist workflows/investigation.py now passes
+        # instead of the full registry: a plan step naming a tool outside the
+        # named subset is rejected even though the tool is registered and the
+        # plan is otherwise well-formed.
+        allowed_subset = tuple(
+            definition for definition in TOOL_DEFINITIONS
+            if definition.tool_id != "get_jira_issue"
+        )
+        permitted_plan = InvestigationPlan(
+            steps=(_step("s1", "get_deployments", (_literal("deployment_reference", "d"),)),)
+        )
+        excluded_plan = InvestigationPlan(
+            steps=(_step("s1", "get_jira_issue", (_literal("issue_key", "ABC-1"),)),)
+        )
+
+        self.assertTrue(self.validator.validate(permitted_plan, allowed_subset).valid)
+        self.assertIn(
+            PlanValidationFailureCode.TOOL_NOT_ALLOWED,
+            self._codes(excluded_plan, allowed_subset),
+        )
+
     def test_reuses_tool_input_validation_for_invalid_literals_and_is_deterministic(self) -> None:
         invalid_literal = InvestigationPlan(
             steps=(_step("s1", "get_deployments", (_literal("deployment_reference", 42),)),)

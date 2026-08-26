@@ -58,12 +58,27 @@ from app.runtime.investigation_models import (
     InvestigationStepSnapshot,
     WorkingMemory,
 )
-from app.tools import build_tool_adapters, build_tool_registry
+from app.tools import InvestigationToolId, build_tool_adapters, build_tool_registry
 
 
 INVESTIGATION_WORKFLOW_NAME = "investigation"
 INVESTIGATION_WORKFLOW_VERSION = "2.19.2"
 DEFAULT_TOOL_CALL_BUDGET = 10
+
+# Tools the adaptive planner may select for this workflow. Named explicitly
+# rather than passing the full registry, so adding a tool to the registry
+# does not silently grant it to every investigation — a new tool_id must be
+# added here as a deliberate decision.
+ADAPTIVE_INVESTIGATION_ALLOWED_TOOL_IDS: tuple[InvestigationToolId, ...] = (
+    InvestigationToolId.GET_COMMIT,
+    InvestigationToolId.GET_DEPLOYMENTS,
+    InvestigationToolId.GET_DIFF,
+    InvestigationToolId.GET_FAILURE_LOCATION,
+    InvestigationToolId.GET_INCIDENT,
+    InvestigationToolId.GET_JIRA_ISSUE,
+    InvestigationToolId.GET_PULL_REQUEST,
+    InvestigationToolId.QUERY_TELEMETRY,
+)
 
 
 def _hypothesis_failure_diagnostics(
@@ -312,7 +327,11 @@ class InvestigationWorkflowService:
                 run_id=pending.run_id,
             ).investigate(
                 running.request.question,
-                registry.list(),
+                tuple(
+                    definition
+                    for definition in registry.list()
+                    if definition.tool_id in ADAPTIVE_INVESTIGATION_ALLOWED_TOOL_IDS
+                ),
                 budget=ExecutionBudget(max_tool_calls=DEFAULT_TOOL_CALL_BUDGET),
                 request_context=running.request,
                 on_round_planned=save_planned_round,
