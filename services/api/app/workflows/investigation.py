@@ -246,7 +246,9 @@ class InvestigationWorkflowService:
         )
         self._repository.save(running)
 
-        store = EvidenceStore()
+        store = EvidenceStore(
+            event_logger=self._telemetry.event_logger, run_id=pending.run_id
+        )
         adapters = build_tool_adapters(
             self._github_code_source,
             self._incident_source,

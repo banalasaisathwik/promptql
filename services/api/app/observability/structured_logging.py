@@ -31,6 +31,7 @@ ALLOWED_EVENT_FIELDS = frozenset(
         "telemetry_signal",
         "tool_id",
         "tool_outcome",
+        "evidence_id",
         "round_number",
         "round_completed",
         "requested_model",

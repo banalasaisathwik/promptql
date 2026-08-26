@@ -804,8 +804,12 @@ multi-tenant connector credential model; a live/HTTP `IncidentSource`
 persisted/versioned explanations; LLM SDK-level retries or provider fallback
 (`max_retries=0` everywhere, and runtime retries only the tool-execution
 path); hosted eval services, LLM-as-a-judge grading, or production-traffic
-eval collection; dashboards/alerting on top of the exported telemetry; and
-OpenTelemetry log export. `packages/`, `infra/`, and `scripts/` remain empty.
+eval collection; dashboards/alerting on top of the exported telemetry;
+OpenTelemetry log export; long-term/cross-run memory (no consuming write or
+read path exists anywhere in the codebase for it); and cross-source conflict
+resolution (the connector graph is single-source-per-kind by construction, so
+no same-question conflict between sources can occur today). `packages/`,
+`infra/`, and `scripts/` remain empty.
 Neon and Grafana Cloud resources and application deployment are configuration
 concerns outside this repository, not code paths inside it.
 

@@ -1,5 +1,74 @@
 # Learning log
 
+## 2026-08-26 — Surfacing a silent evidence-write conflict instead of resolving it
+
+- **Concept:** Not every "silent data loss" bug needs a resolver. A prior
+  diagnostic found `EvidenceStore.put()` used
+  `dict.setdefault(evidence_id, evidence)`, so a second `put()` under the
+  same `evidence_id` with genuinely different `content` was dropped with
+  zero signal. The fix keeps the original dedup resolution (first write
+  wins — still correct for the common case of refetching identical
+  content) and only adds observability: a `evidence.conflicting_write_dropped`
+  warning event through the existing `StructuredEventLogger` →
+  `LiveEventBroker` funnel when the second write's `.content` differs from
+  the first. This matches the project's optimization-discipline sequence
+  (correctness → observability → measurement → optimization) — making an
+  inconsistency visible is a smaller, more honest change than inventing
+  conflict-resolution logic for a case with no evidence it happens in
+  practice.
+- **Design decision:** Compared `.content` (the discriminated evidence
+  payload), not the full `Evidence` model, because `Evidence.provenance
+  .retrieved_at` is set to "now" on every fetch and would make two fetches
+  of the identical real-world fact look different for a reason that has
+  nothing to do with the data actually conflicting.
+- **Implementation locations:** `investigations/evidence_store.py`
+  (`EvidenceStore.__init__` gains optional keyword-only `event_logger` and
+  `run_id`, defaulting to `NoOpStructuredEventLogger()` and `None` so the
+  three existing zero-argument call sites — `baseline.py`,
+  `workflows/investigation.py`, `evals/investigations/evaluation.py` — are
+  unchanged); `observability/structured_logging.py`
+  (`ALLOWED_EVENT_FIELDS` gains `evidence_id` — without it `emit()`'s field
+  allowlist check would raise inside its own `try/except` and silently
+  drop the very event meant to fix a silent-drop bug); new
+  `tests/unit/test_evidence_store.py`.
+- **Follow-up (same day):** wired the live investigation path.
+  `workflows/investigation.py`'s `_continue_persisted_run` now constructs
+  `EvidenceStore(event_logger=self._telemetry.event_logger,
+  run_id=pending.run_id)` instead of the bare `EvidenceStore()`, mirroring
+  the adjacent `AgentExecutor(..., telemetry=self._telemetry,
+  run_id=pending.run_id)` call a few lines below it. `RuntimeTelemetry`
+  only exposed its `StructuredEventLogger` as the private `_event_logger`,
+  so `runtime_telemetry.py` gained one public alias attribute
+  (`self.event_logger = event_logger`, set alongside the existing private
+  one) rather than reaching into a private attribute from another module
+  or rewriting the class's many internal `self._event_logger` call sites.
+  `evals/investigations/evaluation.py` and `baseline.py`'s direct
+  construction were deliberately left untouched — they're test/eval-only
+  paths, not the live route.
+- **Proof this is live, not just unit-tested:** added
+  `test_evidence_conflict_event_reaches_a_broker_subscriber_via_the_real_wiring`
+  to `test_investigation_live_events.py`, following the file's existing
+  `test_diagnostic_failure_event_reaches_a_broker_subscriber` pattern — a
+  real `StructuredEventLogger` wired to a real `LiveEventBroker`, a real
+  `RuntimeTelemetry` built on top of it, and `EvidenceStore` constructed
+  with `event_logger=telemetry.event_logger` exactly as
+  `workflows/investigation.py` now does. Two `put()` calls with the same
+  `evidence_id` and different content produced the event on the
+  subscriber's queue. A genuinely conflicting duplicate write can't be
+  forced through a real end-to-end investigation run today: the fake
+  GitHub/Jira/incident connectors are deterministic (same arguments always
+  return identical content), and `PROMPTQL_LLM_PROVIDER=fake` only swaps
+  the planner's LLM client, not the connectors — so even a scripted
+  multi-round plan that calls the same tool twice would just hit the
+  identical-content branch. A real conflict needs a source whose answer
+  actually changes between two calls (a live connector observing a
+  mid-run change), which is exactly why the test targets the wiring
+  (constructor call + broker delivery) rather than trying to coerce the
+  deterministic fakes into disagreeing with themselves.
+- **Validation:** `uv run python -m unittest discover -s tests -v` — 444
+  tests, `OK (skipped=6)`: the 3 `EvidenceStoreConflictTests` cases from
+  the original fix plus the new broker-delivery test above.
+
 ## 2026-08-26 — Observational context/token telemetry without a truncation decision
 
 - **Concept:** Measurement can be added ahead of a policy decision as long as

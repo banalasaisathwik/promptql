@@ -174,6 +174,9 @@ class RuntimeTelemetry:
     ) -> None:
         self._tracer = tracer
         self._event_logger = event_logger
+
+
+        self.event_logger = event_logger
         self._workflow_runs = meter.create_counter(
             WORKFLOW_RUNS_METRIC,
             unit="1",

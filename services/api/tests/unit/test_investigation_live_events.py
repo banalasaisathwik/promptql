@@ -5,11 +5,45 @@ from uuid import uuid4
 
 from opentelemetry import metrics, trace
 
+from datetime import UTC, datetime
+
 from app.explanations import LLMTokenUsage
+from app.investigations.evidence_store import EvidenceStore
+from app.investigations.models import (
+    ChangedFileEvidenceContent,
+    Evidence,
+    EvidenceKind,
+    EvidenceProvenance,
+    EvidenceSource,
+    FileChangeType,
+)
 from app.observability.live_event_broker import LiveEventBroker
 from app.observability.runtime_telemetry import RuntimeTelemetry
 from app.observability.structured_logging import StructuredEventLogger
 from tests.telemetry_support import create_telemetry_harness
+
+
+def _changed_file_evidence(*, path: str) -> Evidence:
+    return Evidence(
+        evidence_id="evidence:changed-file",
+        source=EvidenceSource.GITHUB,
+        kind=EvidenceKind.CHANGED_FILE,
+        provenance=EvidenceProvenance(
+            source_reference="github:acme/checkout:pr:42:file:services/checkout.py",
+            retrieved_at=datetime(2026, 8, 17, 10, 18, tzinfo=UTC),
+        ),
+        content=ChangedFileEvidenceContent(
+            repository_owner="acme",
+            repository_name="checkout",
+            pull_request_number=42,
+            path=path,
+            change_type=FileChangeType.MODIFIED,
+            additions=4,
+            deletions=2,
+            changes=6,
+            patch_available=True,
+        ),
+    )
 
 
 class InvestigationLiveEventTests(unittest.TestCase):
@@ -129,6 +163,33 @@ class InvestigationLiveEventTests(unittest.TestCase):
         self.assertEqual(published["event"], "investigation.hypothesis.failed")
         self.assertEqual(published["run_id"], str(run_id))
         self.assertEqual(published["failure_code"], "provider_failure")
+
+    def test_evidence_conflict_event_reaches_a_broker_subscriber_via_the_real_wiring(
+        self,
+    ) -> None:
+        broker = LiveEventBroker()
+        event_logger = StructuredEventLogger(logging.Logger("test.evidence_conflict"))
+        event_logger.set_broker(broker)
+        telemetry = RuntimeTelemetry(
+            trace.NoOpTracerProvider().get_tracer("test"),
+            metrics.NoOpMeterProvider().get_meter("test"),
+            event_logger,
+        )
+        run_id = uuid4()
+        queue = broker.subscribe(str(run_id))
+
+        store = EvidenceStore(event_logger=telemetry.event_logger, run_id=run_id)
+        first = _changed_file_evidence(path="services/checkout.py")
+        second = _changed_file_evidence(path="services/checkout_v2.py")
+
+        store.put(first)
+        store.put(second)
+
+        published = queue.get_nowait()
+        self.assertEqual(published["event"], "evidence.conflicting_write_dropped")
+        self.assertEqual(published["run_id"], str(run_id))
+        self.assertEqual(published["evidence_id"], first.evidence_id)
+        self.assertIs(store.get(first.evidence_id), first)
 
 
 if __name__ == "__main__":
