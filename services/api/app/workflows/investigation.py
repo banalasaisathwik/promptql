@@ -53,10 +53,12 @@ from app.runtime import (
     RuntimeErrorInfo,
 )
 from app.runtime.investigation_models import (
+    ExecutionState,
     InvestigationPlanningRoundSnapshot,
     InvestigationRun,
     InvestigationRuntimeSnapshot,
     InvestigationStepSnapshot,
+    WorkingMemory,
 )
 from app.tools import build_tool_adapters, build_tool_registry
 
@@ -199,8 +201,12 @@ class InvestigationWorkflowService:
             ) as termination_observation:
                 self._telemetry.record_investigation_termination(
                     termination_observation,
-                    planning_rounds=len(state.rounds) if state is not None else 0,
-                    tool_calls=state.used_tool_calls if state is not None else 0,
+                    planning_rounds=(
+                        len(state.execution_state.rounds) if state is not None else 0
+                    ),
+                    tool_calls=(
+                        state.execution_state.used_tool_calls if state is not None else 0
+                    ),
                     termination_reason=termination_reason,
                 )
                 termination_observation.set_attributes(
@@ -271,7 +277,16 @@ class InvestigationWorkflowService:
                 running.model_copy(
                     update={
                         "state": snapshot.model_copy(
-                            update={"rounds": (*snapshot.rounds, pending_round)}
+                            update={
+                                "execution_state": snapshot.execution_state.model_copy(
+                                    update={
+                                        "rounds": (
+                                            *snapshot.execution_state.rounds,
+                                            pending_round,
+                                        )
+                                    }
+                                )
+                            }
                         )
                     }
                 )
@@ -488,16 +503,22 @@ class InvestigationWorkflowService:
 
         state = state.model_copy(
             update={
-                "validated_hypotheses": validated_hypotheses,
-                "rejected_hypothesis_count": rejected_hypothesis_count,
-                "hypothesis_generation_metadata": hypothesis_metadata,
-                "validated_code_findings": validated_code_findings,
-                "rejected_code_finding_count": rejected_code_finding_count,
-                "code_diagnosis_metadata": code_diagnosis_metadata,
-                "developer_recommendations": developer_recommendations,
-
-
-                "termination_reason": adaptive_state.continuation_reason.value,
+                "working_memory": state.working_memory.model_copy(
+                    update={
+                        "validated_hypotheses": validated_hypotheses,
+                        "validated_code_findings": validated_code_findings,
+                        "developer_recommendations": developer_recommendations,
+                    }
+                ),
+                "execution_state": state.execution_state.model_copy(
+                    update={
+                        "rejected_hypothesis_count": rejected_hypothesis_count,
+                        "hypothesis_generation_metadata": hypothesis_metadata,
+                        "rejected_code_finding_count": rejected_code_finding_count,
+                        "code_diagnosis_metadata": code_diagnosis_metadata,
+                        "termination_reason": adaptive_state.continuation_reason.value,
+                    }
+                ),
             }
         )
         with self._telemetry.observe_investigation_stage(
@@ -505,9 +526,9 @@ class InvestigationWorkflowService:
             running.run_id,
         ):
             grounded_result = render_grounded_result(
-                state.facts,
+                state.working_memory.facts,
                 validated_hypotheses,
-                state.missing_information,
+                state.working_memory.missing_information,
                 termination_reason,
                 validated_code_findings,
                 developer_recommendations,
@@ -570,9 +591,12 @@ class InvestigationWorkflowService:
     @staticmethod
     def _empty_state() -> InvestigationRuntimeSnapshot:
         return InvestigationRuntimeSnapshot(
-            max_tool_calls=DEFAULT_TOOL_CALL_BUDGET,
-            used_tool_calls=0,
-            remaining_tool_calls=DEFAULT_TOOL_CALL_BUDGET,
+            working_memory=WorkingMemory(),
+            execution_state=ExecutionState(
+                max_tool_calls=DEFAULT_TOOL_CALL_BUDGET,
+                used_tool_calls=0,
+                remaining_tool_calls=DEFAULT_TOOL_CALL_BUDGET,
+            ),
         )
 
     @staticmethod
@@ -602,16 +626,20 @@ class InvestigationWorkflowService:
             ) for round in state.rounds
         )
         return InvestigationRuntimeSnapshot(
-            rounds=rounds,
-            evidence=state.evidence,
-            evidence_content=store.get_many(state.evidence),
-            facts=state.facts,
-            missing_information=state.missing_information,
-            action_history=state.action_history,
-            max_tool_calls=DEFAULT_TOOL_CALL_BUDGET,
-            used_tool_calls=DEFAULT_TOOL_CALL_BUDGET - state.remaining_tool_calls,
-            remaining_tool_calls=state.remaining_tool_calls,
-            termination_reason=state.continuation_reason.value,
+            working_memory=WorkingMemory(
+                evidence=state.evidence,
+                evidence_content=store.get_many(state.evidence),
+                facts=state.facts,
+                missing_information=state.missing_information,
+                action_history=state.action_history,
+            ),
+            execution_state=ExecutionState(
+                rounds=rounds,
+                max_tool_calls=DEFAULT_TOOL_CALL_BUDGET,
+                used_tool_calls=DEFAULT_TOOL_CALL_BUDGET - state.remaining_tool_calls,
+                remaining_tool_calls=state.remaining_tool_calls,
+                termination_reason=state.continuation_reason.value,
+            ),
         )
 
 

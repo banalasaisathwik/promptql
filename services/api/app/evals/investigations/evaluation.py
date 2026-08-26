@@ -347,15 +347,23 @@ async def observe_investigation_case(
     terminal = await workflow.continue_persisted_run(pending)
     state = terminal.state
     result = terminal.result
-    adaptive_evidence_ids = set(state.evidence) if state is not None else set()
+    adaptive_evidence_ids = (
+        set(state.working_memory.evidence) if state is not None else set()
+    )
     adaptive_fact_ids = (
-        {item.fact_id for item in state.facts} if state is not None else set()
+        {item.fact_id for item in state.working_memory.facts}
+        if state is not None
+        else set()
     )
     allowed_tool_ids = {definition.tool_id for definition in registry.list()}
-    trajectory_hypotheses = state.validated_hypotheses if state is not None else ()
-    trajectory_findings = state.validated_code_findings if state is not None else ()
+    trajectory_hypotheses = (
+        state.working_memory.validated_hypotheses if state is not None else ()
+    )
+    trajectory_findings = (
+        state.working_memory.validated_code_findings if state is not None else ()
+    )
     trajectory_recommendations = (
-        state.developer_recommendations if state is not None else ()
+        state.working_memory.developer_recommendations if state is not None else ()
     )
     generation_failure_reasons = {
         GroundedTerminationReason.PLANNER_FAILURE,
@@ -411,26 +419,29 @@ async def observe_investigation_case(
             state is not None
             and all(
                 step.tool_id in allowed_tool_ids
-                for round_snapshot in state.rounds
+                for round_snapshot in state.execution_state.rounds
                 for step in round_snapshot.steps
             )
         ),
         all_plans_validated=(
             state is not None
-            and bool(state.rounds)
+            and bool(state.execution_state.rounds)
             and all(
                 round_snapshot.plan_validation_status == "accepted"
-                for round_snapshot in state.rounds
+                for round_snapshot in state.execution_state.rounds
             )
         ),
         budget_respected=(
             state is not None
-            and state.used_tool_calls <= state.max_tool_calls
-            and state.remaining_tool_calls
-            == state.max_tool_calls - state.used_tool_calls
+            and state.execution_state.used_tool_calls
+            <= state.execution_state.max_tool_calls
+            and state.execution_state.remaining_tool_calls
+            == state.execution_state.max_tool_calls
+            - state.execution_state.used_tool_calls
         ),
         round_limit_respected=(
-            state is not None and len(state.rounds) <= MAX_PLANNING_ROUNDS
+            state is not None
+            and len(state.execution_state.rounds) <= MAX_PLANNING_ROUNDS
         ),
         relevant_evidence_discovered=(
             set(case.relevant_evidence_ids) <= adaptive_evidence_ids
@@ -438,7 +449,7 @@ async def observe_investigation_case(
         facts_grounded=(
             state is not None
             and set(case.expected_fact_ids) <= adaptive_fact_ids
-            and _facts_are_grounded(state.facts, adaptive_evidence_ids)
+            and _facts_are_grounded(state.working_memory.facts, adaptive_evidence_ids)
         ),
         hypotheses_grounded=(
             bool(trajectory_hypotheses)
@@ -515,9 +526,12 @@ def _trajectory_usages(state) -> tuple[LLMTokenUsage, ...]:
     if state is None:
         return ()
     metadata = [
-        *(round_snapshot.planner_metadata for round_snapshot in state.rounds),
-        state.hypothesis_generation_metadata,
-        state.code_diagnosis_metadata,
+        *(
+            round_snapshot.planner_metadata
+            for round_snapshot in state.execution_state.rounds
+        ),
+        state.execution_state.hypothesis_generation_metadata,
+        state.execution_state.code_diagnosis_metadata,
     ]
     return tuple(
         item.token_usage

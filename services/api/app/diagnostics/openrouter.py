@@ -673,9 +673,13 @@ async def run_workflow_call(settings: LLMSettings) -> dict[str, object]:
             "termination_reason": (
                 result.termination_reason.value if result is not None else None
             ),
-            "planning_round_count": len(state.rounds) if state is not None else 0,
-            "evidence_count": len(state.evidence) if state is not None else 0,
-            "fact_count": len(state.facts) if state is not None else 0,
+            "planning_round_count": (
+                len(state.execution_state.rounds) if state is not None else 0
+            ),
+            "evidence_count": (
+                len(state.working_memory.evidence) if state is not None else 0
+            ),
+            "fact_count": len(state.working_memory.facts) if state is not None else 0,
             "hypothesis_count": (
                 len(result.supported_hypotheses) if result is not None else 0
             ),

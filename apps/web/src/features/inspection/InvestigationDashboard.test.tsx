@@ -19,47 +19,58 @@ const RUN: InvestigationRun = {
   },
   error: null,
   state: {
-    rounds: [{
-      round_number: 1,
-      plan_id: 'round-1',
-      plan_validation_status: 'accepted',
-      steps: [{
-        step_id: 's1',
-        tool_id: 'get_incident',
-        status: 'succeeded',
-        attempts: 1,
-        failure_code: null,
-        failure_message: null,
-        block_reason: null,
+    working_memory: {
+      evidence: ['E1'],
+      evidence_content: [{
+        evidence_id: 'E1',
+        source: 'incident',
+        kind: 'incident',
+        provenance: {
+          source_reference: 'incident:1',
+          observed_at: null,
+          retrieved_at: '2026-08-19T10:00:00Z',
+        },
+        content: { incident_reference: 'incident:1' },
       }],
-      evidence_delta_ids: ['E1'],
-      fact_delta_ids: ['F1'],
-      completed: true,
-    }],
-    evidence: ['E1'],
-    evidence_content: [{
-      evidence_id: 'E1',
-      source: 'incident',
-      kind: 'incident',
-      provenance: {
-        source_reference: 'incident:1',
-        observed_at: null,
-        retrieved_at: '2026-08-19T10:00:00Z',
-      },
-      content: { incident_reference: 'incident:1' },
-    }],
-    facts: [{ fact_id: 'F1', fact_type: 'stack_frame', evidence_reference_ids: ['E1'], file_path: 'checkout.py' }],
-    missing_information: [],
-    validated_hypotheses: [],
-    rejected_hypothesis_count: 1,
-    validated_code_findings: [],
-    code_diagnosis_metadata: null,
-    rejected_code_finding_count: 0,
-    developer_recommendations: [],
-    max_tool_calls: 10,
-    used_tool_calls: 1,
-    remaining_tool_calls: 9,
-    termination_reason: 'provider_failure',
+      facts: [{ fact_id: 'F1', fact_type: 'stack_frame', evidence_reference_ids: ['E1'], file_path: 'checkout.py' }],
+      missing_information: [],
+      validated_hypotheses: [],
+      validated_code_findings: [],
+      developer_recommendations: [],
+      action_history: [{
+        tool_id: 'get_incident',
+        outcome: 'observed',
+        produced_new_evidence: true,
+        produced_new_facts: true,
+      }],
+    },
+    execution_state: {
+      rounds: [{
+        round_number: 1,
+        plan_id: 'round-1',
+        plan_validation_status: 'accepted',
+        steps: [{
+          step_id: 's1',
+          tool_id: 'get_incident',
+          status: 'succeeded',
+          attempts: 1,
+          failure_code: null,
+          failure_message: null,
+          block_reason: null,
+        }],
+        evidence_delta_ids: ['E1'],
+        fact_delta_ids: ['F1'],
+        completed: true,
+      }],
+      hypothesis_generation_metadata: null,
+      rejected_hypothesis_count: 1,
+      code_diagnosis_metadata: null,
+      rejected_code_finding_count: 0,
+      max_tool_calls: 10,
+      used_tool_calls: 1,
+      remaining_tool_calls: 9,
+      termination_reason: 'provider_failure',
+    },
   },
   result: {
     termination_reason: 'provider_failure',
@@ -94,17 +105,20 @@ test('renders a budget stop separately from a failed or blocked tool state', () 
     result: null,
     state: {
       ...RUN.state,
-      rounds: [{
-        ...RUN.state.rounds[0],
-        completed: false,
-        steps: [
-          { ...RUN.state.rounds[0].steps[0], status: 'failed', attempts: 2, failure_message: 'Timed out.' },
-          { ...RUN.state.rounds[0].steps[0], step_id: 's2', tool_id: 'get_diff', status: 'blocked', attempts: 0, block_reason: 'budget_exhausted' },
-        ],
-      }],
-      used_tool_calls: 10,
-      remaining_tool_calls: 0,
-      termination_reason: 'budget_exhausted',
+      execution_state: {
+        ...RUN.state!.execution_state,
+        rounds: [{
+          ...RUN.state!.execution_state.rounds[0],
+          completed: false,
+          steps: [
+            { ...RUN.state!.execution_state.rounds[0].steps[0], status: 'failed', attempts: 2, failure_message: 'Timed out.' },
+            { ...RUN.state!.execution_state.rounds[0].steps[0], step_id: 's2', tool_id: 'get_diff', status: 'blocked', attempts: 0, block_reason: 'budget_exhausted' },
+          ],
+        }],
+        used_tool_calls: 10,
+        remaining_tool_calls: 0,
+        termination_reason: 'budget_exhausted',
+      },
     },
   }
 
@@ -123,12 +137,15 @@ test('shows only validated hypotheses in the final grounded result', () => {
     ...RUN,
     state: {
       ...RUN.state,
-      validated_hypotheses: [{
-        hypothesis_id: 'H1',
-        kind: 'code_change_may_have_contributed',
-        subject: 'checkout.py',
-        supporting_fact_ids: ['F1'],
-      }],
+      working_memory: {
+        ...RUN.state!.working_memory,
+        validated_hypotheses: [{
+          hypothesis_id: 'H1',
+          kind: 'code_change_may_have_contributed',
+          subject: 'checkout.py',
+          supporting_fact_ids: ['F1'],
+        }],
+      },
     },
     result: {
       ...RUN.result!,
@@ -172,8 +189,11 @@ test('projects only backend-validated code locations and recommendations', () =>
     ...RUN,
     state: {
       ...RUN.state,
-      validated_code_findings: [codeFinding],
-      developer_recommendations: [recommendation],
+      working_memory: {
+        ...RUN.state!.working_memory,
+        validated_code_findings: [codeFinding],
+        developer_recommendations: [recommendation],
+      },
     },
     result: {
       ...RUN.result!,

@@ -119,14 +119,14 @@ class InvestigationObservabilityTests(unittest.TestCase):
         tool_points = self.harness.metric_points(INVESTIGATION_TOOL_CALLS_METRIC)
         self.assertEqual(
             sum(point.value for point in tool_points),
-            completed.state.used_tool_calls,
+            completed.state.execution_state.used_tool_calls,
         )
         round_points = self.harness.metric_points(
             INVESTIGATION_PLANNING_ROUNDS_METRIC
         )
         self.assertEqual(
             sum(point.value for point in round_points),
-            len(completed.state.rounds),
+            len(completed.state.execution_state.rounds),
         )
 
         exported = repr(spans) + repr(stage_points + tool_points + round_points)

@@ -71,16 +71,22 @@ test('rejects a completed snapshot with an unvalidated code-location shape', asy
     },
     error: null,
     state: {
-      rounds: [], evidence: [], facts: [], missing_information: [],
-      validated_hypotheses: [], rejected_hypothesis_count: 0,
-      validated_code_findings: [{
-        finding_id: 'CF1', hypothesis_id: 'H1', file_path: 'checkout.py',
-        line_number: '42', function_name: null, hunk_evidence_id: null,
-        category: 'error_handling', supporting_fact_ids: [], supporting_evidence_ids: [],
-      }],
-      code_diagnosis_metadata: null, rejected_code_finding_count: 0,
-      developer_recommendations: [], max_tool_calls: 10, used_tool_calls: 1,
-      remaining_tool_calls: 9, termination_reason: 'completed',
+      working_memory: {
+        evidence: [], evidence_content: [], facts: [], missing_information: [],
+        validated_hypotheses: [],
+        validated_code_findings: [{
+          finding_id: 'CF1', hypothesis_id: 'H1', file_path: 'checkout.py',
+          line_number: '42', function_name: null, hunk_evidence_id: null,
+          category: 'error_handling', supporting_fact_ids: [], supporting_evidence_ids: [],
+        }],
+        developer_recommendations: [], action_history: [],
+      },
+      execution_state: {
+        rounds: [], hypothesis_generation_metadata: null, rejected_hypothesis_count: 0,
+        code_diagnosis_metadata: null, rejected_code_finding_count: 0,
+        max_tool_calls: 10, used_tool_calls: 1,
+        remaining_tool_calls: 9, termination_reason: 'completed',
+      },
     },
     result: null,
   }), { status: 200 })) as typeof fetch

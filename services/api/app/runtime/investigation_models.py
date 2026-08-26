@@ -53,30 +53,36 @@ class InvestigationPlanningRoundSnapshot(ContractModel):
     completed: bool = False
 
 
-class InvestigationRuntimeSnapshot(ContractModel):
-    rounds: tuple[InvestigationPlanningRoundSnapshot, ...] = ()
+class WorkingMemory(ContractModel):
+    """Semantic investigation knowledge: what the investigation has learned."""
+
     evidence: tuple[InvestigationIdentifier, ...] = ()
-
-
     evidence_content: tuple[Evidence, ...] = ()
     facts: FactSet = ()
     missing_information: tuple[MissingInformation, ...] = ()
-
-
-    action_history: tuple[ActionSummary, ...] = ()
     validated_hypotheses: tuple[ValidatedHypothesis, ...] = ()
+    validated_code_findings: tuple[ValidatedCodeFinding, ...] = ()
+    developer_recommendations: tuple[DeveloperRecommendation, ...] = ()
+    action_history: tuple[ActionSummary, ...] = ()
+
+
+class ExecutionState(ContractModel):
+    """Pure execution bookkeeping: how the run has progressed."""
+
+    rounds: tuple[InvestigationPlanningRoundSnapshot, ...] = ()
     hypothesis_generation_metadata: HypothesisGenerationMetadata | None = None
     rejected_hypothesis_count: Annotated[int, Field(ge=0)] = 0
-
-
-    validated_code_findings: tuple[ValidatedCodeFinding, ...] = ()
     code_diagnosis_metadata: CodeDiagnosisMetadata | None = None
     rejected_code_finding_count: Annotated[int, Field(ge=0)] = 0
-    developer_recommendations: tuple[DeveloperRecommendation, ...] = ()
     max_tool_calls: Annotated[int, Field(ge=0)]
     used_tool_calls: Annotated[int, Field(ge=0)]
     remaining_tool_calls: Annotated[int, Field(ge=0)]
     termination_reason: NonEmptyString | None = None
+
+
+class InvestigationRuntimeSnapshot(ContractModel):
+    working_memory: WorkingMemory
+    execution_state: ExecutionState
 
 
 class InvestigationRun(ContractModel):

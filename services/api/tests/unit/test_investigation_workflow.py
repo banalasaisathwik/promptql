@@ -77,9 +77,9 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         completed = await self._completed_fake_context()
         diagnosis_input = CodeContextBuilder().build(
             completed.request,
-            completed.state.validated_hypotheses,
-            completed.state.facts,
-            completed.state.evidence_content,
+            completed.state.working_memory.validated_hypotheses,
+            completed.state.working_memory.facts,
+            completed.state.working_memory.evidence_content,
         )
         diagnostics = _code_diagnosis_failure_diagnostics(
             TypedLLMCodeDiagnoser(FakeLLMClient()),
@@ -160,11 +160,14 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
         completed = await workflow.continue_persisted_run(pending)
 
-        self.assertEqual(len(completed.state.validated_hypotheses), 1)
-        self.assertIsNotNone(completed.state.hypothesis_generation_metadata)
-        self.assertTrue(completed.state.action_history)
+        self.assertEqual(len(completed.state.working_memory.validated_hypotheses), 1)
+        self.assertIsNotNone(completed.state.execution_state.hypothesis_generation_metadata)
+        self.assertTrue(completed.state.working_memory.action_history)
         self.assertTrue(
-            all(round.planner_metadata is not None for round in completed.state.rounds)
+            all(
+                round.planner_metadata is not None
+                for round in completed.state.execution_state.rounds
+            )
         )
         self.assertEqual(len(completed.result.supported_hypotheses), 1)
         self.assertIn("may have contributed", completed.result.supported_hypotheses[0].statement)
@@ -311,8 +314,8 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending.status, RunStatus.PENDING)
         self.assertEqual(completed.status, RunStatus.COMPLETED)
         self.assertIsNotNone(completed.state)
-        self.assertEqual(len(completed.state.rounds), 2)
-        self.assertGreater(len(completed.state.evidence), 0)
+        self.assertEqual(len(completed.state.execution_state.rounds), 2)
+        self.assertGreater(len(completed.state.working_memory.evidence), 0)
         self.assertIsNotNone(completed.result)
         self.assertEqual(completed.result.supported_hypotheses, ())
         self.assertIn("not sufficient", completed.result.summary)
@@ -354,8 +357,8 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             planner.inputs[0].remaining_tool_calls,
         )
         self.assertEqual(planner.inputs[0].allowed_tools, planner.inputs[1].allowed_tools)
-        self.assertEqual(completed.state.termination_reason, "no_progress")
-        self.assertFalse(completed.state.action_history[0].produced_new_facts)
+        self.assertEqual(completed.state.execution_state.termination_reason, "no_progress")
+        self.assertFalse(completed.state.working_memory.action_history[0].produced_new_facts)
 
     async def test_round_boundaries_are_persisted_before_the_final_result(self):
         repository = InMemoryRunRepository()
@@ -378,12 +381,12 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         completed = await workflow.continue_persisted_run(pending)
 
         snapshots = [run.state for run in repository.history if run.state is not None]
-        self.assertEqual(snapshots[0].rounds, ())
-        self.assertFalse(snapshots[1].rounds[0].completed)
-        self.assertTrue(snapshots[2].rounds[0].completed)
-        self.assertFalse(snapshots[3].rounds[1].completed)
-        self.assertTrue(snapshots[4].rounds[0].completed)
-        self.assertTrue(snapshots[4].rounds[1].completed)
+        self.assertEqual(snapshots[0].execution_state.rounds, ())
+        self.assertFalse(snapshots[1].execution_state.rounds[0].completed)
+        self.assertTrue(snapshots[2].execution_state.rounds[0].completed)
+        self.assertFalse(snapshots[3].execution_state.rounds[1].completed)
+        self.assertTrue(snapshots[4].execution_state.rounds[0].completed)
+        self.assertTrue(snapshots[4].execution_state.rounds[1].completed)
         self.assertEqual(completed, repository.history[-1])
 
     async def test_planner_failure_keeps_the_last_completed_round(self):
@@ -405,10 +408,10 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         completed = await workflow.continue_persisted_run(pending)
 
         self.assertEqual(completed.status, RunStatus.COMPLETED)
-        self.assertEqual(completed.state.termination_reason, "planner_failure")
-        self.assertEqual(len(completed.state.rounds), 1)
-        self.assertTrue(completed.state.rounds[0].completed)
-        self.assertGreater(len(completed.state.evidence), 0)
+        self.assertEqual(completed.state.execution_state.termination_reason, "planner_failure")
+        self.assertEqual(len(completed.state.execution_state.rounds), 1)
+        self.assertTrue(completed.state.execution_state.rounds[0].completed)
+        self.assertGreater(len(completed.state.working_memory.evidence), 0)
 
     def test_missing_structured_sources_is_rejected_before_construction(self):
         # A request with no grounding reference used to reach the workflow and

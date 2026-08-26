@@ -403,8 +403,17 @@ export interface GroundedInvestigationResult {
   missing_information: InvestigationMissingInformation[]
 }
 
-export interface InvestigationRuntimeState {
-  rounds: InvestigationPlanningRound[]
+export type InvestigationToolOutcome = 'observed' | 'empty' | 'failed'
+
+export interface InvestigationActionSummary {
+  tool_id: string
+  outcome: InvestigationToolOutcome
+  produced_new_evidence: boolean
+  produced_new_facts: boolean
+}
+
+// Semantic investigation knowledge: what the investigation has learned so far.
+export interface WorkingMemoryState {
   // Bare evidence IDs referenced by planning rounds/facts/findings, for a
   // lightweight trace/flow view. Full content lives in `evidence_content`.
   evidence: string[]
@@ -412,15 +421,27 @@ export interface InvestigationRuntimeState {
   facts: InvestigationFact[]
   missing_information: InvestigationMissingInformation[]
   validated_hypotheses: ValidatedHypothesis[]
-  rejected_hypothesis_count: number
   validated_code_findings: ValidatedCodeFinding[]
+  developer_recommendations: DeveloperRecommendation[]
+  action_history: InvestigationActionSummary[]
+}
+
+// Pure execution bookkeeping: how the run has progressed.
+export interface ExecutionState {
+  rounds: InvestigationPlanningRound[]
+  hypothesis_generation_metadata: GenerationMetadata | null
+  rejected_hypothesis_count: number
   code_diagnosis_metadata: GenerationMetadata | null
   rejected_code_finding_count: number
-  developer_recommendations: DeveloperRecommendation[]
   max_tool_calls: number
   used_tool_calls: number
   remaining_tool_calls: number
   termination_reason: string | null
+}
+
+export interface InvestigationRuntimeState {
+  working_memory: WorkingMemoryState
+  execution_state: ExecutionState
 }
 
 export interface InvestigationRuntimeError {

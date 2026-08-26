@@ -20,6 +20,7 @@ import type {
   PendingAction,
   PolicyFinding,
   PullRequestMergeReadiness,
+  InvestigationActionSummary,
   InvestigationRun,
   InvestigationEvidence,
   InvestigationFact,
@@ -29,10 +30,12 @@ import type {
   InvestigationStepSnapshot,
   GroundedInvestigationResult,
   DeveloperRecommendation,
+  ExecutionState,
   GenerationMetadata,
   GroundedCodeFinding,
   ValidatedCodeFinding,
   ValidatedHypothesis,
+  WorkingMemoryState,
   RuntimeRun,
   RequiredCheck,
   RuntimeErrorInfo,
@@ -611,6 +614,17 @@ function isInvestigationStep(value: unknown): value is InvestigationStepSnapshot
 }
 
 
+function isActionSummary(value: unknown): value is InvestigationActionSummary {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.tool_id) &&
+    isOneOf(value.outcome, ['observed', 'empty', 'failed']) &&
+    typeof value.produced_new_evidence === 'boolean' &&
+    typeof value.produced_new_facts === 'boolean'
+  )
+}
+
+
 function isInvestigationRound(value: unknown): value is InvestigationPlanningRound {
   return (
     isRecord(value) &&
@@ -745,11 +759,9 @@ function isGroundedResult(value: unknown): value is GroundedInvestigationResult 
 }
 
 
-function isInvestigationState(value: unknown): value is InvestigationRuntimeState {
+function isWorkingMemory(value: unknown): value is WorkingMemoryState {
   return (
     isRecord(value) &&
-    Array.isArray(value.rounds) &&
-    value.rounds.every(isInvestigationRound) &&
     Array.isArray(value.evidence) &&
     value.evidence.every(isNonEmptyString) &&
     Array.isArray(value.evidence_content) &&
@@ -760,16 +772,29 @@ function isInvestigationState(value: unknown): value is InvestigationRuntimeStat
     value.missing_information.every(isMissingInformation) &&
     Array.isArray(value.validated_hypotheses) &&
     value.validated_hypotheses.every(isValidatedHypothesis) &&
-    Number.isSafeInteger(value.rejected_hypothesis_count) &&
-    Number(value.rejected_hypothesis_count) >= 0 &&
     Array.isArray(value.validated_code_findings) &&
     value.validated_code_findings.every(isValidatedCodeFinding) &&
+    Array.isArray(value.developer_recommendations) &&
+    value.developer_recommendations.every(isDeveloperRecommendation) &&
+    Array.isArray(value.action_history) &&
+    value.action_history.every(isActionSummary)
+  )
+}
+
+
+function isExecutionState(value: unknown): value is ExecutionState {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.rounds) &&
+    value.rounds.every(isInvestigationRound) &&
+    (value.hypothesis_generation_metadata === null ||
+      isGenerationMetadata(value.hypothesis_generation_metadata)) &&
+    Number.isSafeInteger(value.rejected_hypothesis_count) &&
+    Number(value.rejected_hypothesis_count) >= 0 &&
     (value.code_diagnosis_metadata === null ||
       isGenerationMetadata(value.code_diagnosis_metadata)) &&
     Number.isSafeInteger(value.rejected_code_finding_count) &&
     Number(value.rejected_code_finding_count) >= 0 &&
-    Array.isArray(value.developer_recommendations) &&
-    value.developer_recommendations.every(isDeveloperRecommendation) &&
     Number.isSafeInteger(value.max_tool_calls) &&
     Number(value.max_tool_calls) >= 0 &&
     Number.isSafeInteger(value.used_tool_calls) &&
@@ -777,6 +802,15 @@ function isInvestigationState(value: unknown): value is InvestigationRuntimeStat
     Number.isSafeInteger(value.remaining_tool_calls) &&
     Number(value.remaining_tool_calls) >= 0 &&
     (value.termination_reason === null || isNonEmptyString(value.termination_reason))
+  )
+}
+
+
+function isInvestigationState(value: unknown): value is InvestigationRuntimeState {
+  return (
+    isRecord(value) &&
+    isWorkingMemory(value.working_memory) &&
+    isExecutionState(value.execution_state)
   )
 }
 
