@@ -405,7 +405,10 @@ export interface GroundedInvestigationResult {
 
 export interface InvestigationRuntimeState {
   rounds: InvestigationPlanningRound[]
-  evidence: InvestigationEvidence[]
+  // Bare evidence IDs referenced by planning rounds/facts/findings, for a
+  // lightweight trace/flow view. Full content lives in `evidence_content`.
+  evidence: string[]
+  evidence_content: InvestigationEvidence[]
   facts: InvestigationFact[]
   missing_information: InvestigationMissingInformation[]
   validated_hypotheses: ValidatedHypothesis[]

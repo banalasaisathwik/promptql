@@ -132,6 +132,7 @@ class InvestigationModelTests(unittest.TestCase):
             repository_owner="acme",
             repository_name="checkout",
             question="Why did checkout requests start returning HTTP 500?",
+            incident_reference="incident:checkout-500",
             incident_started_at=datetime(2026, 8, 16, 10, 30, tzinfo=UTC),
             service="checkout-api",
             environment="production",
@@ -174,6 +175,7 @@ class InvestigationModelTests(unittest.TestCase):
             repository_owner="acme",
             repository_name="checkout",
             question="Why is checkout failing?",
+            incident_reference="incident:checkout-500",
         )
 
         with self.assertRaises(ValidationError):

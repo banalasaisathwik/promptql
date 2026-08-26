@@ -43,8 +43,8 @@ def _validate_unique_references(
 class InvestigationRequest(ContractModel):
     repository_owner: NonEmptyString
     repository_name: NonEmptyString
-
-
+    # The user owns the investigation goal. Runtime code carries it through to
+    # planner and hypothesis prompts without extracting or reinterpreting intent.
     question: NonEmptyString
     incident_reference: NonEmptyString | None = None
     deployment_reference: NonEmptyString | None = None
@@ -54,6 +54,24 @@ class InvestigationRequest(ContractModel):
     incident_started_at: datetime | None = None
     service: NonEmptyString | None = None
     environment: NonEmptyString | None = None
+
+    @model_validator(mode="after")
+    def validate_grounding_reference(self) -> Self:
+        # Without a concrete anchor, the planner has nothing to reference and
+        # either invents values PlanValidator rejects (a real provider) or
+        # refuses outright (the fake provider) — always a wasted round-trip.
+        # Rejecting here is free and immediate; failing during planning costs
+        # a paid provider call and a confusing plan_validation_failure.
+        if (
+            self.incident_reference is None
+            and self.pull_request_number is None
+            and self.deployment_reference is None
+        ):
+            raise ValueError(
+                "At least one of incident_reference, pull_request_number, "
+                "or deployment_reference is required"
+            )
+        return self
 
 
 class FileChangeType(StrEnum):

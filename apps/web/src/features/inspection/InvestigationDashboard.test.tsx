@@ -36,7 +36,8 @@ const RUN: InvestigationRun = {
       fact_delta_ids: ['F1'],
       completed: true,
     }],
-    evidence: [{
+    evidence: ['E1'],
+    evidence_content: [{
       evidence_id: 'E1',
       source: 'incident',
       kind: 'incident',

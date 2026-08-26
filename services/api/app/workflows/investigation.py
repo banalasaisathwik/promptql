@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
@@ -297,6 +298,9 @@ class InvestigationWorkflowService:
                 on_round_planned=save_planned_round,
                 on_round_completed=save_completed_round,
             )
+        except asyncio.CancelledError:
+            self._cancel(running)
+            raise
         except Exception:
             return self._fail(
                 running,
@@ -309,6 +313,9 @@ class InvestigationWorkflowService:
                 adaptive_state,
                 store,
             )
+        except asyncio.CancelledError:
+            self._cancel(running)
+            raise
         except Exception:
             return self._fail(
                 running,
@@ -543,6 +550,22 @@ class InvestigationWorkflowService:
         )
         self._repository.save(failed)
         return failed
+
+    def _cancel(self, running: InvestigationRun) -> InvestigationRun:
+        # Round-boundary callbacks already persisted the latest snapshot
+        # durably (save_planned_round/save_completed_round); re-read it so
+        # cancellation keeps that progress instead of reverting to the empty
+        # snapshot `running` was constructed with at the start of this run.
+        latest = self._repository.get(running.run_id)
+        base = latest if isinstance(latest, InvestigationRun) else running
+        cancelled = base.model_copy(
+            update={
+                "status": RunStatus.CANCELLED,
+                "completed_at": datetime.now(UTC),
+            }
+        )
+        self._repository.save(cancelled)
+        return cancelled
 
     @staticmethod
     def _empty_state() -> InvestigationRuntimeSnapshot:

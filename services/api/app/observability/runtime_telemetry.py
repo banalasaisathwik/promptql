@@ -108,6 +108,31 @@ SUPPORTED_LLM_FAILURE_CATEGORIES = frozenset(
         "unexpected",
     }
 )
+# Mirrors app.investigations.planning.validation.PlanValidationFailureCode as
+# literal strings (matching the SUPPORTED_LLM_FAILURE_CATEGORIES convention
+# above) so this observability module never imports a domain validator type.
+# "adaptive_plan_too_large" is not a PlanValidator code: it is the adaptive
+# runtime's own per-round step-count rejection, raised before the plan ever
+# reaches PlanValidator.
+SUPPORTED_PLAN_VALIDATION_FAILURE_CODES = frozenset(
+    {
+        "plan_too_large",
+        "duplicate_step_id",
+        "unknown_tool",
+        "tool_not_allowed",
+        "unknown_dependency",
+        "self_dependency",
+        "cycle_detected",
+        "unknown_argument",
+        "missing_required_argument",
+        "invalid_literal_argument",
+        "unknown_output_reference_step",
+        "missing_reference_dependency",
+        "unknown_output_field",
+        "reference_type_mismatch",
+        "adaptive_plan_too_large",
+    }
+)
 
 
 class SpanObservation:
@@ -502,6 +527,19 @@ class RuntimeTelemetry:
                 logging.ERROR,
                 llm_provider=provider,
                 failure_category=failure_category,
+            )
+        except Exception:
+            self._warn_telemetry_failure("logs")
+
+    def record_plan_validation_rejected(self, run_id: UUID, failure_code: str) -> None:
+        try:
+            if failure_code not in SUPPORTED_PLAN_VALIDATION_FAILURE_CODES:
+                raise ValueError("plan validation failure code is not approved for logs")
+            self._event_logger.emit(
+                "plan.validation_rejected",
+                logging.WARNING,
+                run_id=run_id,
+                failure_category=failure_code,
             )
         except Exception:
             self._warn_telemetry_failure("logs")

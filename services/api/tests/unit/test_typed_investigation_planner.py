@@ -44,6 +44,7 @@ def _request():
         repository_owner="octo-org",
         repository_name="analytics",
         question="Investigate checkout failures after deployment.",
+        incident_reference="incident:checkout-500",
     )
 
 

@@ -366,6 +366,7 @@ def _planner_input() -> PlannerInput:
         repository_owner="octo-org",
         repository_name="analytics",
         question="Identify the next read-only evidence call for a checkout incident.",
+        incident_reference="incident:checkout-500",
     )
     empty_result = InvestigationResult(
         evidence=(),

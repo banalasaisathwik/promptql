@@ -63,6 +63,33 @@ class InvestigationApiTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "pending")
         self.assertIsNotNone(self.repository.get(UUID(response.json()["run_id"])))
 
+    def test_investigation_without_a_grounding_reference_is_rejected(self) -> None:
+        # No live call should ever happen for this request: rejection must
+        # occur at the API boundary, before the fake (or any) provider is
+        # reached, so the workflow override below is never actually invoked.
+        workflow = InvestigationWorkflowService(self.repository, FakeLLMClient())
+        app.dependency_overrides[get_investigation_workflow] = lambda: workflow
+
+        response = self.client.post(
+            "/v1/investigations",
+            json={
+                "repository_owner": "octo-org",
+                "repository_name": "analytics",
+                "question": "Why did checkout failures increase?",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        detail = response.json()["detail"]
+        self.assertTrue(
+            any(
+                "At least one of incident_reference, pull_request_number, "
+                "or deployment_reference is required" in error["msg"]
+                for error in detail
+            ),
+            detail,
+        )
+
     def test_checkout_fixture_request_completes_with_persisted_evidence(self) -> None:
         workflow = InvestigationWorkflowService(self.repository, FakeLLMClient())
         request = InvestigationRequest(

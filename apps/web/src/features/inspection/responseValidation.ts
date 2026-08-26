@@ -751,7 +751,9 @@ function isInvestigationState(value: unknown): value is InvestigationRuntimeStat
     Array.isArray(value.rounds) &&
     value.rounds.every(isInvestigationRound) &&
     Array.isArray(value.evidence) &&
-    value.evidence.every(isInvestigationEvidence) &&
+    value.evidence.every(isNonEmptyString) &&
+    Array.isArray(value.evidence_content) &&
+    value.evidence_content.every(isInvestigationEvidence) &&
     Array.isArray(value.facts) &&
     value.facts.every(isInvestigationFact) &&
     Array.isArray(value.missing_information) &&

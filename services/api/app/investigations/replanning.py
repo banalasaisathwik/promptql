@@ -47,6 +47,11 @@ _PLANNER_DIAGNOSTIC_LOGGER = logging.getLogger("promptql.runtime")
 
 
 class ContinuationReason(StrEnum):
+    # IN_PROGRESS is a mid-run placeholder only: on_round_planned and
+    # on_round_completed snapshot the state for persistence before the real
+    # terminal decision exists yet. investigate() never returns this value —
+    # every actual return site below sets a genuine terminal reason.
+    IN_PROGRESS = "in_progress"
     COMPLETE = "complete"
     MAX_PLANNING_ROUNDS = "max_planning_rounds"
     TOOL_CALL_BUDGET_EXHAUSTED = "tool_call_budget_exhausted"
@@ -271,6 +276,7 @@ class AdaptiveInvestigationRuntime:
                     if len(planned.plan.steps) > MAX_ADAPTIVE_PLAN_STEPS:
                         _mark_rejected(validation_observation)
                         _mark_rejected(round_observation)
+                        self._log_plan_validation_rejected(("adaptive_plan_too_large",))
                         return self._state(
                             rounds,
                             evidence,
@@ -284,6 +290,9 @@ class AdaptiveInvestigationRuntime:
                     if not validation.valid:
                         _mark_rejected(validation_observation)
                         _mark_rejected(round_observation)
+                        self._log_plan_validation_rejected(
+                            failure.code.value for failure in validation.errors
+                        )
                         return self._state(
                             rounds,
                             evidence,
@@ -302,7 +311,7 @@ class AdaptiveInvestigationRuntime:
                             missing_information,
                             history,
                             remaining,
-                            ContinuationReason.COMPLETE,
+                            ContinuationReason.IN_PROGRESS,
                         ),
                         planned,
                     )
@@ -376,7 +385,7 @@ class AdaptiveInvestigationRuntime:
                         missing_information,
                         history,
                         remaining,
-                        ContinuationReason.COMPLETE,
+                        ContinuationReason.IN_PROGRESS,
                     )
                 )
 
@@ -459,6 +468,12 @@ class AdaptiveInvestigationRuntime:
             prompt_version=prompt_version,
         ) as observation:
             yield observation
+
+    def _log_plan_validation_rejected(self, failure_codes: Iterable[str]) -> None:
+        if self._telemetry is None or self._run_id is None:
+            return
+        for failure_code in failure_codes:
+            self._telemetry.record_plan_validation_rejected(self._run_id, failure_code)
 
 
 def _set_generation_attributes(observation, metadata: PlannerMetadata) -> None:

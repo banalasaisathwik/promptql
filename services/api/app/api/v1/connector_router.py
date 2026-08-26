@@ -1,3 +1,4 @@
+import asyncio
 from typing import Annotated
 
 from uuid import UUID
@@ -275,6 +276,11 @@ async def _continue_investigation(
 ) -> None:
     try:
         await workflow.continue_persisted_run(pending_run)
+    except asyncio.CancelledError:
+        # The workflow already persists status=cancelled before this
+        # propagates (see InvestigationWorkflowService._cancel). Re-raise so
+        # the task genuinely ends up cancelled rather than looking swallowed.
+        raise
     except Exception:
         return
 

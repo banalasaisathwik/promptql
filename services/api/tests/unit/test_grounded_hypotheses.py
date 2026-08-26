@@ -72,6 +72,7 @@ class HypothesisGeneratorTests(unittest.IsolatedAsyncioTestCase):
             InvestigationRequest(
                 repository_owner="octo-org", repository_name="analytics",
                 question="Investigate checkout failures.",
+                incident_reference="incident:checkout-500",
             ),
             AdaptiveInvestigationState(
                 rounds=(), evidence=(), facts=_facts(), missing_information=(),

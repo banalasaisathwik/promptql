@@ -1,5 +1,8 @@
+import asyncio
 import unittest
 from unittest.mock import patch
+
+from pydantic import ValidationError
 
 from app.explanations import (
     FakeLLMClient,
@@ -17,6 +20,11 @@ from app.investigations.hypotheses import (
 )
 from app.investigations.models import InvestigationRequest
 from app.investigations.planning import InvestigationPlan, Literal, PlanArgument, PlanStep
+from app.investigations.replanning import (
+    AdaptiveInvestigationRuntime,
+    AdaptiveInvestigationState,
+    ContinuationReason,
+)
 from app.tools import InvestigationToolId
 from app.runtime import InMemoryRunRepository, RunStatus
 from app.workflows.investigation import (
@@ -225,6 +233,62 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("private internal detail", failed.error.message)
         self.assertIs(repository.get(failed.run_id), failed)
 
+    async def test_cancellation_mid_run_marks_the_run_cancelled_not_stuck_running(self):
+        repository = InMemoryRunRepository()
+        workflow = InvestigationWorkflowService(
+            repository,
+            FakeLLMClient(),
+            planner_client=SequentialPlannerClient((incident_plan("incident:checkout-500"),)),
+        )
+        pending = await workflow.create_persisted_run(
+            InvestigationRequest(
+                repository_owner="octo-org",
+                repository_name="analytics",
+                question="Why did checkout failures increase?",
+                incident_reference="incident:checkout-500",
+            )
+        )
+
+        # Simulates the real incident: round 2 finishes and persists its
+        # snapshot (on_round_completed fires normally), then the surrounding
+        # task is cancelled (app shutdown/restart) before investigate()
+        # returns a real terminal reason.
+        async def cancelled_after_round_two(
+            self,
+            investigation_goal,
+            allowed_tools,
+            *,
+            budget,
+            initial_evidence=(),
+            initial_missing_information=(),
+            request_context=None,
+            on_round_planned=None,
+            on_round_completed=None,
+        ):
+            two_rounds_in = AdaptiveInvestigationState(
+                rounds=(),
+                evidence=(),
+                facts=(),
+                missing_information=(),
+                action_history=(),
+                remaining_tool_calls=budget.max_tool_calls,
+                continuation_reason=ContinuationReason.IN_PROGRESS,
+            )
+            await on_round_completed(two_rounds_in)
+            raise asyncio.CancelledError()
+
+        with patch.object(
+            AdaptiveInvestigationRuntime, "investigate", cancelled_after_round_two
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await workflow.continue_persisted_run(pending)
+
+        stored = repository.get(pending.run_id)
+        self.assertEqual(stored.status, RunStatus.CANCELLED)
+        self.assertIsNotNone(stored.started_at)
+        self.assertIsNotNone(stored.completed_at)
+        self.assertIsNone(stored.result)
+
     async def test_persisted_investigation_reuses_snapshot_repository_and_renders_result(self):
         repository = InMemoryRunRepository()
         workflow = InvestigationWorkflowService(
@@ -346,23 +410,17 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(completed.state.rounds[0].completed)
         self.assertGreater(len(completed.state.evidence), 0)
 
-    async def test_missing_structured_sources_still_returns_insufficient_evidence(self):
-        repository = InMemoryRunRepository()
-        workflow = InvestigationWorkflowService(repository, FakeLLMClient())
-        pending = await workflow.create_persisted_run(
+    def test_missing_structured_sources_is_rejected_before_construction(self):
+        # A request with no grounding reference used to reach the workflow and
+        # complete with an empty state (nothing for the planner to anchor a
+        # plan to). InvestigationRequest now rejects that shape immediately,
+        # so the wasted planning round-trip never happens.
+        with self.assertRaises(ValidationError):
             InvestigationRequest(
                 repository_owner="octo-org",
                 repository_name="analytics",
                 question="Why is the service unhealthy?",
             )
-        )
-
-        completed = await workflow.continue_persisted_run(pending)
-
-        self.assertEqual(completed.status, RunStatus.COMPLETED)
-        self.assertEqual(completed.state.rounds, ())
-        self.assertEqual(completed.state.evidence, ())
-        self.assertEqual(completed.result.supported_hypotheses, ())
 
     async def _completed_fake_context(self):
         repository = InMemoryRunRepository()
