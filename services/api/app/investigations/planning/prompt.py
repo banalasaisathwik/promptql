@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from uuid import UUID
 
 from app.investigations.models import Evidence, FactSet, InvestigationRequest, InvestigationResult, MissingInformation
 from app.investigations.planning.models import (
@@ -8,6 +9,7 @@ from app.investigations.planning.models import (
     PlannerToolDefinition,
     PlannerToolInputField,
 )
+from app.observability.runtime_telemetry import RuntimeTelemetry
 from app.tools.models import ToolDefinition
 
 
@@ -64,8 +66,10 @@ class ContextBuilder:
         planning_round: int = 1,
         max_planning_rounds: int = 1,
         request_context: InvestigationRequest | None = None,
+        telemetry: RuntimeTelemetry | None = None,
+        run_id: UUID | None = None,
     ) -> PlannerInput:
-        return PlannerInput(
+        planner_input = PlannerInput(
             investigation_goal=investigation_goal,
             request_context=request_context,
             facts=tuple(sorted(facts, key=lambda fact: fact.fact_id)),
@@ -86,6 +90,14 @@ class ContextBuilder:
             max_planning_rounds=max_planning_rounds,
             allowed_tools=tuple(_tool_context(definition) for definition in sorted(allowed_tools, key=lambda item: item.tool_id)),
         )
+        if telemetry is not None and run_id is not None:
+            telemetry.record_context_size_measured(
+                run_id,
+                "planner",
+                len(planner_input.model_dump_json()),
+                round_number=planning_round,
+            )
+        return planner_input
 
 
 def build_planner_input(

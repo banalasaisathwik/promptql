@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from opentelemetry import metrics, trace
 
+from app.explanations import LLMTokenUsage
 from app.observability.live_event_broker import LiveEventBroker
 from app.observability.runtime_telemetry import RuntimeTelemetry
 from app.observability.structured_logging import StructuredEventLogger
@@ -55,6 +56,55 @@ class InvestigationLiveEventTests(unittest.TestCase):
         self.assertFalse(lines[0]["round_completed"])
         self.assertEqual(lines[1]["event"], "investigation.round.completed")
         self.assertTrue(lines[1]["round_completed"])
+
+    def test_llm_token_usage_event_carries_real_provider_counts(self) -> None:
+        harness = create_telemetry_harness()
+        try:
+            run_id = uuid4()
+            harness.telemetry.record_llm_token_usage(
+                run_id,
+                "planner",
+                LLMTokenUsage(input_tokens=120, output_tokens=40, total_tokens=160),
+                round_number=2,
+            )
+        finally:
+            harness.shutdown()
+
+        record = json.loads(harness.log_stream.getvalue())
+        self.assertEqual(record["event"], "llm.token_usage")
+        self.assertEqual(record["run_id"], str(run_id))
+        self.assertEqual(record["role"], "planner")
+        self.assertEqual(record["round_number"], 2)
+        self.assertEqual(record["input_tokens"], 120)
+        self.assertEqual(record["output_tokens"], 40)
+        self.assertEqual(record["total_tokens"], 160)
+        self.assertEqual(record["level"], "info")
+
+    def test_llm_token_usage_with_no_reported_usage_emits_nothing(self) -> None:
+        harness = create_telemetry_harness()
+        try:
+            harness.telemetry.record_llm_token_usage(uuid4(), "hypothesis", None)
+        finally:
+            harness.shutdown()
+
+        self.assertEqual(harness.log_stream.getvalue(), "")
+
+    def test_llm_token_usage_with_a_disallowed_role_degrades_to_a_telemetry_warning(
+        self,
+    ) -> None:
+        harness = create_telemetry_harness()
+        try:
+            harness.telemetry.record_llm_token_usage(
+                uuid4(),
+                "not_a_real_role",
+                LLMTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            )
+        finally:
+            harness.shutdown()
+
+        record = json.loads(harness.log_stream.getvalue())
+        self.assertEqual(record["event"], "runtime.telemetry.export_failed")
+        self.assertEqual(record["level"], "warning")
 
     def test_diagnostic_failure_event_reaches_a_broker_subscriber(self) -> None:
         broker = LiveEventBroker()

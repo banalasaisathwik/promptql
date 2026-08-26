@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import Field
 
 from app.connectors.models import ContractModel, NonEmptyString
+from app.explanations import LLMTokenUsage
 from app.investigations.execution import (
     AgentExecutor,
     ExecutionBudget,
@@ -218,6 +219,8 @@ class AdaptiveInvestigationRuntime:
                     planning_round=round_number,
                     max_planning_rounds=MAX_PLANNING_ROUNDS,
                     request_context=request_context,
+                    telemetry=self._telemetry,
+                    run_id=self._run_id,
                 )
                 planner_client = getattr(self._planner, "_client", None)
                 provider = getattr(getattr(planner_client, "provider", None), "value", None)
@@ -268,6 +271,11 @@ class AdaptiveInvestigationRuntime:
                             ContinuationReason.PLANNER_FAILURE,
                         )
                     _set_generation_attributes(planner_observation, planned.metadata)
+                    self._log_token_usage(
+                        "planner",
+                        planned.metadata.token_usage,
+                        round_number=round_number,
+                    )
 
                 with self._observe_stage(
                     InvestigationStage.PLAN_VALIDATION,
@@ -474,6 +482,19 @@ class AdaptiveInvestigationRuntime:
             return
         for failure_code in failure_codes:
             self._telemetry.record_plan_validation_rejected(self._run_id, failure_code)
+
+    def _log_token_usage(
+        self,
+        role: str,
+        token_usage: LLMTokenUsage | None,
+        *,
+        round_number: int | None = None,
+    ) -> None:
+        if self._telemetry is None or self._run_id is None:
+            return
+        self._telemetry.record_llm_token_usage(
+            self._run_id, role, token_usage, round_number=round_number
+        )
 
 
 def _set_generation_attributes(observation, metadata: PlannerMetadata) -> None:

@@ -1,5 +1,77 @@
 # Learning log
 
+## 2026-08-26 — Observational context/token telemetry without a truncation decision
+
+- **Concept:** Measurement can be added ahead of a policy decision as long as
+  it stays additive and never gates behavior. `context.size_measured`
+  (character-count proxy for the serialized `PlannerInput`/
+  `HypothesisGenerationInput`) and `llm.token_usage` (real provider-reported
+  `input_tokens`/`output_tokens`/`total_tokens`) both flow through the
+  existing `StructuredEventLogger` → `LiveEventBroker` SSE tap without adding
+  any cap, truncation, or budget logic — the goal is real growth data before
+  any future context-budget decision, not the decision itself.
+- **Important syntax:** `TYPE_CHECKING`-guarded imports plus a quoted forward
+  reference (`token_usage: "LLMTokenUsage | None"`) let a function's type
+  annotation reference a class from a package that would otherwise close an
+  import cycle back to the importing module, since Python always executes a
+  package's `__init__.py` before any of its submodules — there is no way to
+  import only a submodule and skip the parent package.
+- **Implementation locations:** `observability/structured_logging.py`
+  (`ALLOWED_EVENT_FIELDS` gains `role`, `char_count`, `input_tokens`,
+  `output_tokens`, `total_tokens`); `observability/runtime_telemetry.py`
+  (`record_context_size_measured`, `record_llm_token_usage`,
+  `SUPPORTED_CONTEXT_ROLES = {"planner", "hypothesis", "code_diagnosis"}`);
+  `planning/prompt.py`'s `ContextBuilder.build()` and
+  `hypotheses/prompt.py`'s `build_hypothesis_generation_input()` (both take
+  optional keyword-only `telemetry`/`run_id`); `replanning.py` (new
+  `_log_token_usage()` helper, guarded like the existing
+  `_log_plan_validation_rejected()`) and `workflows/investigation.py` wire
+  the two builder call sites plus all three post-generation token-usage
+  calls (planner, hypothesis, code diagnosis); the new
+  `test_llm_token_usage_*` cases in `test_investigation_live_events.py`
+  cover real-count emission, `token_usage=None` (no event), and a
+  disallowed role degrading to `runtime.telemetry.export_failed`.
+- **Design decision:** New parameters are optional and keyword-only with
+  `None` defaults, so every caller that doesn't pass them (diagnostic
+  scripts, eval harness, existing unit tests) keeps its exact prior
+  signature and produces zero new events — verified by calling both
+  builders with and without telemetry and diffing the emitted output.
+- **Invariant or failure behavior:** `record_llm_token_usage` returns early
+  when `token_usage` is `None` (a provider that doesn't report usage) rather
+  than emitting a partial event; an unrecognized `role` degrades to
+  `runtime.telemetry.export_failed` through the same `try/except` pattern
+  every other `RuntimeTelemetry` recorder uses, never raising into the
+  caller.
+- **Misconception corrected:** Assumed `from app.explanations.models import
+  X` would avoid re-running `app/explanations/__init__.py`, since only the
+  submodule was referenced. It does not — importing any submodule always
+  imports its parent package first, so the only fix for a real cross-package
+  cycle is deferring the import (`TYPE_CHECKING` here, since the value is
+  only used in an annotation) rather than narrowing which name is imported.
+- **Trade-off learned:** Manual verification (constructing a real
+  `RuntimeTelemetry` and calling it with `app.observability.runtime_telemetry`
+  as the first import) caught the cycle that the full unittest run did not,
+  because test discovery happened to import `app.explanations` fully before
+  `app.observability.runtime_telemetry` executed its new import, masking the
+  ordering bug. Import order in the full suite is not a reliable proxy for
+  "this module is safe to import first."
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  passed 434 tests (6 environment-guarded skips) after code_diagnosis wiring
+  and the three new `llm.token_usage` tests were added (431 before). `uv run
+  python -c "from app.observability.runtime_telemetry import
+  RuntimeTelemetry"` as a standalone first import confirmed the fixed
+  import order. Manual `RuntimeTelemetry` calls confirmed exact emitted
+  JSON shape for all three event roles, and confirmed no emission at all
+  when `telemetry`/`run_id` are omitted or `token_usage` is `None`.
+- **Unresolved question:** `code_diagnosis` was initially left out of
+  `SUPPORTED_CONTEXT_ROLES` pending an explicit decision; a follow-up task
+  added it and wired `record_llm_token_usage` into the code-diagnosis
+  metadata call site, so token-usage telemetry now covers all three LLM
+  roles. `context.size_measured` (the character-count proxy) still covers
+  only planner/hypothesis, since `code_diagnosis` uses the structurally
+  different `CodeContextBuilder` rather than a `ContextBuilder`-style
+  builder — whether that one also needs a size proxy remains open.
+
 ## 2026-08-21 - Persist only code diagnosis that crossed deterministic grounding
 
 - **Engineering concept:** A typed model response is still a candidate. The

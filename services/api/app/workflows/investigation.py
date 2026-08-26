@@ -367,6 +367,8 @@ class InvestigationWorkflowService:
                 remaining_tool_calls=adaptive_state.remaining_tool_calls,
                 continuation_reason=adaptive_state.continuation_reason,
             ),
+            telemetry=self._telemetry,
+            run_id=running.run_id,
         )
         if adaptive_state.facts:
             hypothesis_generator = TypedLLMHypothesisGenerator(self._llm_client)
@@ -394,6 +396,11 @@ class InvestigationWorkflowService:
                     _set_generation_span_attributes(
                         generation_observation,
                         generated.metadata,
+                    )
+                    self._telemetry.record_llm_token_usage(
+                        running.run_id,
+                        "hypothesis",
+                        generated.metadata.token_usage,
                     )
                 hypothesis_metadata = generated.metadata
             except HypothesisGenerationError as error:
@@ -468,6 +475,11 @@ class InvestigationWorkflowService:
                     _set_generation_span_attributes(
                         diagnosis_observation,
                         generated_findings.metadata,
+                    )
+                    self._telemetry.record_llm_token_usage(
+                        running.run_id,
+                        "code_diagnosis",
+                        generated_findings.metadata.token_usage,
                     )
                 code_diagnosis_metadata = generated_findings.metadata
             except CodeDiagnosisError as error:

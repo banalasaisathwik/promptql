@@ -961,8 +961,16 @@ Server-Sent Events for one run: every event that already reaches
 `runtime.workflow.completed`/`failed`, `llm.explanation.failed`,
 `runtime.persistence.failed`, `runtime.telemetry.export_failed`,
 `investigation.tool.call_completed`, `investigation.round.planned`/
-`completed`, and the routed `investigation.hypothesis.failed`/
-`investigation.code_diagnosis.failed` diagnostics — also reaches any
+`completed`, the routed `investigation.hypothesis.failed`/
+`investigation.code_diagnosis.failed` diagnostics, and two
+purely-observational context events with no cap/truncation/budget behavior
+attached — `context.size_measured` (a `len(model_dump_json())` character
+proxy for the planner/hypothesis LLM input, emitted by `ContextBuilder.build()`
+and `build_hypothesis_generation_input()`) and `llm.token_usage` (the
+provider-reported `input_tokens`/`output_tokens`/`total_tokens` from
+`LLMTokenUsage`, emitted for the planner, hypothesis, and code-diagnosis
+roles alongside their respective metadata construction in `replanning.py`
+and `workflows/investigation.py`) — also reaches any
 browser subscribed to that run. The mechanism is deliberately minimal and
 in-process, matching this project's non-goals around Redis/message queues:
 `LiveEventBroker` (`observability/live_event_broker.py`) is a

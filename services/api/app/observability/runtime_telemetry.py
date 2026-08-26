@@ -1,7 +1,7 @@
 import logging
 from contextlib import contextmanager
 from time import perf_counter_ns
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 from uuid import UUID
 
 from opentelemetry import metrics, trace
@@ -37,6 +37,13 @@ from app.observability.structured_logging import (
     StructuredEventLogger,
 )
 from app.runtime.models import MergeReadinessRun, RunStatus, WorkflowStepName
+
+# app.explanations imports app.observability at module scope (for
+# ObservedRunRepository etc.), so importing app.explanations.models here at
+# runtime would re-enter this package mid-initialization. The type is only
+# needed for the annotation below, so TYPE_CHECKING avoids the cycle.
+if TYPE_CHECKING:
+    from app.explanations.models import LLMTokenUsage
 
 
 # SECURITY: Attribute names are closed before values reach an exporter. Adding
@@ -93,6 +100,10 @@ SPAN_ATTRIBUTE_ALLOWLIST = frozenset(
     }
 )
 SUPPORTED_WORKFLOWS = frozenset({("merge_readiness", "1"), ("investigation", "2.19.2")})
+# Roles that may build a typed LLM input via a ContextBuilder-style function.
+# This is purely observational (char_count is a cheap size proxy, not a token
+# count) and carries no truncation or budget decision.
+SUPPORTED_CONTEXT_ROLES = frozenset({"planner", "hypothesis", "code_diagnosis"})
 SUPPORTED_LLM_PROVIDERS = frozenset({"fake", "gemini", "groq", "openai", "openrouter"})
 SUPPORTED_LLM_FAILURE_CATEGORIES = frozenset(
     {
@@ -578,6 +589,61 @@ class RuntimeTelemetry:
         # SSE subscriber for this run.
         try:
             self._event_logger.emit(event, logging.ERROR, run_id=run_id, **fields)
+        except Exception:
+            self._warn_telemetry_failure("logs")
+
+    def record_context_size_measured(
+        self,
+        run_id: UUID,
+        role: str,
+        char_count: int,
+        *,
+        round_number: int | None = None,
+    ) -> None:
+        # Observational only: a character-count proxy for the serialized LLM
+        # input, so real context-growth data exists before any future
+        # truncation/budget decision is made. No cap or drop logic here.
+        try:
+            if role not in SUPPORTED_CONTEXT_ROLES:
+                raise ValueError("context role is not approved for logs")
+            self._event_logger.emit(
+                "context.size_measured",
+                logging.INFO,
+                run_id=run_id,
+                role=role,
+                round_number=round_number,
+                char_count=char_count,
+            )
+        except Exception:
+            self._warn_telemetry_failure("logs")
+
+    def record_llm_token_usage(
+        self,
+        run_id: UUID,
+        role: str,
+        token_usage: "LLMTokenUsage | None",
+        *,
+        round_number: int | None = None,
+    ) -> None:
+        # Additive alongside context.size_measured: this reports the real
+        # provider-reported token counts after the call, not an estimate.
+        # A provider that omits usage reporting yields None; there is
+        # nothing to log in that case.
+        if token_usage is None:
+            return
+        try:
+            if role not in SUPPORTED_CONTEXT_ROLES:
+                raise ValueError("context role is not approved for logs")
+            self._event_logger.emit(
+                "llm.token_usage",
+                logging.INFO,
+                run_id=run_id,
+                role=role,
+                round_number=round_number,
+                input_tokens=token_usage.input_tokens,
+                output_tokens=token_usage.output_tokens,
+                total_tokens=token_usage.total_tokens,
+            )
         except Exception:
             self._warn_telemetry_failure("logs")
 
