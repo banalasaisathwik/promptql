@@ -13,6 +13,8 @@ import type {
   ExplanationApiError,
   GitHubPullRequest,
   GitHubUser,
+  GroundingExtractionOutput,
+  GroundingExtractionResponse,
   JiraIssue,
   MergeReadinessResult,
   MergeReadinessExplanation,
@@ -97,6 +99,14 @@ const EXPLANATION_ERROR_CODES = [
   'provider_failure',
   'invalid_output',
   'validation_failed',
+] as const
+
+const GROUNDING_EXTRACTION_STATUSES = ['complete', 'needs_clarification'] as const
+
+const MISSING_GROUNDING_FIELDS = [
+  'incident_reference',
+  'deployment_reference',
+  'pull_request_number',
 ] as const
 
 
@@ -525,6 +535,45 @@ export function parseLiveRunStart(value: unknown): {
     throw new ConnectorApiError('The live-run start response is malformed.')
   }
   return { run_id: value.run_id, status: value.status }
+}
+
+
+function isGroundingExtractionOutput(
+  value: unknown,
+): value is GroundingExtractionOutput {
+  return (
+    isRecord(value) &&
+    (value.repository_owner === null || isNonEmptyString(value.repository_owner)) &&
+    (value.repository_name === null || isNonEmptyString(value.repository_name)) &&
+    (value.incident_reference === null || isNonEmptyString(value.incident_reference)) &&
+    (value.deployment_reference === null ||
+      isNonEmptyString(value.deployment_reference)) &&
+    (value.pull_request_number === null ||
+      (Number.isSafeInteger(value.pull_request_number) &&
+        Number(value.pull_request_number) > 0))
+  )
+}
+
+
+export function parseGroundingExtractionResponse(
+  value: unknown,
+): GroundingExtractionResponse {
+  if (
+    !isRecord(value) ||
+    !isOneOf(value.status, GROUNDING_EXTRACTION_STATUSES) ||
+    !isGroundingExtractionOutput(value.extracted) ||
+    !Array.isArray(value.missing) ||
+    !value.missing.every((field) => isOneOf(field, MISSING_GROUNDING_FIELDS)) ||
+    !(value.question === null || isNonEmptyString(value.question))
+  ) {
+    throw new ConnectorApiError('The grounding extraction response is malformed.')
+  }
+  return {
+    status: value.status,
+    extracted: value.extracted,
+    missing: value.missing,
+    question: value.question,
+  }
 }
 
 

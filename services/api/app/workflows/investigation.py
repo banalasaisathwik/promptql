@@ -336,6 +336,7 @@ class InvestigationWorkflowService:
                 store,
                 telemetry=self._telemetry,
                 run_id=pending.run_id,
+                fact_recurrence_repository=self._fact_recurrence_repository,
             ).investigate(
                 running.request.question,
                 tuple(

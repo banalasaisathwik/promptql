@@ -82,6 +82,11 @@ class ActionSummary(ContractModel):
     produced_new_facts: bool
 
 
+class RememberedRepositoryPattern(ContractModel):
+    fact_type: str
+    occurrence_count: int = Field(ge=1)
+
+
 class PlannerInput(ContractModel):
     investigation_goal: NonEmptyString
     request_context: InvestigationRequest | None = None
@@ -93,6 +98,7 @@ class PlannerInput(ContractModel):
     planning_round: int = Field(default=1, ge=1)
     max_planning_rounds: int = Field(default=1, ge=1)
     allowed_tools: tuple[PlannerToolDefinition, ...] = Field(min_length=1)
+    remembered_patterns: tuple[RememberedRepositoryPattern, ...] = ()
 
 
 class Literal(ContractModel):

@@ -19,6 +19,7 @@ from app.investigations.planning.models import (
     PlannerMetadata,
     PlannerToolDefinition,
     PlannerToolInputField,
+    RememberedRepositoryPattern,
     StepOutputRef,
 )
 from app.investigations.planning.prompt import ContextBuilder, build_planner_input
@@ -51,6 +52,7 @@ __all__ = [
     "PlannerMetadata",
     "PlannerToolDefinition",
     "PlannerToolInputField",
+    "RememberedRepositoryPattern",
     "PlanValidationFailure",
     "PlanValidationFailureCode",
     "PlanValidationResult",

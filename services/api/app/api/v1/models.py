@@ -6,6 +6,7 @@ from pydantic import model_validator
 
 from app.connectors.models import ContractModel, NonEmptyString
 from app.explanations import ExplanationErrorCode, MergeReadinessExplanation
+from app.investigations.grounding_extraction import GroundingExtractionOutput
 from app.runtime import MergeReadinessRun, RunStatus
 from app.runtime.investigation_models import InvestigationRun
 
@@ -71,3 +72,47 @@ class MergeReadinessResponse(MergeReadinessRun):
 
 class InvestigationResponse(InvestigationRun):
     pass
+
+
+class GroundingExtractionStatus(StrEnum):
+    COMPLETE = "complete"
+    NEEDS_CLARIFICATION = "needs_clarification"
+
+
+class MissingGroundingField(StrEnum):
+    INCIDENT_REFERENCE = "incident_reference"
+    DEPLOYMENT_REFERENCE = "deployment_reference"
+    PULL_REQUEST_NUMBER = "pull_request_number"
+
+
+class GroundingExtractionApiErrorCode(StrEnum):
+    PROVIDER_FAILURE = "provider_failure"
+    INVALID_RESPONSE = "invalid_response"
+    EXTRACTION_SCHEMA_INVALID = "extraction_schema_invalid"
+
+
+class GroundingExtractionApiError(ContractModel):
+    code: GroundingExtractionApiErrorCode
+    message: NonEmptyString
+
+
+class GroundingExtractionResponse(ContractModel):
+    status: GroundingExtractionStatus
+    extracted: GroundingExtractionOutput
+    missing: tuple[MissingGroundingField, ...] = ()
+    question: NonEmptyString | None = None
+
+    @model_validator(mode="after")
+    def validate_status_consistency(self) -> Self:
+        if self.status is GroundingExtractionStatus.COMPLETE:
+            if self.missing or self.question is not None:
+                raise ValueError(
+                    "a complete extraction must not report missing fields or a question"
+                )
+        else:
+            if not self.missing or self.question is None:
+                raise ValueError(
+                    "an incomplete extraction must report missing fields and a "
+                    "clarifying question"
+                )
+        return self

@@ -40,6 +40,18 @@ def _validate_unique_references(
         raise ValueError(f"{relationship_name} cannot contain duplicate identifiers")
 
 
+def has_required_grounding_reference(
+    incident_reference: str | None,
+    pull_request_number: int | None,
+    deployment_reference: str | None,
+) -> bool:
+    return not (
+        incident_reference is None
+        and pull_request_number is None
+        and deployment_reference is None
+    )
+
+
 class InvestigationRequest(ContractModel):
     repository_owner: NonEmptyString
     repository_name: NonEmptyString
@@ -57,10 +69,10 @@ class InvestigationRequest(ContractModel):
 
     @model_validator(mode="after")
     def validate_grounding_reference(self) -> Self:
-        if (
-            self.incident_reference is None
-            and self.pull_request_number is None
-            and self.deployment_reference is None
+        if not has_required_grounding_reference(
+            self.incident_reference,
+            self.pull_request_number,
+            self.deployment_reference,
         ):
             raise ValueError(
                 "At least one of incident_reference, pull_request_number, "

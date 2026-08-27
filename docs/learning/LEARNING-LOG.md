@@ -1,5 +1,159 @@
 # Learning log
 
+## 2026-08-27 — Natural-language grounding extraction as a stateless pre-step
+
+- **Concept:** `POST /v1/investigations` needs a concrete grounding anchor
+  (`incident_reference`, `pull_request_number`, or `deployment_reference`) or
+  it 422s immediately via `InvestigationRequest.validate_grounding_reference`
+  (`investigations/models.py`). Rather than letting an LLM populate those
+  fields directly on `InvestigationRequest` — which would put a provider call
+  and a Pydantic validator behind the same boundary — extraction is a
+  separate, stateless pre-step: `POST /v1/investigations/extract-grounding`
+  proposes fields for the user to review and edit, and the user still submits
+  through the existing, byte-for-byte unchanged `POST /v1/investigations`.
+  Deciding the architectural fork (pre-step vs. validator-internal) and the
+  stateless-vs-DB-backed-draft question were done as a review pass before any
+  code was written; see the request that opened this task for the six
+  questions asked and answered.
+- **Mirroring an established pattern instead of inventing a new one:**
+  `investigations/grounding_extraction/` copies `investigations/planning/`'s
+  exact shape file-for-file: `models.py` (typed input/output +
+  `GroundingExtractionFailureCode`), `errors.py` (`GroundingExtractionError`,
+  same three-field shape as `InvestigationPlannerError`), `instructions.py`
+  (prompt + a `build_*_system_instructions(input)` function that appends an
+  optional section — here, "these fields are already confirmed, don't
+  re-derive them" instead of planning's remembered-patterns guardrail),
+  `service.py` (`TypedGroundingExtractor.extract()`, identical
+  try/except/three-failure-mode structure to `TypedLLMPlanner.plan()`). Every
+  new LLM-calling task in this domain should follow this same five-file shape
+  rather than inventing a new provider-calling convention per feature.
+- **Reuse without duplicating a validator:** the task's grounding-reference
+  check needed to run in two places — inside `InvestigationRequest`'s
+  `@model_validator` and inside the new endpoint (against a bare
+  `GroundingExtractionOutput`, which isn't an `InvestigationRequest` and is
+  missing required fields like `question`). The fix was extracting the
+  boolean check itself into a standalone pure function,
+  `has_required_grounding_reference(incident_reference, pull_request_number,
+  deployment_reference)`, in `investigations/models.py`, called by both the
+  validator and the endpoint. This is "reuse the same validator" in spirit —
+  one source of truth for the check — without needing a full
+  `InvestigationRequest` instance just to run it.
+- **Fake-provider fixtures are allowed to do real text parsing when nothing
+  else needs to agree with them:** `FakeLLMClient`'s existing comment warns
+  against adding keyword rules for the `InvestigationPlan`/
+  `HypothesisGenerationOutput` branches because a real `PlanValidator`/
+  hypothesis validator could disagree with fabricated keyword logic in a
+  dangerous way (invented causal claims). Grounding extraction has no such
+  validator to diverge from — `has_required_grounding_reference` runs
+  identically against whatever any provider (fake or real) returns — so
+  `fakes.py` gained a small, clearly-commented regex fixture
+  (`_extract_grounding_fields_from_description`) so local/demo runs and the
+  fake-provider end-to-end path produce a plausible, non-network answer.
+  Deployment/incident identifiers are only captured if the matched token
+  contains a digit, specifically so an ordinary following word ("a deploy
+  **went** out") is never mistaken for an identifier.
+- **Validation:** backend `uv run python -m unittest discover -s tests -v`
+  (507 passed, 6 skipped, all pre-existing skips); frontend
+  `bun run test:web` (40 passed) and `bunx tsc -b --noEmit` (clean). A
+  FastAPI `TestClient` script (using `InMemoryRunRepository`, the same
+  pattern as `tests/integration/test_investigation_api.py`) drove
+  `extract-grounding` for a complete sample text ("PR 42 in
+  octo-org/analytics, deployment 52...") and an ambiguous one, then fed the
+  complete extraction into the real, unmodified `/v1/investigations` and
+  confirmed a single run was accepted (202) end to end under
+  `PROMPTQL_LLM_PROVIDER=fake`.
+- **Unresolved:** the extractor currently reuses
+  `investigation_planner_client` rather than getting its own `LLMTask`/
+  `ModelPolicy` entry (a Level 1 call, since adding a new task-to-model
+  routing dimension for one small typed task felt like premature
+  configuration surface). If extraction quality or cost profile ever needs a
+  different model than planning, this should become its own `LLMTask` member
+  the way `HYPOTHESIS_GENERATION` and `CODE_DIAGNOSIS` already are.
+
+## 2026-08-27 — Reading repository-scoped Fact-type recurrence back into the planner (ADR-031's read path)
+
+- **Concept:** ADR-031 (see the write-side entry below, "Count Fact-type
+  recurrence per repository without inventing a new Fact") deliberately left
+  the read path for a later, separate decision. This task implemented that
+  read path: `ContextBuilder.build()` (`investigations/planning/prompt.py`)
+  now accepts an optional `fact_recurrence_repository` parameter and, when
+  given one plus a `request_context` carrying `repository_owner`/
+  `repository_name`, queries `FactRecurrenceRepository.list_promoted(...)`
+  (a new Protocol method, added to both `InMemoryFactRecurrenceRepository`
+  and `PostgresFactRecurrenceRepository`) and populates
+  `PlannerInput.remembered_patterns: tuple[RememberedRepositoryPattern, ...]`
+  — a small new `ContractModel` in `planning/models.py` carrying only
+  `fact_type` + `occurrence_count`, deliberately **not** an
+  `InvestigationFact` subclass (same provenance reasoning as ADR-031's row
+  itself: cross-run counts cannot carry this run's
+  `evidence_reference_ids`). Only `promoted_at IS NOT NULL` rows are
+  surfaced — one or two occurrences stay invisible to the planner, since
+  ADR-031 defines that as noise, not memory.
+- **Prompt boundary decision:** `TypedLLMRequest.input` is a Pydantic model
+  serialized wholesale via `model_dump_json()` by every provider client
+  (`explanations/openai_client.py` etc.), so `remembered_patterns` already
+  reaches the model inside the structured `input` the moment it's non-empty
+  on `PlannerInput` — no separate template mechanism was needed to transmit
+  the data itself. What *did* need a new mechanism was labeling how to
+  interpret that field: `PLANNER_SYSTEM_INSTRUCTIONS` was a static string,
+  so `instructions.py` gained
+  `build_planner_system_instructions(planner_input) -> str`, which appends a
+  clearly-labeled section ("Known recurring patterns for this repository —
+  not evidence from this run, unverified against current findings") only
+  when `planner_input.remembered_patterns` is non-empty, and
+  `TypedLLMPlanner.plan()` (`planning/service.py`) now calls this function
+  instead of referencing the constant directly. This keeps the single
+  source of truth for the actual counts in the structured input while using
+  the system instructions purely for the interpretive guardrail — avoiding
+  duplicating the same data in two places in the prompt.
+- **Wiring pattern:** `AdaptiveInvestigationRuntime.__init__` gained a
+  `fact_recurrence_repository: FactRecurrenceRepository | None = None`
+  keyword parameter, following the exact existing constructor-injection
+  style already used for `store`/`telemetry`/`run_id`; the single
+  `ContextBuilder().build(...)` call site inside its round loop
+  (`replanning.py`) now threads it through on every planning/replanning
+  round — deliberately every round, not just the first, since
+  repository-level memory doesn't change mid-investigation and the query is
+  cheap. `InvestigationWorkflowService` already held a
+  `_fact_recurrence_repository` from ADR-031's write side; the only new
+  wiring needed there was passing that same instance into the
+  `AdaptiveInvestigationRuntime(...)` constructor call
+  (`workflows/investigation.py`). Production FastAPI wiring
+  (`get_fact_recurrence_repository` in `connector_router.py`) required no
+  changes — it already flowed into `InvestigationWorkflowService`.
+- **Additive-only verification:** every new parameter defaults to `None`/
+  empty-tuple, so every existing caller of `ContextBuilder.build()`,
+  `AdaptiveInvestigationRuntime.__init__`, and `PlannerInput` construction
+  needed zero changes; this was confirmed by running the full suite after
+  each of the 4 implementation steps before writing any new test.
+- **End-to-end proof, not just unit coverage:** beyond the 6 new unit tests
+  (`test_typed_investigation_planner.py`'s new
+  `RepositoryMemoryReadPathTests` and `RepositoryMemoryPromptTests` classes,
+  covering: an unpromoted count of 2 stays invisible; a promoted count of 3
+  surfaces as `fact_type` + `occurrence_count`; a different repository's
+  promoted pattern never leaks; the system-instructions section is present
+  only when patterns exist), a scratch script drove
+  `InvestigationWorkflowService` through 3 real fake-provider investigations
+  of `octo-org/analytics` (promoting `changed_file` and
+  `changed_file_matches_failure_file` at the 3rd), then a real 4th
+  investigation with a recording planner client that captured the actual
+  `PlannerInput` object passed to `TypedLLMPlanner.plan()`. The 1st run's
+  captured `remembered_patterns` was `()`; the 4th run's was
+  `[{"fact_type": "changed_file", "occurrence_count": 3}, {"fact_type":
+  "changed_file_matches_failure_file", "occurrence_count": 3}]` — proving
+  the wiring works through the real completion path, not just against
+  `ContextBuilder` in isolation.
+- **Validation:** `uv run python -m unittest discover -s tests -v` from
+  `services/api` after every step — 479 tests (`OK (skipped=6)`) through
+  steps 1-4 (purely additive, no new tests yet), 485 tests (`OK
+  (skipped=6)`) after step 5's new tests. The 6 skips are the pre-existing
+  opt-in PostgreSQL suite, unrelated to this change.
+- **Unresolved question:** ADR-031's Option C (richer LLM-proposed memory —
+  naming aliases, narrative root-cause categories, validated by its own
+  deterministic acceptance gate) remains deferred; this change only
+  surfaces the bare deterministic count ADR-031 already persists, per the
+  ADR's explicit reconsideration trigger.
+
 ## 2026-08-27 — Closing the PR-to-file gap, and why filtering by relationship kind mattered
 
 - **Concept:** Follow-up to the relationship-graph entry below. `ChangedFileFact`

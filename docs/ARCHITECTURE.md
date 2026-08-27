@@ -52,6 +52,7 @@ POST /v1/pull-request-inspections          -> combined GitHub and Jira facts (fi
 POST /v1/pull-request-merge-readiness      -> synchronous run, policy result, explanation, and facts
 POST /v1/pull-request-merge-readiness-runs -> accepted pending run ID (202)
 POST /v1/investigations                    -> accepted pending investigation run ID (202)
+POST /v1/investigations/extract-grounding  -> proposed grounding fields from free text; never creates a run (200/502)
 GET  /v1/runs/{run_id}                     -> persisted current run snapshot (merge-readiness or investigation)
 GET  /health                               -> liveness check
 ```
@@ -83,7 +84,8 @@ services/api/app/
 │   ├── code_diagnosis/    # Grounded code-location findings + recommendations
 │   ├── fact_derivation/   # Evidence -> deterministic Fact derivation
 │   ├── hypotheses/        # Hypothesis generation, validation, rendering
-│   └── planning/          # Typed LLM planner + deterministic plan validation
+│   ├── planning/          # Typed LLM planner + deterministic plan validation
+│   └── grounding_extraction/ # Typed LLM extraction of grounding fields from free text (pre-step, never creates a run)
 ├── explanations/           # Merge-readiness natural-language explanation generation
 ├── diagnostics/            # Standalone, explicitly-invoked provider-boundary CLIs
 ├── evals/                  # Offline quality/regression harness
@@ -108,6 +110,7 @@ apps/web/src/
     ├── responseValidation.ts               # Untrusted network JSON -> typed union
     ├── investigationRequest.ts              # Investigation-specific request shaping
     ├── api.ts / investigationApi.test.ts     # Backend /v1 calls
+    ├── groundingExtractionApi.test.ts        # extract-grounding call + confirm-then-submit flow
     ├── apiError.ts                            # Client failure representation
     ├── runPolling.ts                           # Shared snapshot-polling loop
     ├── useRunSnapshot.ts                        # Polling hook used by both dashboards
@@ -374,6 +377,37 @@ these were built incrementally under the V2.5–V2.16 milestones tracked in
 [Part 3's implementation sequence](#implementation-sequence) rather than each
 getting a separate decision record. [ADR-023](decisions/ADR-023-bounded-tool-retry-policy.md) covers the retry policy specifically.
 
+## Grounding extraction: natural-language pre-step (Implemented)
+
+`investigations/grounding_extraction/` lets a caller submit a plain-English
+incident description instead of filling in `InvestigationRequest`'s
+grounding fields by hand. It is a stateless pre-step, not a change to
+`InvestigationRequest` or a new request lifecycle state.
+
+**`TypedGroundingExtractor`** (`grounding_extraction/service.py`) mirrors
+`TypedLLMPlanner` exactly: it sends a `GroundingExtractionInput` (free text
+plus any fields the caller already confirmed) through the same injected
+`TypedLLMClient` and parses only a `GroundingExtractionOutput`, whose five
+fields (`repository_owner`, `repository_name`, `incident_reference`,
+`deployment_reference`, `pull_request_number`) are all optional — extraction
+may legitimately find only some of them. It distinguishes the same three
+failure modes as the planner (`GroundingExtractionFailureCode.PROVIDER_FAILURE`
+/ `INVALID_RESPONSE` / `EXTRACTION_SCHEMA_INVALID`). The prompt explicitly
+forbids guessing: a field the model is not confident about must be left null.
+
+**`POST /v1/investigations/extract-grounding`** (`api/v1/connector_router.py`)
+calls the extractor, then reuses `has_required_grounding_reference` — the
+exact check `InvestigationRequest.validate_grounding_reference` enforces,
+extracted into a standalone pure function in `investigations/models.py` so
+both call sites share one source of truth instead of two checks that could
+drift apart — to decide `status: "complete"` vs `"needs_clarification"`. This
+endpoint never constructs or persists an `InvestigationRequest` and never
+starts a run; the frontend shows the extracted fields for the user to review
+and edit, then submits through the unchanged, pre-existing
+`POST /v1/investigations`. No new database table, run status, or
+"pending request" concept was introduced — the clarification loop is handled
+entirely client-side by re-submitting free text with more detail.
+
 ## Investigations subsystem structure
 
 `investigations/` (`services/api/app/investigations/`) is the domain package
@@ -517,7 +551,7 @@ support — not an objective determination of the true root cause. A
 come from an offline golden case, engineer confirmation, or later
 operational evidence, none of which the validator consults.
 
-### Repository-scoped Fact-type recurrence (CURRENT/IMPLEMENTED, write side only)
+### Repository-scoped Fact-type recurrence (CURRENT/IMPLEMENTED)
 
 `repository_fact_recurrence` (`database/models.py`,
 `RepositoryFactRecurrenceRow`) is a durable PostgreSQL counter keyed by the
@@ -534,13 +568,32 @@ misstate its provenance. A write failure is reported through existing
 diagnostic telemetry and does not fail an otherwise-successful run, since the
 counter is a side channel outside `GroundedInvestigationResult`.
 
-This is a write path only. Nothing today reads `repository_fact_recurrence`
-back into `ContextBuilder.build()` or any prompt — see
-[ADR-031](decisions/ADR-031-repository-scoped-fact-recurrence-memory.md) for
-the full reasoning, including why exact-Fact-instance recurrence (as opposed
-to Fact-*type* recurrence) can never fire, and why the richer LLM-proposed
-memory shape (naming aliases, narrative root-cause patterns) is deliberately
-deferred as its own future decision.
+**Read path**: `ContextBuilder.build()` (`investigations/planning/prompt.py`)
+takes an optional `fact_recurrence_repository` parameter; when supplied,
+along with a `request_context` carrying `repository_owner`/`repository_name`,
+it queries `FactRecurrenceRepository.list_promoted(...)` and populates
+`PlannerInput.remembered_patterns: tuple[RememberedRepositoryPattern, ...]`
+— each entry only `fact_type` + `occurrence_count`, never a fabricated
+narrative or reconstructed evidence. Only **promoted** rows
+(`promoted_at IS NOT NULL`) are surfaced; one or two occurrences are treated
+as noise, not memory. `AdaptiveInvestigationRuntime` threads the repository
+through via constructor injection (same pattern as `store`/`telemetry`/
+`run_id`) and passes it to every planning/replanning round's `ContextBuilder`
+call, since repository-level memory does not change mid-investigation. When
+`remembered_patterns` is non-empty, the planner's system instructions
+(`investigations/planning/instructions.py`,
+`build_planner_system_instructions`) append a clearly-labeled section stating
+the field is prior-repository history, not evidence from this run and not
+verified against current findings — the planner must never treat it as
+current-run ground truth. Omitting the parameter (existing callers) reproduces
+prior behavior exactly: an empty tuple and no added prompt section.
+
+See [ADR-031](decisions/ADR-031-repository-scoped-fact-recurrence-memory.md)
+for the full write-side reasoning, including why exact-Fact-instance
+recurrence (as opposed to Fact-*type* recurrence) can never fire, and why the
+richer LLM-proposed memory shape (naming aliases, narrative root-cause
+patterns) is deliberately deferred as its own future decision — this read
+path only surfaces the deterministic count ADR-031 already persists.
 
 ## Hypotheses subsystem
 
@@ -868,12 +921,12 @@ persisted/versioned explanations; LLM SDK-level retries or provider fallback
 (`max_retries=0` everywhere, and runtime retries only the tool-execution
 path); hosted eval services, LLM-as-a-judge grading, or production-traffic
 eval collection; dashboards/alerting on top of the exported telemetry;
-OpenTelemetry log export; a *read* path for cross-run repository memory (a
-deterministic write path exists — see
-[Repository-scoped Fact-type recurrence](#repository-scoped-fact-type-recurrence-currentimplemented-write-side-only)
-— but nothing consumes `repository_fact_recurrence` back into planning or
-hypothesis generation yet, and no LLM-proposed richer memory shape has been
-built); and cross-source conflict resolution (the connector graph is
+OpenTelemetry log export; an LLM-proposed richer repository-memory shape
+beyond the deterministic Fact-type recurrence count (see
+[Repository-scoped Fact-type recurrence](#repository-scoped-fact-type-recurrence-currentimplemented) —
+its read path now surfaces promoted counts to the planner, but ADR-031's
+Option C, richer LLM-proposed memory candidates, remains deferred); and
+cross-source conflict resolution (the connector graph is
 single-source-per-kind by construction, so no same-question conflict between
 sources can occur today). `packages/`, `infra/`, and `scripts/` remain empty.
 Neon and Grafana Cloud resources and application deployment are configuration

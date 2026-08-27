@@ -8,10 +8,13 @@
 
 import { ConnectorApiError } from './apiError'
 import {
+  parseGroundingExtractionResponse,
   parseLiveRunStart,
   parseRuntimeRun,
 } from './responseValidation'
 import type {
+  GroundingExtractionInput,
+  GroundingExtractionResponse,
   InvestigationRequest,
   LiveRunStart,
   RuntimeRun,
@@ -118,6 +121,21 @@ export async function startInvestigationRun(
     body: JSON.stringify(request),
   })
   return parseLiveRunStart(body)
+}
+
+
+export async function extractGrounding(
+  input: GroundingExtractionInput,
+): Promise<GroundingExtractionResponse> {
+  // This call only proposes grounding fields for review; it never starts a run.
+  // Starting one still requires the caller to submit through
+  // startInvestigationRun, unchanged, above.
+  const body = await requestJson('/v1/investigations/extract-grounding', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  return parseGroundingExtractionResponse(body)
 }
 
 

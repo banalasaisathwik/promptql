@@ -10,13 +10,24 @@ from app.api.v1.models import (
     ApiError,
     ApiErrorCode,
     ExplanationApiError,
+    GroundingExtractionApiError,
+    GroundingExtractionApiErrorCode,
+    GroundingExtractionResponse,
+    GroundingExtractionStatus,
     LiveRunStartResponse,
     MergeReadinessResponse,
+    MissingGroundingField,
     InvestigationResponse,
     RuntimePersistenceApiError,
 )
 from app.connectors.models import ConnectorRequest
-from app.investigations.models import InvestigationRequest
+from app.investigations.grounding_extraction import (
+    GroundingExtractionError,
+    GroundingExtractionFailureCode,
+    GroundingExtractionInput,
+    TypedGroundingExtractor,
+)
+from app.investigations.models import InvestigationRequest, has_required_grounding_reference
 from app.connectors.protocols import GitHubConnector, JiraConnector
 from app.database import PostgresFactRecurrenceRepository, PostgresRunRepository
 from app.explanations import (
@@ -136,6 +147,10 @@ def get_investigation_workflow(
         telemetry=request.app.state.runtime_telemetry,
         fact_recurrence_repository=fact_recurrence_repository,
     )
+
+
+def get_grounding_extractor(request: Request) -> TypedGroundingExtractor:
+    return TypedGroundingExtractor(request.app.state.investigation_planner_client)
 
 
 async def build_merge_readiness_response(
@@ -265,6 +280,65 @@ async def start_investigation(
     pending_run = await workflow.create_persisted_run(request)
     task_registry.start(_continue_investigation(workflow, pending_run))
     return LiveRunStartResponse(run_id=pending_run.run_id, status=pending_run.status)
+
+
+_GROUNDING_EXTRACTION_FAILURE_CODES = {
+    GroundingExtractionFailureCode.PROVIDER_FAILURE: GroundingExtractionApiErrorCode.PROVIDER_FAILURE,
+    GroundingExtractionFailureCode.INVALID_RESPONSE: GroundingExtractionApiErrorCode.INVALID_RESPONSE,
+    GroundingExtractionFailureCode.EXTRACTION_SCHEMA_INVALID: (
+        GroundingExtractionApiErrorCode.EXTRACTION_SCHEMA_INVALID
+    ),
+}
+
+
+@router.post(
+    "/investigations/extract-grounding",
+    response_model=GroundingExtractionResponse,
+    responses={502: {"model": GroundingExtractionApiError}},
+)
+async def extract_grounding(
+    request: GroundingExtractionInput,
+    extractor: Annotated[TypedGroundingExtractor, Depends(get_grounding_extractor)],
+) -> GroundingExtractionResponse | JSONResponse:
+    try:
+        extracted = await extractor.extract(request)
+    except GroundingExtractionError as error:
+        return JSONResponse(
+            status_code=502,
+            content=GroundingExtractionApiError(
+                code=_GROUNDING_EXTRACTION_FAILURE_CODES[error.code],
+                message=str(error),
+            ).model_dump(mode="json"),
+        )
+
+    if has_required_grounding_reference(
+        extracted.incident_reference,
+        extracted.pull_request_number,
+        extracted.deployment_reference,
+    ):
+        return GroundingExtractionResponse(
+            status=GroundingExtractionStatus.COMPLETE,
+            extracted=extracted,
+        )
+
+    missing = tuple(
+        field
+        for field, value in (
+            (MissingGroundingField.INCIDENT_REFERENCE, extracted.incident_reference),
+            (MissingGroundingField.DEPLOYMENT_REFERENCE, extracted.deployment_reference),
+            (MissingGroundingField.PULL_REQUEST_NUMBER, extracted.pull_request_number),
+        )
+        if value is None
+    )
+    return GroundingExtractionResponse(
+        status=GroundingExtractionStatus.NEEDS_CLARIFICATION,
+        extracted=extracted,
+        missing=missing,
+        question=(
+            "Which incident, deployment, or pull request is this about? "
+            "For example, an incident ID, a deployment reference, or a PR number."
+        ),
+    )
 
 
 async def _continue_live_run(

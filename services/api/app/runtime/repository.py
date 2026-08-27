@@ -63,6 +63,10 @@ class FactRecurrenceRepository(Protocol):
         observed_at: datetime,
     ) -> FactRecurrenceRecord: ...
 
+    def list_promoted(
+        self, repository_owner: str, repository_name: str
+    ) -> tuple[FactRecurrenceRecord, ...]: ...
+
 
 class InMemoryFactRecurrenceRepository:
     def __init__(self) -> None:
@@ -108,3 +112,19 @@ class InMemoryFactRecurrenceRepository:
         self, repository_owner: str, repository_name: str, fact_type: str
     ) -> FactRecurrenceRecord | None:
         return self._records.get((repository_owner, repository_name, fact_type))
+
+    def list_promoted(
+        self, repository_owner: str, repository_name: str
+    ) -> tuple[FactRecurrenceRecord, ...]:
+        return tuple(
+            sorted(
+                (
+                    record
+                    for (owner, name, _fact_type), record in self._records.items()
+                    if owner == repository_owner
+                    and name == repository_name
+                    and record.promoted_at is not None
+                ),
+                key=lambda record: record.fact_type,
+            )
+        )

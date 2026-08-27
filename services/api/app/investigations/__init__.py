@@ -25,6 +25,7 @@ from app.investigations.models import (
     InvestigationIdentifier,
     InvestigationRequest,
     InvestigationResult,
+    has_required_grounding_reference,
     IncidentEvidenceContent,
     IncidentStatus,
     JiraIssueEvidenceContent,
@@ -77,6 +78,13 @@ from app.investigations.planning import (
     TypedLLMPlanner,
     build_planner_input,
 )
+from app.investigations.grounding_extraction import (
+    GroundingExtractionError,
+    GroundingExtractionFailureCode,
+    GroundingExtractionInput,
+    GroundingExtractionOutput,
+    TypedGroundingExtractor,
+)
 
 __all__ = [
     "ChangedFileFact",
@@ -105,6 +113,7 @@ __all__ = [
     "InvestigationIdentifier",
     "InvestigationRequest",
     "InvestigationResult",
+    "has_required_grounding_reference",
     "IncidentEvidenceContent",
     "IncidentStatus",
     "JiraIssueEvidenceContent",
@@ -142,6 +151,11 @@ __all__ = [
     "StepOutputRef",
     "TypedLLMPlanner",
     "build_planner_input",
+    "GroundingExtractionError",
+    "GroundingExtractionFailureCode",
+    "GroundingExtractionInput",
+    "GroundingExtractionOutput",
+    "TypedGroundingExtractor",
     "AdaptiveInvestigationRuntime",
     "AdaptiveInvestigationState",
     "ContinuationReason",

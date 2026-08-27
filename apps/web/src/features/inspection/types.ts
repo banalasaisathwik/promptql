@@ -285,6 +285,40 @@ export interface InvestigationRequest {
   environment?: string | null
 }
 
+// The extraction endpoint only proposes grounding fields; it never creates a
+// run. known_* fields let a caller that already filled part of the structured
+// form pass those along so extraction does not re-derive or contradict them.
+export interface GroundingExtractionInput {
+  description: string
+  known_repository_owner?: string | null
+  known_repository_name?: string | null
+  known_incident_reference?: string | null
+  known_deployment_reference?: string | null
+  known_pull_request_number?: number | null
+}
+
+export interface GroundingExtractionOutput {
+  repository_owner: string | null
+  repository_name: string | null
+  incident_reference: string | null
+  deployment_reference: string | null
+  pull_request_number: number | null
+}
+
+export type GroundingExtractionStatus = 'complete' | 'needs_clarification'
+
+export type MissingGroundingField =
+  | 'incident_reference'
+  | 'deployment_reference'
+  | 'pull_request_number'
+
+export interface GroundingExtractionResponse {
+  status: GroundingExtractionStatus
+  extracted: GroundingExtractionOutput
+  missing: MissingGroundingField[]
+  question: string | null
+}
+
 export interface InvestigationEvidence {
   evidence_id: string
   source: string

@@ -1,4 +1,6 @@
 import unittest
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -14,6 +16,7 @@ from app.explanations import (
 )
 from app.investigations import InvestigationRequest, InvestigationResult
 from app.investigations.planning import (
+    ContextBuilder,
     InvestigationPlan,
     InvestigationPlannerError,
     Literal,
@@ -24,6 +27,7 @@ from app.investigations.planning import (
     TypedLLMPlanner,
     build_planner_input,
 )
+from app.runtime import FACT_RECURRENCE_PROMOTION_THRESHOLD, InMemoryFactRecurrenceRepository
 from app.tools.models import TOOL_DEFINITIONS
 
 
@@ -221,6 +225,112 @@ class TypedPlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Do not execute tools", client.request.system_instructions)
         self.assertIn("Do not create authoritative facts", client.request.system_instructions)
         self.assertIn("root-cause claims", client.request.system_instructions)
+
+
+class RepositoryMemoryReadPathTests(unittest.TestCase):
+    def _build(self, fact_recurrence_repository, request):
+        return ContextBuilder().build(
+            request.question,
+            (),
+            (),
+            (),
+            TOOL_DEFINITIONS,
+            request_context=request,
+            fact_recurrence_repository=fact_recurrence_repository,
+        )
+
+    def test_unpromoted_pattern_is_not_surfaced(self) -> None:
+        repository = InMemoryFactRecurrenceRepository()
+        for _ in range(FACT_RECURRENCE_PROMOTION_THRESHOLD - 1):
+            repository.record_occurrence(
+                "octo-org", "analytics", "changed_file", uuid4(), datetime.now(UTC)
+            )
+
+        planner_input = self._build(repository, _request())
+
+        self.assertEqual(planner_input.remembered_patterns, ())
+
+    def test_promoted_pattern_is_surfaced_as_fact_type_and_count(self) -> None:
+        repository = InMemoryFactRecurrenceRepository()
+        for _ in range(FACT_RECURRENCE_PROMOTION_THRESHOLD):
+            repository.record_occurrence(
+                "octo-org", "analytics", "changed_file", uuid4(), datetime.now(UTC)
+            )
+
+        planner_input = self._build(repository, _request())
+
+        self.assertEqual(len(planner_input.remembered_patterns), 1)
+        remembered = planner_input.remembered_patterns[0]
+        self.assertEqual(remembered.fact_type, "changed_file")
+        self.assertEqual(remembered.occurrence_count, FACT_RECURRENCE_PROMOTION_THRESHOLD)
+
+    def test_another_repositorys_promoted_pattern_does_not_leak(self) -> None:
+        repository = InMemoryFactRecurrenceRepository()
+        for _ in range(FACT_RECURRENCE_PROMOTION_THRESHOLD):
+            repository.record_occurrence(
+                "other-org", "other-repo", "changed_file", uuid4(), datetime.now(UTC)
+            )
+
+        planner_input = self._build(repository, _request())
+
+        self.assertEqual(planner_input.remembered_patterns, ())
+
+    def test_missing_repository_still_returns_empty_tuple(self) -> None:
+        planner_input = ContextBuilder().build(
+            _request().question, (), (), (), TOOL_DEFINITIONS, request_context=_request()
+        )
+
+        self.assertEqual(planner_input.remembered_patterns, ())
+
+
+class RepositoryMemoryPromptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_system_instructions_omit_section_when_no_remembered_patterns(self) -> None:
+        class RecordingClient:
+            provider = FakeLLMClient.provider
+            model = "recording"
+            request = None
+
+            async def generate_typed(self, request):
+                self.request = request
+                return {"output": _plan().model_dump(mode="json")}
+
+        client = RecordingClient()
+        await TypedLLMPlanner(client).plan(build_planner_input(_request(), _result(), TOOL_DEFINITIONS))
+
+        self.assertNotIn("Known recurring patterns", client.request.system_instructions)
+
+    async def test_system_instructions_include_labeled_section_when_remembered_patterns_present(
+        self,
+    ) -> None:
+        repository = InMemoryFactRecurrenceRepository()
+        for _ in range(FACT_RECURRENCE_PROMOTION_THRESHOLD):
+            repository.record_occurrence(
+                "octo-org", "analytics", "changed_file", uuid4(), datetime.now(UTC)
+            )
+        planner_input = ContextBuilder().build(
+            _request().question,
+            (),
+            (),
+            CHANGED_FILE_EVIDENCE_FIXTURES[FIXTURE_PULL_REQUEST],
+            TOOL_DEFINITIONS,
+            request_context=_request(),
+            fact_recurrence_repository=repository,
+        )
+
+        class RecordingClient:
+            provider = FakeLLMClient.provider
+            model = "recording"
+            request = None
+
+            async def generate_typed(self, request):
+                self.request = request
+                return {"output": _plan().model_dump(mode="json")}
+
+        client = RecordingClient()
+        await TypedLLMPlanner(client).plan(planner_input)
+
+        self.assertIn("Known recurring patterns for this repository", client.request.system_instructions)
+        self.assertIn("not evidence from this run", client.request.system_instructions)
 
 
 if __name__ == "__main__":

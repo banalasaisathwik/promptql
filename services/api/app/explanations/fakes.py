@@ -1,3 +1,5 @@
+import re
+
 from app.explanations.models import (
     GeneratedExplanation,
     LLMProviderName,
@@ -141,6 +143,9 @@ def _default_investigation_output(request: TypedLLMRequest) -> object | None:
                 )
         return InvestigationPlan(steps=tuple(steps)) if steps else None
 
+    if request.output_model.__name__ == "GroundingExtractionOutput":
+        return _extract_grounding_fields_from_description(request.input)
+
     if request.output_model.__name__ == "HypothesisGenerationOutput":
         from app.investigations.hypotheses import (
             CandidateHypothesis,
@@ -259,3 +264,53 @@ def _default_investigation_output(request: TypedLLMRequest) -> object | None:
         )
 
     return None
+
+
+_REPOSITORY_SLUG_PATTERN = re.compile(
+    r"\b([A-Za-z0-9][A-Za-z0-9_.-]*)/([A-Za-z0-9][A-Za-z0-9_.-]*)\b"
+)
+_PULL_REQUEST_PATTERN = re.compile(
+    r"\b(?:pr|pull request)[:\s]*#?(\d+)\b", re.IGNORECASE
+)
+
+
+_IDENTIFIER_WITH_DIGIT = r"[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*"
+_DEPLOYMENT_PATTERN = re.compile(
+    rf"\bdeploy(?:ment)?[:\s]*#?({_IDENTIFIER_WITH_DIGIT})\b", re.IGNORECASE
+)
+_INCIDENT_PATTERN = re.compile(
+    rf"\bincident[:\s]*#?({_IDENTIFIER_WITH_DIGIT})\b", re.IGNORECASE
+)
+
+
+def _extract_grounding_fields_from_description(extraction_input: object) -> object:
+    from app.investigations.grounding_extraction import GroundingExtractionOutput
+
+    description = extraction_input.description
+    repository_match = _REPOSITORY_SLUG_PATTERN.search(description)
+    pull_request_match = _PULL_REQUEST_PATTERN.search(description)
+    deployment_match = _DEPLOYMENT_PATTERN.search(description)
+    incident_match = _INCIDENT_PATTERN.search(description)
+
+    return GroundingExtractionOutput(
+        repository_owner=(
+            extraction_input.known_repository_owner
+            or (repository_match.group(1) if repository_match else None)
+        ),
+        repository_name=(
+            extraction_input.known_repository_name
+            or (repository_match.group(2) if repository_match else None)
+        ),
+        incident_reference=(
+            extraction_input.known_incident_reference
+            or (f"incident:{incident_match.group(1)}" if incident_match else None)
+        ),
+        deployment_reference=(
+            extraction_input.known_deployment_reference
+            or (f"deployment:{deployment_match.group(1)}" if deployment_match else None)
+        ),
+        pull_request_number=(
+            extraction_input.known_pull_request_number
+            or (int(pull_request_match.group(1)) if pull_request_match else None)
+        ),
+    )

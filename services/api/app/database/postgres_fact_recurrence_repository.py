@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import and_, case
+from sqlalchemy import and_, case, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
@@ -77,3 +77,24 @@ class PostgresFactRecurrenceRepository:
                 "Runtime persistence is unavailable.", run_id
             ) from None
         return _read_record(stored_row)
+
+    def list_promoted(
+        self, repository_owner: str, repository_name: str
+    ) -> tuple[FactRecurrenceRecord, ...]:
+        select_statement = (
+            select(RepositoryFactRecurrenceRow)
+            .where(
+                RepositoryFactRecurrenceRow.repository_owner == repository_owner,
+                RepositoryFactRecurrenceRow.repository_name == repository_name,
+                RepositoryFactRecurrenceRow.promoted_at.is_not(None),
+            )
+            .order_by(RepositoryFactRecurrenceRow.fact_type)
+        )
+        try:
+            with self._session_factory() as session:
+                stored_rows = session.execute(select_statement).scalars().all()
+        except SQLAlchemyError:
+            raise RunPersistenceError(
+                "Runtime persistence is unavailable.", None
+            ) from None
+        return tuple(_read_record(stored_row) for stored_row in stored_rows)

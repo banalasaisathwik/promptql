@@ -35,6 +35,7 @@ from app.observability.contracts import (
     InvestigationStageResult,
 )
 from app.observability.runtime_telemetry import RuntimeTelemetry
+from app.runtime import FactRecurrenceRepository
 from app.tools.models import ToolDefinition, ToolOutcome
 
 
@@ -140,6 +141,7 @@ class AdaptiveInvestigationRuntime:
         *,
         telemetry: RuntimeTelemetry | None = None,
         run_id: UUID | None = None,
+        fact_recurrence_repository: FactRecurrenceRepository | None = None,
     ) -> None:
         self._planner = planner
         self._validator = validator
@@ -147,6 +149,7 @@ class AdaptiveInvestigationRuntime:
         self._store = store
         self._telemetry = telemetry
         self._run_id = run_id
+        self._fact_recurrence_repository = fact_recurrence_repository
 
     async def investigate(
         self,
@@ -200,6 +203,7 @@ class AdaptiveInvestigationRuntime:
                     request_context=request_context,
                     telemetry=self._telemetry,
                     run_id=self._run_id,
+                    fact_recurrence_repository=self._fact_recurrence_repository,
                 )
                 planner_client = getattr(self._planner, "_client", None)
                 provider = getattr(getattr(planner_client, "provider", None), "value", None)

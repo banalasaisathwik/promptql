@@ -8,8 +8,10 @@ from app.investigations.planning.models import (
     PlannerInput,
     PlannerToolDefinition,
     PlannerToolInputField,
+    RememberedRepositoryPattern,
 )
 from app.observability.runtime_telemetry import RuntimeTelemetry
+from app.runtime import FactRecurrenceRepository
 from app.tools.models import ToolDefinition
 
 
@@ -60,7 +62,20 @@ class ContextBuilder:
         request_context: InvestigationRequest | None = None,
         telemetry: RuntimeTelemetry | None = None,
         run_id: UUID | None = None,
+        fact_recurrence_repository: FactRecurrenceRepository | None = None,
     ) -> PlannerInput:
+        remembered_patterns: tuple[RememberedRepositoryPattern, ...] = ()
+        if fact_recurrence_repository is not None and request_context is not None:
+            remembered_patterns = tuple(
+                RememberedRepositoryPattern(
+                    fact_type=record.fact_type,
+                    occurrence_count=record.occurrence_count,
+                )
+                for record in fact_recurrence_repository.list_promoted(
+                    request_context.repository_owner,
+                    request_context.repository_name,
+                )
+            )
         planner_input = PlannerInput(
             investigation_goal=investigation_goal,
             request_context=request_context,
@@ -81,6 +96,7 @@ class ContextBuilder:
             planning_round=planning_round,
             max_planning_rounds=max_planning_rounds,
             allowed_tools=tuple(_tool_context(definition) for definition in sorted(allowed_tools, key=lambda item: item.tool_id)),
+            remembered_patterns=remembered_patterns,
         )
         if telemetry is not None and run_id is not None:
             telemetry.record_context_size_measured(

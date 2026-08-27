@@ -10,7 +10,7 @@ from app.investigations.planning.errors import InvestigationPlannerError
 from app.investigations.planning.instructions import (
     PLANNER_PROMPT_ID,
     PLANNER_PROMPT_VERSION,
-    PLANNER_SYSTEM_INSTRUCTIONS,
+    build_planner_system_instructions,
 )
 from app.investigations.planning.models import (
     InvestigationPlan,
@@ -29,7 +29,7 @@ class TypedLLMPlanner:
         try:
             response = await self._client.generate_typed(
                 TypedLLMRequest(
-                    system_instructions=PLANNER_SYSTEM_INSTRUCTIONS,
+                    system_instructions=build_planner_system_instructions(planner_input),
                     input=planner_input,
                     output_model=InvestigationPlan,
                 )
