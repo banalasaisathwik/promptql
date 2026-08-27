@@ -57,6 +57,29 @@ class OpenRouterDiagnosticTests(unittest.TestCase):
         self.assertNotIn("workflow", COMPONENT_STAGES)
         self.assertEqual(client_factory.call_count, 3)
 
+    def test_workflow_stage_failure_reports_a_sanitized_exception_message(self) -> None:
+        fake_secret = "sk-FAKESECRETVALUE1234567890"
+
+        def _raise_unexpected_error(*_args, **_kwargs):
+            raise AttributeError(
+                f"'NoneType' object has no attribute 'candidates' near {fake_secret}"
+            )
+
+        with patch(
+            "app.diagnostics.openrouter._typed_client",
+            side_effect=lambda _settings, _model: (FakeLLMClient(), object()),
+        ), patch(
+            "app.diagnostics.openrouter.InvestigationWorkflowService",
+            side_effect=_raise_unexpected_error,
+        ):
+            result = asyncio.run(run_workflow_call(_settings()))
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["exception_class"], "AttributeError")
+        self.assertIn("exception_message", result)
+        self.assertNotIn(fake_secret, result["exception_message"])
+        self.assertNotIn(fake_secret, json.dumps(result))
+
     def test_plain_gate_accepts_a_transport_response_with_a_choice(self) -> None:
         class Completions:
             async def create(self, **_request):

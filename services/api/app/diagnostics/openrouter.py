@@ -663,6 +663,7 @@ async def run_workflow_call(settings: LLMSettings) -> dict[str, object]:
             "requested_models": models,
             "maximum_provider_calls": 5,
             "exception_class": error.__class__.__name__,
+            "exception_message": _sanitize_message(str(error), settings.api_key),
         }
     finally:
         for client in clients:
