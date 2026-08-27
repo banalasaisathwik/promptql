@@ -1,5 +1,3 @@
-pass
-
 import logging
 from base64 import b64encode
 from dataclasses import dataclass, field
@@ -45,8 +43,6 @@ MAX_SPAN_EXPORT_BATCH_SIZE = 512
 
 
 class _ExportWarning:
-    pass
-
     def __init__(self, event_logger: StructuredEventLogger, signal: str) -> None:
         self._event_logger = event_logger
         self._signal = signal
@@ -67,8 +63,6 @@ class _ExportWarning:
 
 
 class FailureIsolatingSpanExporter(SpanExporter):
-    pass
-
     def __init__(
         self,
         inner: SpanExporter,
@@ -115,8 +109,6 @@ class FailureIsolatingSpanExporter(SpanExporter):
 
 
 class FailureIsolatingMetricExporter(MetricExporter):
-    pass
-
     def __init__(
         self,
         inner: MetricExporter,
@@ -176,11 +168,7 @@ class FailureIsolatingMetricExporter(MetricExporter):
 
 
 @dataclass
-
-
 class Observability:
-    pass
-
     runtime_telemetry: RuntimeTelemetry
     tracer_provider: TracerProvider | None = None
     meter_provider: MeterProvider | None = None
@@ -234,9 +222,6 @@ class Observability:
 
 
 def _quiet_otlp_internal_loggers() -> None:
-    pass
-
-
     for logger_name in (
         "opentelemetry.exporter.otlp.proto.http.trace_exporter",
         "opentelemetry.exporter.otlp.proto.http.metric_exporter",
@@ -285,9 +270,6 @@ def _langfuse_exporter_configuration(
 def create_observability(
     settings: TelemetrySettings | None = None,
 ) -> Observability:
-    pass
-
-
     event_logger = StructuredEventLogger(configure_structured_logger())
     try:
         resolved_settings = settings or TelemetrySettings.from_environment()

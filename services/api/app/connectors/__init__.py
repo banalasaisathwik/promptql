@@ -65,8 +65,3 @@ def __getattr__(name: str):
 
         return FakeIncidentSource
     raise AttributeError(name)
-"""Public import surface for V1 connector contracts and deterministic fakes.
-
-Re-exporting supported types here gives callers one stable module to import from
-while fixtures remain an implementation/testing concern in ``fixtures.py``.
-"""

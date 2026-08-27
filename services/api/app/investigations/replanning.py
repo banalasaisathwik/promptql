@@ -26,8 +26,6 @@ from app.investigations.planning import (
     PlannedInvestigation,
     PlannerInput,
     PlannerMetadata,
-    PlannerToolDefinition,
-    PlannerToolInputField,
     TypedLLMPlanner,
 )
 from app.investigations.planning.instructions import PLANNER_PROMPT_VERSION
@@ -74,21 +72,6 @@ class AdaptiveInvestigationState(ContractModel):
     action_history: tuple[ActionSummary, ...]
     remaining_tool_calls: int = Field(ge=0)
     continuation_reason: ContinuationReason
-
-
-def _tool_context(definition: ToolDefinition) -> PlannerToolDefinition:
-    schema = definition.input_schema
-    required = frozenset(schema.get("required", ()))
-    return PlannerToolDefinition(
-        tool_id=definition.tool_id,
-        description=definition.description,
-        input_fields=tuple(
-            PlannerToolInputField(name=name, required=name in required)
-            for name in sorted(schema.get("properties", {}))
-        ),
-        input_schema=schema,
-        output_schema=definition.plan_output_model.model_json_schema(),
-    )
 
 
 def _planner_failure_diagnostics(

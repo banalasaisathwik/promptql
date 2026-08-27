@@ -149,9 +149,6 @@ class ToolDefinition(ContractModel):
     tool_id: InvestigationToolId
     description: NonEmptyString
     input_model: ToolInputModel
-    output_model: type[ToolResult]
-
-
     plan_output_model: type[ContractModel]
     read_only: bool = True
     timeout_seconds: Annotated[float, Field(gt=0)] | None = None
@@ -172,56 +169,48 @@ TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         tool_id=InvestigationToolId.GET_COMMIT,
         description="Retrieve normalized evidence for one Git commit.",
         input_model=GitHubCommitEvidenceRequest,
-        output_model=ToolResult,
         plan_output_model=GetCommitPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_DEPLOYMENTS,
         description="Retrieve normalized evidence for one deployment.",
         input_model=DeploymentEvidenceRequest,
-        output_model=ToolResult,
         plan_output_model=GetDeploymentPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_DIFF,
         description="Retrieve normalized changed-file and diff-hunk evidence for one pull request.",
         input_model=GitHubPullRequestEvidenceRequest,
-        output_model=ToolResult,
         plan_output_model=GetDiffPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_FAILURE_LOCATION,
         description="Retrieve the normalized failure location for one engineering incident.",
         input_model=FailureLocationEvidenceRequest,
-        output_model=ToolResult,
         plan_output_model=GetFailureLocationPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_INCIDENT,
         description="Retrieve normalized evidence for one engineering incident.",
         input_model=IncidentEvidenceRequest,
-        output_model=ToolResult,
         plan_output_model=GetIncidentPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_JIRA_ISSUE,
         description="Retrieve normalized evidence for one Jira issue.",
         input_model=GetJiraIssueInput,
-        output_model=ToolResult,
         plan_output_model=GetJiraIssuePlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_PULL_REQUEST,
         description="Retrieve normalized evidence for one GitHub pull request.",
         input_model=GitHubPullRequestEvidenceRequest,
-        output_model=ToolResult,
         plan_output_model=GetPullRequestPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.QUERY_TELEMETRY,
         description="Retrieve bounded telemetry evidence for one service and time interval.",
         input_model=TelemetryWindowEvidenceRequest,
-        output_model=ToolResult,
         plan_output_model=QueryTelemetryPlanOutput,
         timeout_seconds=30.0,
     ),

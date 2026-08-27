@@ -1,5 +1,35 @@
 # Learning log
 
+## 2026-08-27 — Sanitizing the workflow diagnostic's failure message, not just its class
+
+- **Concept:** `run_workflow_call`'s `except Exception` branch (the outer
+  workflow-stage diagnostic in `app/diagnostics/openrouter.py`) previously
+  reported only `exception_class` on an unexpected failure — the class name
+  alone, with no message, so an operator debugging a live diagnostic run
+  couldn't see *why* the workflow stage broke. Every other diagnostic stage
+  in the same file already routes its error text through `_sanitize_message`
+  before returning it (redacting the configured API key and any `Bearer
+  ...` token), so the fix reuses that exact helper for the workflow stage's
+  message too, rather than returning the raw `str(error)`.
+- **Design decision:** deliberately did *not* return a full traceback here —
+  the adjacent code comment (`app/diagnostics/openrouter.py` around the
+  `except Exception` block) explains why: a traceback can carry local
+  variable reprs (e.g. `LLMSettings.api_key` printed inside a stack frame)
+  that `_sanitize_message`'s regex/substring redaction wasn't designed to
+  catch, so keeping the diagnostic to `str(error)` — the same shape every
+  other stage already sanitizes — keeps the redaction guarantee intact
+  instead of quietly widening the attack surface for a key leak.
+- **Validation:** new
+  `test_workflow_stage_failure_reports_a_sanitized_exception_message` in
+  `tests/unit/test_openrouter_diagnostics.py` forces an
+  `InvestigationWorkflowService` construction failure whose message embeds
+  a fake secret, then asserts the secret is absent both from
+  `result["exception_message"]` and from `json.dumps(result)` (the latter
+  guards against the secret leaking through some other field of the same
+  result dict). Full backend suite: `uv run python -m unittest discover -s
+  tests -v` from `services/api` — 445 tests, `OK (skipped=6)`.
+- **Unresolved:** none — this was a small, self-contained diagnostic fix.
+
 ## 2026-08-26 — Surfacing a silent evidence-write conflict instead of resolving it
 
 - **Concept:** Not every "silent data loss" bug needs a resolver. A prior

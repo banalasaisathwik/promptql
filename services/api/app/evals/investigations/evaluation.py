@@ -17,7 +17,8 @@ from app.evals.investigations.models import (
     InvestigationTrajectoryObservation,
     ProviderBoundaryObservation,
 )
-from app.evals.models import CountRate, LatencySummary, TokenSummary
+from app.evals.graders import count_rate
+from app.evals.models import LatencySummary, TokenSummary
 from app.explanations import LLMProviderName, LLMTokenUsage, TypedLLMClient
 from app.investigations import (
     DeterministicBaseline,
@@ -553,14 +554,6 @@ def _token_summary(usages: Sequence[LLMTokenUsage]) -> TokenSummary:
     )
 
 
-def _count_rate(numerator: int, denominator: int) -> CountRate:
-    return CountRate(
-        numerator=numerator,
-        denominator=denominator,
-        rate=numerator / denominator if denominator else None,
-    )
-
-
 def _all_boolean_fields(model, *, exclude: frozenset[str] = frozenset()) -> bool:
     return all(
         value
@@ -625,7 +618,7 @@ def aggregate_investigation_observations(
         if field.annotation is bool and name != "generation_boundary_success"
     )
     component_pass_rates = {
-        name: _count_rate(
+        name: count_rate(
             sum(
                 getattr(observation.components, name)
                 for observation in component_eligible_observations
@@ -635,7 +628,7 @@ def aggregate_investigation_observations(
         for name in component_names
     }
     trajectory_pass_rates = {
-        name: _count_rate(
+        name: count_rate(
             sum(
                 getattr(observation.trajectory, name)
                 for observation in trajectory_eligible_observations
@@ -654,23 +647,23 @@ def aggregate_investigation_observations(
     return InvestigationEvalMetrics(
         planned_samples=planned_samples,
         completed_samples=len(observations),
-        provider_success=_count_rate(provider_successes, len(boundaries)),
-        schema_valid=_count_rate(
+        provider_success=count_rate(provider_successes, len(boundaries)),
+        schema_valid=count_rate(
             schema_successes,
             len(provider_success_boundaries),
         ),
-        trajectory_generation_success=_count_rate(
+        trajectory_generation_success=count_rate(
             len(trajectory_eligible_observations),
             len(observations),
         ),
-        component_quality=_count_rate(
+        component_quality=count_rate(
             sum(
                 _all_boolean_fields(item.components)
                 for item in component_eligible_observations
             ),
             len(component_eligible_observations),
         ),
-        trajectory_quality=_count_rate(
+        trajectory_quality=count_rate(
             sum(
                 _all_boolean_fields(
                     item.trajectory,

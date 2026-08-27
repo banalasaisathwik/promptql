@@ -42,6 +42,7 @@ from app.runtime.errors import (
     RunRecordInvalidError,
     RunStateConflictError,
 )
+from app.runtime.state import _replace_run
 
 
 PolicyEvaluator = Callable[
@@ -54,12 +55,6 @@ DurationClock = Callable[[], int]
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-def _replace_run(run: MergeReadinessRun, **updates) -> MergeReadinessRun:
-    values = run.model_dump()
-    values.update(updates)
-    return MergeReadinessRun.model_validate(values)
 
 
 class MergeReadinessWorkflowService:

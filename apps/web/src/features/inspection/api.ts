@@ -9,16 +9,11 @@
 import { ConnectorApiError } from './apiError'
 import {
   parseLiveRunStart,
-  parseMergeReadiness,
   parseRuntimeRun,
-  parseScenarioCatalog,
 } from './responseValidation'
 import type {
-  ConnectorRequest,
   InvestigationRequest,
-  FixtureScenario,
   LiveRunStart,
-  PullRequestMergeReadiness,
   RuntimeRun,
 } from './types'
 
@@ -111,52 +106,6 @@ async function requestMergeReadiness(
     message = body.message
   }
   throw new ConnectorApiError(message, response.status)
-}
-
-
-export async function fetchFixtureScenarios(
-  signal?: AbortSignal,
-): Promise<FixtureScenario[]> {
-  // The relative URL works through Vite's development proxy and through a
-  // production same-origin router; browser code never hardcodes localhost.
-  const body = await requestJson('/v1/demo/pull-request-scenarios', { signal })
-  return parseScenarioCatalog(body)
-}
-
-
-export async function analyzePullRequestMergeReadiness(
-  request: ConnectorRequest,
-): Promise<PullRequestMergeReadiness> {
-  const body = await requestMergeReadiness('/v1/pull-request-merge-readiness', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  })
-
-  return parseMergeReadiness(body)
-}
-
-
-export async function startLiveMergeReadinessRun(
-  request: ConnectorRequest,
-): Promise<LiveRunStart> {
-  const body = await requestJson('/v1/pull-request-merge-readiness-runs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  })
-  return parseLiveRunStart(body)
-}
-
-
-export async function fetchMergeReadinessRun(
-  runId: string,
-  signal?: AbortSignal,
-): Promise<PullRequestMergeReadiness> {
-  const body = await requestMergeReadiness(`/v1/runs/${encodeURIComponent(runId)}`, {
-    signal,
-  })
-  return parseMergeReadiness(body)
 }
 
 

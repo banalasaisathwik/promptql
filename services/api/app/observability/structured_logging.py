@@ -1,5 +1,3 @@
-pass
-
 import json
 import logging
 import sys
@@ -69,8 +67,6 @@ def _json_value(value: Any) -> str | int | float | bool | None:
 
 
 def configure_structured_logger() -> logging.Logger:
-    pass
-
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(logging.INFO)
     logger.propagate = False
@@ -88,8 +84,6 @@ def configure_structured_logger() -> logging.Logger:
 
 
 class StructuredEventLogger:
-    pass
-
     def __init__(self, logger: logging.Logger | None = None) -> None:
         self._logger = logger or configure_structured_logger()
         self._broker: LiveEventBroker | None = None
@@ -129,7 +123,5 @@ class StructuredEventLogger:
 
 
 class NoOpStructuredEventLogger:
-    pass
-
     def emit(self, _event: str, _level: int = logging.INFO, **_fields: Any) -> None:
         return
