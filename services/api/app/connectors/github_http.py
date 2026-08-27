@@ -1,20 +1,18 @@
 from dataclasses import dataclass
 import re
-from typing import Any, TypeVar
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ValidationError
 
 from app.connectors.errors import (
     GitHubConnectorError,
     GitHubForbiddenError,
     GitHubInvalidResponseError,
     GitHubNotFoundError,
-    GitHubRateLimitedError,
-    GitHubTimeoutError,
-    GitHubUnauthorizedError,
-    GitHubUpstreamUnavailableError,
+)
+from app.connectors.github_http_base import (
+    BaseHttpGitHubConnector,
+    GitHubRequestObservation,
 )
 from app.connectors.github_http_models import (
     GitHubBranchProtectionResponse,
@@ -36,23 +34,14 @@ from app.connectors.models import (
     PullRequestState,
     RequiredCheck,
 )
-from app.observability import FailureCategory, NoOpRuntimeTelemetry, RuntimeTelemetry
+from app.observability import FailureCategory, RuntimeTelemetry
 
 
-GITHUB_API_VERSION = "2026-03-10"
 MAX_PAGES = 10
-PAGE_SIZE = 100
 JIRA_KEY_PATTERN = re.compile(
     r"(?<![A-Z0-9])([A-Z][A-Z0-9]*-[1-9][0-9]*)(?![0-9])",
     re.IGNORECASE,
 )
-ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
-
-
-@dataclass
-class RequestObservation:
-    page_count: int = 0
-    status_class: str = "none"
 
 
 @dataclass(frozen=True)
@@ -62,7 +51,7 @@ class RequirementEvidence:
     required_approval_count: int | None
 
 
-class HttpGitHubConnector:
+class HttpGitHubConnector(BaseHttpGitHubConnector):
     source = ConnectorSource.LIVE
 
 
@@ -72,22 +61,14 @@ class HttpGitHubConnector:
         telemetry: RuntimeTelemetry | None = None,
         max_pages: int = MAX_PAGES,
     ) -> None:
-        if max_pages <= 0:
-            raise ValueError("max_pages must be positive")
-        self._client = client
-        self._telemetry = telemetry or NoOpRuntimeTelemetry()
-        self._max_pages = max_pages
-
-
-    async def aclose(self) -> None:
-        await self._client.aclose()
+        super().__init__(client, telemetry, max_pages)
 
 
     async def get_pull_request(
         self,
         request: ConnectorRequest,
     ) -> GitHubPullRequest:
-        observation_data = RequestObservation()
+        observation_data = GitHubRequestObservation()
         with self._telemetry.observe_connector(
             "github",
             self.source.value,
@@ -118,9 +99,12 @@ class HttpGitHubConnector:
     async def _load_pull_request(
         self,
         request: ConnectorRequest,
-        observation: RequestObservation,
+        observation: GitHubRequestObservation,
     ) -> GitHubPullRequest:
-        repository_path = self._repository_path(request)
+        repository_path = self._repository_path(
+            request.repository_owner,
+            request.repository_name,
+        )
         pull_path = f"{repository_path}/pulls/{request.pr_number}"
         raw_pull = await self._get_model(
             pull_path,
@@ -180,17 +164,10 @@ class HttpGitHubConnector:
         )
 
 
-    @staticmethod
-    def _repository_path(request: ConnectorRequest) -> str:
-        owner = quote(request.repository_owner, safe="")
-        repository = quote(request.repository_name, safe="")
-        return f"/repos/{owner}/{repository}"
-
-
     async def _load_reviews(
         self,
         pull_path: str,
-        observation: RequestObservation,
+        observation: GitHubRequestObservation,
     ) -> tuple[tuple[GitHubReviewResponse, ...], bool]:
         try:
             reviews = await self._get_paginated_list(
@@ -207,7 +184,7 @@ class HttpGitHubConnector:
         self,
         repository_path: str,
         base_branch: str,
-        observation: RequestObservation,
+        observation: GitHubRequestObservation,
     ) -> RequirementEvidence:
         encoded_branch = quote(base_branch, safe="")
         try:
@@ -241,7 +218,7 @@ class HttpGitHubConnector:
         repository_path: str,
         head_sha: str,
         requirements: RequirementEvidence,
-        observation: RequestObservation,
+        observation: GitHubRequestObservation,
     ) -> tuple[tuple[RequiredCheck, ...], bool]:
         if not requirements.required_checks_known:
             return (), False
@@ -294,117 +271,6 @@ class HttpGitHubConnector:
             for name in requirements.required_check_names
         )
         return checks, True
-
-
-    async def _get_model(
-        self,
-        path: str,
-        model_type: type[ResponseModel],
-        observation: RequestObservation,
-        params: dict[str, int | str] | None = None,
-    ) -> ResponseModel:
-        payload = await self._request_json(path, observation, params)
-        try:
-            return model_type.model_validate(payload)
-        except ValidationError:
-            raise GitHubInvalidResponseError() from None
-
-
-    async def _get_paginated_list(
-        self,
-        path: str,
-        model_type: type[ResponseModel],
-        observation: RequestObservation,
-    ) -> tuple[ResponseModel, ...]:
-        results: list[ResponseModel] = []
-        for page in range(1, self._max_pages + 1):
-            observation.page_count += 1
-            payload = await self._request_json(
-                path,
-                observation,
-                {"per_page": PAGE_SIZE, "page": page},
-            )
-            if not isinstance(payload, list):
-                raise GitHubInvalidResponseError()
-            try:
-                page_results = [model_type.model_validate(value) for value in payload]
-            except ValidationError:
-                raise GitHubInvalidResponseError() from None
-            results.extend(page_results)
-            if len(page_results) < PAGE_SIZE:
-                return tuple(results)
-        raise GitHubInvalidResponseError()
-
-
-    async def _get_paginated_object_list(
-        self,
-        path: str,
-        page_model: type[BaseModel],
-        list_field: str,
-        observation: RequestObservation,
-    ) -> tuple[Any, ...]:
-        results: list[Any] = []
-        total_count: int | None = None
-        for page in range(1, self._max_pages + 1):
-            observation.page_count += 1
-            response_page = await self._get_model(
-                path,
-                page_model,
-                observation,
-                {"per_page": PAGE_SIZE, "page": page},
-            )
-            page_results = getattr(response_page, list_field)
-            total_count = response_page.total_count
-            results.extend(page_results)
-            if len(results) >= total_count or len(page_results) < PAGE_SIZE:
-                return tuple(results)
-        raise GitHubInvalidResponseError()
-
-
-    async def _request_json(
-        self,
-        path: str,
-        observation: RequestObservation,
-        params: dict[str, int | str] | None = None,
-    ) -> Any:
-        try:
-            response = await self._client.get(path, params=params)
-        except httpx.TimeoutException:
-            raise GitHubTimeoutError() from None
-        except httpx.RequestError:
-            raise GitHubUpstreamUnavailableError() from None
-
-        observation.status_class = f"{response.status_code // 100}xx"
-        self._raise_for_status(response)
-        try:
-            return response.json()
-        except ValueError:
-            raise GitHubInvalidResponseError() from None
-
-
-    @staticmethod
-    def _raise_for_status(response: httpx.Response) -> None:
-        status = response.status_code
-        rate_limited = (
-            status in {403, 429}
-            and (
-                response.headers.get("x-ratelimit-remaining") == "0"
-                or "retry-after" in response.headers
-                or status == 429
-            )
-        )
-        if rate_limited:
-            raise GitHubRateLimitedError()
-        if status == 401:
-            raise GitHubUnauthorizedError()
-        if status == 403:
-            raise GitHubForbiddenError()
-        if status == 404:
-            raise GitHubNotFoundError()
-        if 500 <= status <= 599:
-            raise GitHubUpstreamUnavailableError()
-        if not 200 <= status <= 299:
-            raise GitHubInvalidResponseError()
 
 
     @staticmethod

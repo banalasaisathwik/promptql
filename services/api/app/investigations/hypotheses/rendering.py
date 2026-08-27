@@ -19,6 +19,20 @@ from app.investigations.hypotheses.models import (
     HypothesisKind,
     ValidatedHypothesis,
 )
+from app.investigations.relationship_index import (
+    EntityRef,
+    RelationshipIndex,
+    RelationshipKind,
+    build_relationship_index,
+    find_connecting_facts,
+)
+
+
+_HYPOTHESIS_RELEVANT_RELATIONSHIPS: dict[HypothesisKind, frozenset[RelationshipKind]] = {
+    HypothesisKind.CODE_CHANGE_MAY_HAVE_CONTRIBUTED: frozenset(
+        {RelationshipKind.SAME_FILE_AS_FAILURE, RelationshipKind.OVERLAPS_FAILURE_LINE}
+    ),
+}
 
 
 class GroundedTerminationReason(StrEnum):
@@ -41,6 +55,9 @@ class GroundedHypothesis(ContractModel):
     subject: NonEmptyString
     statement: NonEmptyString
     supporting_fact_ids: tuple[InvestigationIdentifier, ...]
+
+
+    connected_fact_chain: tuple[InvestigationIdentifier, ...] | None = None
 
 
 class GroundedCodeFinding(ContractModel):
@@ -80,6 +97,7 @@ def render_grounded_result(
     evidence: tuple[InvestigationIdentifier, ...] = (),
 ) -> GroundedInvestigationResult:
     facts_by_id = {fact.fact_id: fact for fact in facts}
+    relationship_index = build_relationship_index(facts)
     rendered_hypotheses: list[GroundedHypothesis] = []
     key_fact_ids: list[str] = []
 
@@ -101,6 +119,9 @@ def render_grounded_result(
                 subject=hypothesis.subject,
                 statement=_render_hypothesis_statement(hypothesis),
                 supporting_fact_ids=hypothesis.supporting_fact_ids,
+                connected_fact_chain=_connected_fact_chain(
+                    hypothesis, relationship_index
+                ),
             )
         )
 
@@ -125,6 +146,30 @@ def render_grounded_result(
         key_fact_ids=tuple(key_fact_ids),
         missing_information=missing_information,
     )
+
+
+def _connected_fact_chain(
+    hypothesis: ValidatedHypothesis, index: RelationshipIndex
+) -> tuple[InvestigationIdentifier, ...] | None:
+    relevant_relationships = _HYPOTHESIS_RELEVANT_RELATIONSHIPS.get(hypothesis.kind)
+    if relevant_relationships is None:
+        return None
+    touched_entities: set[EntityRef] = set()
+    for fact_id in hypothesis.supporting_fact_ids:
+        for edge in index.edges:
+            if edge.fact_id == fact_id and edge.relationship in relevant_relationships:
+                touched_entities.add(edge.from_entity)
+                touched_entities.add(edge.to_entity)
+    if len(touched_entities) != 2:
+        return None
+    entity_a, entity_b = sorted(
+        touched_entities,
+        key=lambda entity: (entity.entity_type.value, entity.entity_id),
+    )
+    chain = find_connecting_facts(entity_a, entity_b, index)
+    if not chain:
+        return None
+    return tuple(fact.fact_id for fact in chain)
 
 
 def _render_hypothesis_statement(hypothesis: ValidatedHypothesis) -> str:

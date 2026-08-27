@@ -20,13 +20,10 @@ from app.investigations.models import (
     InvestigationRequest,
     StackFrameEvidenceContent,
 )
+from app.investigations.path_normalization import normalized_path
 
 if TYPE_CHECKING:
     from app.investigations.hypotheses.models import ValidatedHypothesis
-
-
-def _normalized_path(path: str) -> str:
-    return path.replace("\\", "/").removeprefix("./")
 
 
 class CodeContextBuilder:
@@ -41,7 +38,7 @@ class CodeContextBuilder:
             sorted(hypotheses, key=lambda item: item.hypothesis_id)
         )
         relevant_paths = {
-            _normalized_path(item.subject) for item in selected_hypotheses
+            normalized_path(item.subject) for item in selected_hypotheses
         }
         relevant_fact_ids = {
             fact_id
@@ -116,7 +113,7 @@ def _location(
 ) -> CodeContextLocation | None:
     content = evidence.content
     if isinstance(content, ChangedFileEvidenceContent):
-        if _normalized_path(content.path) not in relevant_paths:
+        if normalized_path(content.path) not in relevant_paths:
             return None
         return CodeContextLocation(
             evidence_id=evidence.evidence_id,
@@ -124,7 +121,7 @@ def _location(
             file_path=content.path,
         )
     if isinstance(content, DiffHunkEvidenceContent):
-        if _normalized_path(content.file_path) not in relevant_paths:
+        if normalized_path(content.file_path) not in relevant_paths:
             return None
         first_line = (
             content.new_start
@@ -150,7 +147,7 @@ def _location(
     if isinstance(content, StackFrameEvidenceContent):
         if (
             content.file_path is None
-            or _normalized_path(content.file_path) not in relevant_paths
+            or normalized_path(content.file_path) not in relevant_paths
         ):
             return None
         return CodeContextLocation(

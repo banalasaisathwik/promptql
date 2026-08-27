@@ -16,13 +16,10 @@ from app.investigations.models import (
     FactSet,
     StackFrameEvidenceContent,
 )
+from app.investigations.path_normalization import normalized_path
 
 if TYPE_CHECKING:
     from app.investigations.hypotheses.models import ValidatedHypothesis
-
-
-def _normalized_path(path: str) -> str:
-    return path.replace("\\", "/").removeprefix("./")
 
 
 class DeterministicCodeFindingValidator:
@@ -82,7 +79,7 @@ class DeterministicCodeFindingValidator:
         hypothesis = hypotheses_by_id.get(candidate.hypothesis_id)
         if hypothesis is None:
             return CodeFindingValidationFailureCode.UNKNOWN_HYPOTHESIS
-        if _normalized_path(candidate.file_path) != _normalized_path(hypothesis.subject):
+        if normalized_path(candidate.file_path) != normalized_path(hypothesis.subject):
             return CodeFindingValidationFailureCode.FILE_MISMATCH
 
         selected_facts = []
@@ -110,16 +107,16 @@ class DeterministicCodeFindingValidator:
         if fact_evidence_ids != set(candidate.supporting_evidence_ids):
             return CodeFindingValidationFailureCode.EVIDENCE_RELATIONSHIP_MISMATCH
 
-        normalized_path = _normalized_path(candidate.file_path)
+        candidate_path = normalized_path(candidate.file_path)
         changed_file_observed = any(
             isinstance(item.content, ChangedFileEvidenceContent)
-            and _normalized_path(item.content.path) == normalized_path
+            and normalized_path(item.content.path) == candidate_path
             for item in selected_evidence
         )
         failure_file_observed = any(
             isinstance(item.content, StackFrameEvidenceContent)
             and item.content.file_path is not None
-            and _normalized_path(item.content.file_path) == normalized_path
+            and normalized_path(item.content.file_path) == candidate_path
             for item in selected_evidence
         )
         if not changed_file_observed or not failure_file_observed:
@@ -127,7 +124,7 @@ class DeterministicCodeFindingValidator:
         if candidate.location_evidence_id not in candidate.supporting_evidence_ids:
             return CodeFindingValidationFailureCode.LOCATION_NOT_OBSERVED
         location = evidence_by_id.get(candidate.location_evidence_id)
-        if location is None or _location_path(location) != normalized_path:
+        if location is None or _location_path(location) != candidate_path:
             return CodeFindingValidationFailureCode.LOCATION_NOT_OBSERVED
         return None
 
@@ -135,11 +132,11 @@ class DeterministicCodeFindingValidator:
 def _location_path(evidence: Evidence) -> str | None:
     content = evidence.content
     if isinstance(content, ChangedFileEvidenceContent):
-        return _normalized_path(content.path)
+        return normalized_path(content.path)
     if isinstance(content, DiffHunkEvidenceContent):
-        return _normalized_path(content.file_path)
+        return normalized_path(content.file_path)
     if isinstance(content, StackFrameEvidenceContent) and content.file_path is not None:
-        return _normalized_path(content.file_path)
+        return normalized_path(content.file_path)
     return None
 
 

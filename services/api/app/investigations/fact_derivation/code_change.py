@@ -8,10 +8,7 @@ from app.investigations import (
     StackFrameEvidenceContent,
 )
 from app.investigations.fact_derivation._ids import fact_id, references
-
-
-def _normalized_path(path: str) -> str:
-    return path.replace("\\", "/").removeprefix("./")
+from app.investigations.path_normalization import normalized_path
 
 
 def derive_code_failure_facts(
@@ -35,15 +32,16 @@ def derive_code_failure_facts(
                 evidence_reference_ids=references(changed_file),
                 path=changed_file.content.path,
                 change_type=changed_file.content.change_type,
+                pull_request_number=changed_file.content.pull_request_number,
             )
         )
 
     for frame in frames:
         if frame.content.file_path is None:
             continue
-        failure_path = _normalized_path(frame.content.file_path)
+        failure_path = normalized_path(frame.content.file_path)
         for changed_file in changed_files:
-            if _normalized_path(changed_file.content.path) != failure_path:
+            if normalized_path(changed_file.content.path) != failure_path:
                 continue
             facts.append(
                 ChangedFileMatchesFailureFileFact(
@@ -57,7 +55,7 @@ def derive_code_failure_facts(
             for hunk in hunks:
                 if (
                     hunk.content.pull_request_number != changed_file.content.pull_request_number
-                    or _normalized_path(hunk.content.file_path) != failure_path
+                    or normalized_path(hunk.content.file_path) != failure_path
                     or hunk.content.new_count == 0
                 ):
                     continue

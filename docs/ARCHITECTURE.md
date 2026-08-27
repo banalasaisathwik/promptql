@@ -384,6 +384,7 @@ investigations/
 │   ├── code_change.py            # ChangedFileFact, changed-file/failure-file/hunk matching
 │   ├── deployment.py               # Deployment-to-commit, commit-to-PR association
 │   └── temporal.py                   # Deployment-preceded-incident ordering
+├── relationship_index.py               # In-process entity graph over Facts (no storage): find_connecting_facts()
 ├── planning/                           # TypedLLMPlanner + PlanValidator (see Planning subsystem above)
 ├── hypotheses/                           # Hypothesis generation, deterministic validation, rendering
 └── code_diagnosis/                         # Code-location findings + developer recommendations
@@ -403,6 +404,9 @@ InvestigationRequest
   -> TypedLLMCodeDiagnoser.generate()
   -> DeterministicCodeFindingValidator.validate()              [code_diagnosis/]
   -> render_grounded_result()                                    [hypotheses/rendering.py]
+       (builds a per-render build_relationship_index(facts) and attaches
+        find_connecting_facts() chains to hypotheses with a clean entity pair)
+                                                                       [relationship_index.py]
   -> GroundedInvestigationResult persisted as InvestigationRun.result
 ```
 
@@ -425,7 +429,35 @@ Two models are easy to conflate:
   live route actually persists and returns: a compact, already-rendered
   result (`termination_reason`, `summary`, `supported_hypotheses`,
   `code_findings`, `recommendations`, `key_fact_ids`, `missing_information`)
-  produced only by `render_grounded_result()` from validated structures.
+  produced only by `render_grounded_result()` from validated structures. Each
+  `GroundedHypothesis` also carries an optional `connected_fact_chain`: the
+  ordered Facts a BFS traversal (`relationship_index.find_connecting_facts()`)
+  found between the two entities the hypothesis's own cited Facts identify,
+  restricted to relationship kinds actually relevant to that hypothesis's
+  causal story (`_HYPOTHESIS_RELEVANT_RELATIONSHIPS`) so an incidental edge
+  (e.g. which PR a changed file came from) can't block or distort a chain
+  the hypothesis isn't actually about. It is `None` whenever the relevant
+  Facts don't name exactly two distinct entities — additive detail alongside
+  the existing flat `supporting_fact_ids`, never a replacement for it.
+
+`relationship_index.py` re-derives, in process and per render call, an
+explicit entity graph from typed fields six Fact types carry. Five always
+name two entities; `ChangedFileFact` produces a sixth edge
+(`FILE -> PULL_REQUEST`, kind `changed_in_pull_request`) only when its
+(nullable) `pull_request_number` is present — which it is whenever the Fact
+was derived from GitHub evidence for a pull request, since
+`fact_derivation/code_change.py` now preserves that field instead of
+dropping it. It adds no storage, no dependency, and no new derived Fact.
+Its scope is deliberately narrow: it answers "what Facts connect entity A
+to entity B," not "what depends on service X" — no Fact ties a `service`
+string (deployment/incident evidence) to a repository or file (GitHub
+evidence), so building that mapping would assert a relationship the
+collected Facts don't support. For the checkout-500 fixture, the
+`FILE -> PULL_REQUEST` edge closes what used to be two disconnected
+subgraphs: `find_connecting_facts()` between a `DEPLOYMENT` entity and a
+`FAILURE_LOCATION` entity now returns the full chain
+`deployment_references_commit -> commit_associated_with_pull_request ->
+changed_file -> changed_file_matches_failure_file`.
 
 `InvestigationRuntimeSnapshot` (`runtime/investigation_models.py`) is the
 third, JSON-persisted shape: it carries per-round planner/execution detail

@@ -5,6 +5,7 @@ import httpx
 
 from app.connectors.errors import (
     GitHubForbiddenError,
+    GitHubIncompleteResultError,
     GitHubInvalidResponseError,
     GitHubNotFoundError,
     GitHubRateLimitedError,
@@ -244,6 +245,18 @@ class HttpGitHubConnectorTests(unittest.IsolatedAsyncioTestCase):
             [request.url.params["page"] for request in review_requests],
             ["1", "2"],
         )
+
+    async def test_reviews_exhausting_the_page_bound_raise_incomplete_result(
+        self,
+    ) -> None:
+        responses = GitHubResponses()
+        responses.reviews = [
+            {"user": {"login": f"reviewer-{index:03}"}, "state": "APPROVED"}
+            for index in range(100)
+        ]
+
+        with self.assertRaises(GitHubIncompleteResultError):
+            await load_facts(responses, max_pages=1)
 
     async def test_unavailable_rules_are_explicitly_unknown(self) -> None:
         responses = GitHubResponses()

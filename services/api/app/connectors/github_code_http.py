@@ -1,23 +1,16 @@
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
-from typing import Any, TypeVar
+from typing import Any
 from urllib.parse import quote
 
 import httpx
-from pydantic import AwareDatetime, BaseModel, TypeAdapter, ValidationError
+from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
 from app.connectors.errors import (
     GitHubConnectorError,
-    GitHubForbiddenError,
     GitHubIncompleteResultError,
     GitHubInvalidResponseError,
-    GitHubNotFoundError,
-    GitHubRateLimitedError,
-    GitHubTimeoutError,
-    GitHubUnauthorizedError,
-    GitHubUpstreamUnavailableError,
 )
 from app.connectors.github_code_http_models import (
     GitHubChangedFileResponse,
@@ -25,6 +18,10 @@ from app.connectors.github_code_http_models import (
     GitHubCommitEvidenceResponse,
 )
 from app.connectors.github_diff import ParsedDiffHunk, parse_github_patch
+from app.connectors.github_http_base import (
+    BaseHttpGitHubConnector,
+    GitHubRequestObservation,
+)
 from app.connectors.models import (
     ConnectorSource,
     GitHubCommitEvidenceRequest,
@@ -42,25 +39,17 @@ from app.investigations import (
     FileChangeType,
     PullRequestEvidenceContent,
 )
-from app.observability import FailureCategory, NoOpRuntimeTelemetry, RuntimeTelemetry
+from app.observability import FailureCategory, RuntimeTelemetry
 
 
-PAGE_SIZE = 100
 MAX_FILE_PAGES = 10
 MAX_EVIDENCE_TEXT_CHARACTERS = 4096
 MAX_COMMIT_PARENTS = 100
-ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
 AwareDatetimeAdapter = TypeAdapter(AwareDatetime)
 Clock = Callable[[], datetime]
 
 
-@dataclass
-class CodeEvidenceObservation:
-    page_count: int = 0
-    status_class: str = "none"
-
-
-class HttpGitHubCodeEvidenceSource:
+class HttpGitHubCodeEvidenceSource(BaseHttpGitHubConnector):
     source = ConnectorSource.LIVE
 
     def __init__(
@@ -71,21 +60,14 @@ class HttpGitHubCodeEvidenceSource:
         max_file_pages: int = MAX_FILE_PAGES,
         clock: Clock | None = None,
     ) -> None:
-        if max_file_pages <= 0:
-            raise ValueError("max_file_pages must be positive")
-        self._client = client
-        self._telemetry = telemetry or NoOpRuntimeTelemetry()
-        self._max_file_pages = max_file_pages
+        super().__init__(client, telemetry, max_file_pages)
         self._clock = clock or (lambda: datetime.now(UTC))
-
-    async def aclose(self) -> None:
-        await self._client.aclose()
 
     async def get_commit_evidence(
         self,
         request: GitHubCommitEvidenceRequest,
     ) -> Evidence:
-        observation = CodeEvidenceObservation()
+        observation = GitHubRequestObservation()
         with self._telemetry.observe_connector(
             "github",
             self.source.value,
@@ -103,7 +85,7 @@ class HttpGitHubCodeEvidenceSource:
         self,
         request: GitHubPullRequestEvidenceRequest,
     ) -> Evidence:
-        observation = CodeEvidenceObservation()
+        observation = GitHubRequestObservation()
         with self._telemetry.observe_connector(
             "github",
             self.source.value,
@@ -121,7 +103,7 @@ class HttpGitHubCodeEvidenceSource:
         self,
         request: GitHubPullRequestEvidenceRequest,
     ) -> tuple[Evidence, ...]:
-        observation = CodeEvidenceObservation()
+        observation = GitHubRequestObservation()
         with self._telemetry.observe_connector(
             "github",
             self.source.value,
@@ -141,7 +123,7 @@ class HttpGitHubCodeEvidenceSource:
     async def _load_commit_evidence(
         self,
         request: GitHubCommitEvidenceRequest,
-        observation: CodeEvidenceObservation,
+        observation: GitHubRequestObservation,
     ) -> Evidence:
         repository_path = self._repository_path(
             request.repository_owner,
@@ -199,7 +181,7 @@ class HttpGitHubCodeEvidenceSource:
     async def _load_pull_request_evidence(
         self,
         request: GitHubPullRequestEvidenceRequest,
-        observation: CodeEvidenceObservation,
+        observation: GitHubRequestObservation,
     ) -> Evidence:
         repository_path = self._repository_path(
             request.repository_owner,
@@ -250,7 +232,7 @@ class HttpGitHubCodeEvidenceSource:
     async def _load_changed_file_evidence(
         self,
         request: GitHubPullRequestEvidenceRequest,
-        observation: CodeEvidenceObservation,
+        observation: GitHubRequestObservation,
     ) -> tuple[Evidence, ...]:
         repository_path = self._repository_path(
             request.repository_owner,
@@ -364,95 +346,6 @@ class HttpGitHubCodeEvidenceSource:
             ),
         )
 
-    async def _get_model(
-        self,
-        path: str,
-        model_type: type[ResponseModel],
-        observation: CodeEvidenceObservation,
-    ) -> ResponseModel:
-        payload = await self._request_json(path, observation)
-        try:
-            return model_type.model_validate(payload)
-        except ValidationError:
-            raise GitHubInvalidResponseError() from None
-
-    async def _get_paginated_list(
-        self,
-        path: str,
-        model_type: type[ResponseModel],
-        observation: CodeEvidenceObservation,
-    ) -> tuple[ResponseModel, ...]:
-        results: list[ResponseModel] = []
-
-
-        for page in range(1, self._max_file_pages + 1):
-            observation.page_count += 1
-            payload = await self._request_json(
-                path,
-                observation,
-                {"per_page": PAGE_SIZE, "page": page},
-            )
-            if not isinstance(payload, list):
-                raise GitHubInvalidResponseError()
-            try:
-                page_results = [model_type.model_validate(value) for value in payload]
-            except ValidationError:
-                raise GitHubInvalidResponseError() from None
-            results.extend(page_results)
-            if len(page_results) < PAGE_SIZE:
-                return tuple(results)
-        raise GitHubIncompleteResultError()
-
-    async def _request_json(
-        self,
-        path: str,
-        observation: CodeEvidenceObservation,
-        params: dict[str, int | str] | None = None,
-    ) -> Any:
-        try:
-            response = await self._client.get(path, params=params)
-        except httpx.TimeoutException:
-            raise GitHubTimeoutError() from None
-        except httpx.RequestError:
-            raise GitHubUpstreamUnavailableError() from None
-
-        observation.status_class = f"{response.status_code // 100}xx"
-        self._raise_for_status(response)
-        try:
-            return response.json()
-        except ValueError:
-            raise GitHubInvalidResponseError() from None
-
-    @staticmethod
-    def _raise_for_status(response: httpx.Response) -> None:
-        status = response.status_code
-        rate_limited = (
-            status in {403, 429}
-            and (
-                response.headers.get("x-ratelimit-remaining") == "0"
-                or "retry-after" in response.headers
-                or status == 429
-            )
-        )
-        if rate_limited:
-            raise GitHubRateLimitedError()
-        if status == 401:
-            raise GitHubUnauthorizedError()
-        if status == 403:
-            raise GitHubForbiddenError()
-        if status == 404:
-            raise GitHubNotFoundError()
-        if 500 <= status <= 599:
-            raise GitHubUpstreamUnavailableError()
-        if not 200 <= status <= 299:
-            raise GitHubInvalidResponseError()
-
-    @staticmethod
-    def _repository_path(repository_owner: str, repository_name: str) -> str:
-        owner = quote(repository_owner, safe="")
-        repository = quote(repository_name, safe="")
-        return f"/repos/{owner}/{repository}"
-
     @staticmethod
     def _pull_request_state(
         raw_pull: GitHubCodePullRequestResponse,
@@ -491,7 +384,7 @@ class HttpGitHubCodeEvidenceSource:
         return sha256(value.encode("utf-8")).hexdigest()[:16]
 
     @staticmethod
-    def _record_success(span: Any, observation: CodeEvidenceObservation) -> None:
+    def _record_success(span: Any, observation: GitHubRequestObservation) -> None:
         span.set_attributes(
             **{
                 "promptql.connector.result": "success",
@@ -503,7 +396,7 @@ class HttpGitHubCodeEvidenceSource:
     @staticmethod
     def _record_failure(
         span: Any,
-        observation: CodeEvidenceObservation,
+        observation: GitHubRequestObservation,
         error: GitHubConnectorError,
     ) -> None:
         span.set_attributes(

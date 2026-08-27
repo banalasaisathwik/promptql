@@ -33,12 +33,6 @@ export type ConnectorRequestResult =
   | { ok: true; request: ConnectorRequest }
   | { ok: false; errors: ConnectorRequestErrors }
 
-export interface FixtureScenario {
-  id: string
-  label: string
-  request: ConnectorRequest
-}
-
 // String unions mirror backend enums and provide editor autocomplete without
 // introducing runtime JavaScript objects.
 export type PullRequestState = 'open' | 'closed' | 'merged'

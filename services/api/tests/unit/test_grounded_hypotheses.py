@@ -9,6 +9,7 @@ from app.explanations import (
 from app.investigations import (
     ChangedFileFact,
     ChangedFileMatchesFailureFileFact,
+    ChangedHunkOverlapsFailureLineFact,
     DeploymentPrecededIncidentFact,
     InvestigationRequest,
     MissingInformation,
@@ -264,6 +265,89 @@ class GroundedRenderingTests(unittest.TestCase):
             "Changes associated with checkout.py may have contributed to the incident.",
         )
         self.assertEqual(result.key_fact_ids, ("F_CHANGED", "F_FAILURE_FILE"))
+
+    def test_supported_hypothesis_gets_a_connected_fact_chain_alongside_the_flat_list(self):
+        validated = DeterministicHypothesisValidator().validate(
+            (_candidate("F_CHANGED", "F_FAILURE_FILE"),), _facts()
+        ).accepted_hypotheses
+
+        result = render_grounded_result(
+            _facts(), validated, (), GroundedTerminationReason.COMPLETED
+        )
+
+        rendered = result.supported_hypotheses[0]
+
+
+        self.assertEqual(rendered.supporting_fact_ids, ("F_CHANGED", "F_FAILURE_FILE"))
+        self.assertEqual(rendered.connected_fact_chain, ("F_FAILURE_FILE",))
+
+    def test_hypothesis_citing_only_a_node_only_fact_gets_no_chain(self):
+        validated = DeterministicHypothesisValidator().validate(
+            (_candidate("F_CHANGED", "F_FAILURE_FILE"),), _facts()
+        ).accepted_hypotheses[0].model_copy(update={"supporting_fact_ids": ("F_CHANGED",)})
+
+        result = render_grounded_result(
+            _facts(), (validated,), (), GroundedTerminationReason.COMPLETED
+        )
+
+        rendered = result.supported_hypotheses[0]
+        self.assertEqual(rendered.supporting_fact_ids, ("F_CHANGED",))
+        self.assertIsNone(rendered.connected_fact_chain)
+
+    def test_citing_a_fact_with_an_irrelevant_relationship_does_not_block_the_chain(self):
+        validated = DeterministicHypothesisValidator().validate(
+            (_candidate("F_CHANGED", "F_FAILURE_FILE"),), _facts()
+        ).accepted_hypotheses[0].model_copy(
+            update={"supporting_fact_ids": ("F_FAILURE_FILE", "F_DEPLOYMENT")}
+        )
+
+        result = render_grounded_result(
+            _facts(), (validated,), (), GroundedTerminationReason.COMPLETED
+        )
+
+        rendered = result.supported_hypotheses[0]
+        self.assertEqual(rendered.supporting_fact_ids, ("F_FAILURE_FILE", "F_DEPLOYMENT"))
+        self.assertEqual(rendered.connected_fact_chain, ("F_FAILURE_FILE",))
+
+    def test_hypothesis_citing_more_than_two_relevant_entities_gets_no_chain(self):
+        facts = (
+            *_facts(),
+            ChangedHunkOverlapsFailureLineFact(
+                fact_id="F_OVERLAPS", evidence_reference_ids=("E_OVERLAPS",),
+                file_path="checkout.py", line_number=42,
+            ),
+        )
+        validated = DeterministicHypothesisValidator().validate(
+            (_candidate("F_CHANGED", "F_FAILURE_FILE"),), facts
+        ).accepted_hypotheses[0].model_copy(
+            update={"supporting_fact_ids": ("F_FAILURE_FILE", "F_OVERLAPS")}
+        )
+
+        result = render_grounded_result(
+            facts, (validated,), (), GroundedTerminationReason.COMPLETED
+        )
+
+        rendered = result.supported_hypotheses[0]
+        self.assertEqual(rendered.supporting_fact_ids, ("F_FAILURE_FILE", "F_OVERLAPS"))
+        self.assertIsNone(rendered.connected_fact_chain)
+
+    def test_incidental_provenance_edge_does_not_block_the_relevant_chain(self):
+        facts_with_pr = tuple(
+            fact.model_copy(update={"pull_request_number": 42})
+            if fact.fact_id == "F_CHANGED" else fact
+            for fact in _facts()
+        )
+        validated = DeterministicHypothesisValidator().validate(
+            (_candidate("F_CHANGED", "F_FAILURE_FILE"),), facts_with_pr
+        ).accepted_hypotheses
+
+        result = render_grounded_result(
+            facts_with_pr, validated, (), GroundedTerminationReason.COMPLETED
+        )
+
+        self.assertEqual(
+            result.supported_hypotheses[0].connected_fact_chain, ("F_FAILURE_FILE",)
+        )
 
     def test_same_structured_input_is_deterministic(self):
         validated = DeterministicHypothesisValidator().validate(

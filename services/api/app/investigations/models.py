@@ -339,6 +339,9 @@ class ChangedFileFact(_EvidenceBackedFact):
     change_type: FileChangeType
 
 
+    pull_request_number: Annotated[int, Field(strict=True, gt=0)] | None = None
+
+
 class DeploymentFact(_EvidenceBackedFact):
     fact_type: Literal["deployment"] = "deployment"
     deployment_reference: NonEmptyString

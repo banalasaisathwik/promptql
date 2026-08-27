@@ -1,5 +1,115 @@
 # Learning log
 
+## 2026-08-27 — Closing the PR-to-file gap, and why filtering by relationship kind mattered
+
+- **Concept:** Follow-up to the relationship-graph entry below. `ChangedFileFact`
+  now preserves the `pull_request_number` its source `ChangedFileEvidenceContent`
+  already carried (`investigations/models.py`), populated in
+  `fact_derivation/code_change.py`, and `relationship_index.py` gained a sixth
+  edge kind (`CHANGED_IN_PULL_REQUEST`, `FILE -> PULL_REQUEST`) produced only
+  when that field is present. This bridges the two previously-disconnected
+  subgraphs: for the checkout-500 fixture,
+  `find_connecting_facts(DEPLOYMENT, FAILURE_LOCATION)` now returns the full
+  4-fact chain `deployment_references_commit -> commit_associated_with_pull_request
+  -> changed_file -> changed_file_matches_failure_file`, closing exactly the
+  gap the prior entry left unresolved.
+- **Regression this surfaced, and the fix:** closing the gap immediately broke
+  `hypotheses/rendering.py`'s `_connected_fact_chain()` for the checkout-500
+  hypothesis, even though that file was outside this task's stated scope. Its
+  heuristic counted *every* entity any cited fact's edge touched; now that
+  `ChangedFileFact` can carry two edges (the file/failure one the hypothesis
+  is actually about, and the new incidental PR-provenance one), a hypothesis
+  citing that one fact suddenly touched 3 entities instead of 2, so no chain
+  attached. Flagged to the user with three options (fix rendering.py now vs.
+  update the test to match vs. report and defer); they chose the fix. The
+  fix restricts entity-counting to relationship kinds actually relevant to
+  the hypothesis's own causal story
+  (`_HYPOTHESIS_RELEVANT_RELATIONSHIPS: dict[HypothesisKind,
+  frozenset[RelationshipKind]]`, currently mapping
+  `CODE_CHANGE_MAY_HAVE_CONTRIBUTED` to `{SAME_FILE_AS_FAILURE,
+  OVERLAPS_FAILURE_LINE}`) rather than every edge a cited fact happens to
+  produce for unrelated reasons. This is the general lesson: once a Fact can
+  carry more than one kind of relationship, "how many entities does this
+  hypothesis touch" needs to be scoped to relevance, not just adjacency, or
+  future unrelated edges will keep silently breaking chain attachment.
+- **Validation:** `uv run python -m unittest discover -s tests -v` from
+  `services/api` — 467 tests, `OK (skipped=6)` (465 with 1 failure
+  immediately after the edge was added, before the rendering fix).
+- **Unresolved:** none for this pairing of tasks.
+
+## 2026-08-27 — An in-process relationship graph over Facts, and a real gap it exposed
+
+- **Concept:** A prior read-only diagnostic proposed a knowledge-graph layer
+  over derived Facts. The approved minimal scope was: in-process, hand-rolled
+  adjacency (no dependency, no persistence, no schema/migration), covering
+  exactly the five Fact types that name two entities
+  (`DeploymentPrecededIncidentFact`, `DeploymentReferencesCommitFact`,
+  `CommitAssociatedWithPullRequestFact`, `ChangedFileMatchesFailureFileFact`,
+  `ChangedHunkOverlapsFailureLineFact` — `ChangedFileFact` is node-only and
+  produces no edge), plus one traversal: "what Facts connect entity A to
+  entity B." New module `investigations/relationship_index.py`:
+  `build_relationship_index(facts) -> RelationshipIndex` and
+  `find_connecting_facts(entity_a, entity_b, index)` (hand-rolled BFS,
+  returns the ordered chain of Facts or `None`). Wired additively into
+  `hypotheses/rendering.py`: `render_grounded_result()` now attaches an
+  optional `connected_fact_chain` to a `GroundedHypothesis` only when its own
+  `supporting_fact_ids` identify exactly two distinct entities — the existing
+  flat `supporting_fact_ids` list is untouched, and hypotheses that don't map
+  cleanly onto an entity pair render exactly as before.
+- **Design decision — an honest empirical finding, not a design choice:**
+  building the index over the checkout-500 fixture's real Facts (via
+  `DeterministicBaseline`) showed the deployment/commit/PR chain and the
+  file/failure chain are two genuinely **disconnected** components. No Fact
+  type carries both a pull request number and the file path it changed —
+  `ChangedFileFact` only keeps `path`/`change_type`, dropping the
+  `pull_request_number` that `ChangedFileEvidenceContent` (the Evidence it
+  was derived from) actually has. So `find_connecting_facts()` correctly
+  returns `None` between a `PULL_REQUEST` entity and a `FILE` entity — this
+  is captured explicitly as
+  `test_deployment_side_and_file_side_are_disconnected_subgraphs` rather than
+  papered over by inventing a bridging edge no Fact backs. This directly
+  reinforces `investigations/CLAUDE.md`'s "never invent a fact" boundary: a
+  graph traversal is only as trustworthy as the Facts it's built from, and
+  reporting "unconnected" honestly is more valuable than a fabricated path.
+- **Implementation locations:** `investigations/relationship_index.py` (new);
+  `investigations/hypotheses/rendering.py` (`GroundedHypothesis
+  .connected_fact_chain`, `_connected_fact_chain()`, `render_grounded_result`
+  now builds one `RelationshipIndex` per render call); test coverage in
+  `tests/unit/test_relationship_index.py` (index construction + BFS, both on
+  a hand-built fixture and on the real checkout-500 fixture driven through
+  `DeterministicBaseline`) and `tests/unit/test_grounded_hypotheses.py`
+  (rendering wiring, including the "don't force it" cases); one assertion
+  added to the existing end-to-end workflow test in
+  `tests/unit/test_investigation_workflow.py` confirming the chain appears
+  through the real `InvestigationWorkflowService` + `FakeLLMClient` path.
+- **Validation:** `uv run python -m unittest discover -s tests -v` from
+  `services/api` — 462 tests, `OK (skipped=6)`, run after each of the four
+  implementation steps (456 after step 1, 459 after step 2, 462 after steps
+  3 and 4). Also manually drove the checkout-500 scenario end to end (same
+  construction as `test_investigation_workflow.py`'s
+  `_completed_fake_context`) and inspected the actual rendered JSON.
+- **Incident, unrelated to the feature:** stashing `rendering.py` alone (to
+  capture a "before" rendering for comparison) round-tripped the file
+  through this repo's `comment-strip` git clean filter (`git config
+  filter.comment-strip.clean`), which silently strips Python comments/
+  docstrings on the way into a git object — the paired smudge filter is a
+  no-op (`cat`), so popping the stash restored the code exactly but with
+  every comment gone, including this session's own explanatory comments.
+  Caught immediately by re-reading the file after the pop; fixed by
+  rewriting it with every original comment/docstring restored verbatim
+  alongside the new code. Lesson for future sessions: never use `git stash`
+  (even scoped to one path) as a way to snapshot/compare a file's rendered
+  behavior in this repo — the clean filter makes the round-trip lossy for
+  comments. Diff against `git show HEAD:<path>` (read-only) or a throwaway
+  worktree instead.
+- **Unresolved:** the PR-to-file disconnection is a real property of the
+  current Fact model, not fixed here (out of scope for this task — no new
+  Fact type or field was added). If a future milestone wants a true single
+  deployment-to-failure chain, `ChangedFileFact` would need to start
+  carrying its originating `pull_request_number`, which is itself a Level 1/2
+  decision (new Fact field, changes what "the same Fact" hashes over) that
+  should be raised on its own rather than folded into a graph-traversal task.
+
 ## 2026-08-27 — Sanitizing the workflow diagnostic's failure message, not just its class
 
 - **Concept:** `run_workflow_call`'s `except Exception` branch (the outer

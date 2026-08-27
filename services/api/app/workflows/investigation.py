@@ -36,7 +36,11 @@ from app.investigations.hypotheses import (
     render_grounded_result,
 )
 from app.investigations.hypotheses.instructions import HYPOTHESIS_PROMPT_VERSION
-from app.investigations.replanning import AdaptiveInvestigationRuntime, AdaptiveInvestigationState
+from app.investigations.replanning import (
+    AdaptiveInvestigationRuntime,
+    AdaptiveInvestigationState,
+    ContinuationReason,
+)
 from app.observability import (
     FailureCategory,
     InvestigationStage,
@@ -371,9 +375,7 @@ class InvestigationWorkflowService:
         validated_hypotheses = ()
         rejected_hypothesis_count = 0
         hypothesis_metadata = None
-        termination_reason = _grounded_reason(
-            adaptive_state.continuation_reason.value
-        )
+        termination_reason = _grounded_reason(adaptive_state.continuation_reason)
         hypothesis_input = build_hypothesis_generation_input(
             running.request,
             AdaptiveInvestigationState(
@@ -675,15 +677,23 @@ class InvestigationWorkflowService:
         )
 
 
-def _grounded_reason(reason: str) -> GroundedTerminationReason:
-    return {
-        "completed": GroundedTerminationReason.COMPLETED,
-        "tool_call_budget_exhausted": GroundedTerminationReason.BUDGET_EXHAUSTED,
-        "no_progress": GroundedTerminationReason.NO_PROGRESS,
-        "max_planning_rounds": GroundedTerminationReason.PLANNING_LIMIT_REACHED,
-        "planner_failure": GroundedTerminationReason.PLANNER_FAILURE,
-        "plan_validation_failure": GroundedTerminationReason.PLAN_VALIDATION_FAILURE,
-    }.get(reason, GroundedTerminationReason.COMPLETED)
+_GROUNDED_REASON_BY_CONTINUATION_REASON: dict[ContinuationReason, GroundedTerminationReason] = {
+    ContinuationReason.TOOL_CALL_BUDGET_EXHAUSTED: GroundedTerminationReason.BUDGET_EXHAUSTED,
+    ContinuationReason.NO_PROGRESS: GroundedTerminationReason.NO_PROGRESS,
+    ContinuationReason.MAX_PLANNING_ROUNDS: GroundedTerminationReason.PLANNING_LIMIT_REACHED,
+    ContinuationReason.PLANNER_FAILURE: GroundedTerminationReason.PLANNER_FAILURE,
+    ContinuationReason.PLAN_VALIDATION_FAILURE: GroundedTerminationReason.PLAN_VALIDATION_FAILURE,
+}
+
+
+def _grounded_reason(reason: ContinuationReason) -> GroundedTerminationReason:
+    grounded_reason = _GROUNDED_REASON_BY_CONTINUATION_REASON.get(reason)
+    if grounded_reason is None:
+        raise ValueError(
+            f"adaptive investigation ended with an unrecognized continuation "
+            f"reason: {reason!r}"
+        )
+    return grounded_reason
 
 
 def _set_generation_span_attributes(observation, metadata) -> None:

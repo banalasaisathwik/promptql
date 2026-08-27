@@ -11,7 +11,6 @@ import type {
   ConnectorRequest,
   EvidenceReference,
   ExplanationApiError,
-  FixtureScenario,
   GitHubPullRequest,
   GitHubUser,
   JiraIssue,
@@ -200,28 +199,6 @@ function isJiraIssue(value: unknown): value is JiraIssue {
     (value.status_name === null || isNonEmptyString(value.status_name)) &&
     (value.is_resolved === null || typeof value.is_resolved === 'boolean')
   )
-}
-
-
-export function parseScenarioCatalog(value: unknown): FixtureScenario[] {
-  if (!isRecord(value) || !Array.isArray(value.items)) {
-    throw new ConnectorApiError('The scenario catalog response is malformed.')
-  }
-
-  const items = value.items
-  const everyItemIsValid = items.every(
-    (item): item is FixtureScenario =>
-      isRecord(item) &&
-      isNonEmptyString(item.id) &&
-      isNonEmptyString(item.label) &&
-      isConnectorRequest(item.request),
-  )
-
-  if (!everyItemIsValid) {
-    throw new ConnectorApiError('The scenario catalog response is malformed.')
-  }
-
-  return items
 }
 
 

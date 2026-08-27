@@ -170,8 +170,15 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertEqual(len(completed.result.supported_hypotheses), 1)
-        self.assertIn("may have contributed", completed.result.supported_hypotheses[0].statement)
+        rendered_hypothesis = completed.result.supported_hypotheses[0]
+        self.assertIn("may have contributed", rendered_hypothesis.statement)
         self.assertNotIn("provider rationale", completed.result.model_dump_json())
+
+
+        self.assertEqual(
+            rendered_hypothesis.connected_fact_chain,
+            (rendered_hypothesis.supporting_fact_ids[1],),
+        )
 
     async def test_code_diagnosis_failure_preserves_grounded_hypothesis(self):
         repository = InMemoryRunRepository()
