@@ -74,6 +74,40 @@ class DatabaseConfigurationTests(unittest.TestCase):
             ):
                 verify_database_ready(Engine())
 
+    def test_startup_rejects_database_missing_fact_recurrence_table(self) -> None:
+        class Connection:
+            def execute(self, _statement) -> None:
+                return None
+
+        class Engine:
+            def connect(self):
+                class ConnectionContext:
+                    def __enter__(self):
+                        return Connection()
+
+                    def __exit__(self, *_args) -> None:
+                        return None
+
+                return ConnectionContext()
+
+        class Inspector:
+            def get_table_names(self):
+                return ["workflow_runs", "workflow_steps"]
+
+            def get_columns(self, _table_name):
+                return [
+                    {"name": "run_id"},
+                    {"name": "request_payload"},
+                    {"name": "investigation_state"},
+                ]
+
+        with patch("app.database.engine.inspect", return_value=Inspector()):
+            with self.assertRaisesRegex(
+                RunPersistenceError,
+                "migrations have not been applied",
+            ):
+                verify_database_ready(Engine())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2868,3 +2868,65 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   few hundred milliseconds late doesn't see an empty stream for a
   fast-completing run — or is that scope creep against "diagnostic tap,
   not event sourcing" until a concrete need shows up?
+
+### 2026-08-27 - Count Fact-type recurrence per repository without inventing a new Fact
+
+- **V2 milestone:** Repository-scoped memory, write side only (ADR-031).
+- **Engineering concept and syntax:** A durable cross-run counter can reuse
+  an existing Pydantic discriminator (`fact_type` on every
+  `InvestigationFact` subclass) instead of inventing a new taxonomy —
+  `typing.get_args()` on the `Annotated[Union[...], Field(discriminator=...)]`
+  plus `get_args()` again on each member's `Literal["..."]` annotation
+  recovers every known discriminator value at test time, so a test can assert
+  a database CHECK constraint stays in sync with the domain model instead of
+  trusting a hand-copied list. Separately, `sqlalchemy.dialects.postgresql
+  .insert(...).on_conflict_do_update(...)` with a `set_` expression built from
+  `Model.column + 1` compiles to one atomic `INSERT ... ON CONFLICT DO UPDATE`
+  — no read-then-write race window — which is simpler and safer than the
+  optimistic read-modify-write pattern `PostgresRunRepository` needs, because
+  that pattern exists there to validate a *state machine*, not just to
+  increment a counter with no transition rules.
+- **Implementation locations:** `database/models.py`'s
+  `RepositoryFactRecurrenceRow` (migration
+  `20260827_0006_create_repository_fact_recurrence.py`), the
+  `FactRecurrenceRepository` protocol plus `InMemoryFactRecurrenceRepository`
+  fake in `runtime/repository.py`, `PostgresFactRecurrenceRepository`
+  in `database/postgres_fact_recurrence_repository.py`, the write call from
+  `InvestigationWorkflowService._complete_adaptive_run`
+  (`workflows/investigation.py`), and production wiring through a new
+  `get_fact_recurrence_repository` FastAPI dependency
+  (`api/v1/connector_router.py`).
+- **Decision and invariant:** The new row is deliberately **not** an
+  `InvestigationFact` subclass: every `_EvidenceBackedFact` requires
+  `evidence_reference_ids` that are a subset of the *current* run's evidence,
+  and a prior run's evidence IDs can never satisfy that for a later run, so
+  representing accumulated cross-run counts as if they were current-run
+  evidence-backed conclusions would misstate their provenance. Recurrence is
+  therefore tracked at the Fact-*type* level (the `fact_type` discriminator),
+  not the Fact-instance level — every Fact's `fact_id` and
+  `evidence_reference_ids` are unique per run by construction, so
+  instance-level matching across runs could never fire at all. The promotion
+  threshold (3) and its "why 3, not 2 or 5" reasoning, plus the explicitly
+  deferred richer LLM-proposed-candidate memory shape, are recorded in
+  [ADR-031](decisions/ADR-031-repository-scoped-fact-recurrence-memory.md)
+  rather than justified only in code comments.
+- **Failure behavior and trade-off:** A `RunPersistenceError` from the
+  recurrence write is caught and reported through
+  `record_investigation_diagnostic_failure`, not raised — this counter is a
+  side channel outside `GroundedInvestigationResult`, so a persistence hiccup
+  must not turn an otherwise-successful investigation into a failed run. This
+  is a write-only change: no `PlannerInput` field or prompt injection was
+  added, so the accumulated counts have no reader yet.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  → 479 tests passed, 6 skipped (the pre-existing opt-in PostgreSQL suite;
+  `TEST_DATABASE_URL` is an empty placeholder in this environment, so the
+  live migration could not be applied here — only offline DDL compilation
+  against the PostgreSQL dialect was verified). New coverage:
+  `test_fact_recurrence.py` (in-memory promotion-threshold logic, isolation
+  between two repositories, and the real `InvestigationWorkflowService`
+  completion path run three times with fake providers), plus additions to
+  `test_database_models.py` and `test_database_config.py`.
+- **Unresolved question:** When a real read consumer is designed, should
+  `PlannerInput` gain a new field, and should a promoted counter ever be
+  allowed to expire/demote, or does "once promoted, always promoted" hold
+  indefinitely? ADR-031 defers both.

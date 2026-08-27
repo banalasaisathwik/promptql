@@ -175,10 +175,16 @@ omitted above for brevity.
 - One application-lifetime SQLAlchemy engine owns a 5-connection pool with a
   5-second timeout and pings/recycles connections
   (`database/engine.py`). Startup (`verify_database_ready`) fails fast if the
-  `workflow_runs`/`workflow_steps` tables or the `investigation_state` column
-  are missing, rather than accepting requests it cannot persist. Alembic
-  owns schema creation; the application never runs migrations or calls
-  `create_all()`.
+  `workflow_runs`/`workflow_steps`/`repository_fact_recurrence` tables or the
+  `investigation_state` column are missing, rather than accepting requests it
+  cannot persist. Alembic owns schema creation; the application never runs
+  migrations or calls `create_all()`.
+- `FactRecurrenceRepository` isolates the repository-scoped Fact-type
+  recurrence counter (see
+  [Repository-scoped Fact-type recurrence](#repository-scoped-fact-type-recurrence-currentimplemented-write-side-only))
+  from storage the same way `RunRepository` does; production route
+  dependencies require `PostgresFactRecurrenceRepository`
+  (`api/v1/connector_router.py`).
 - `GET /v1/runs/{run_id}` returns one persisted current snapshot and selects
   its typed response shape (`MergeReadinessResponse` vs
   `InvestigationResponse`) from the stored `workflow_name`, so both workflow
@@ -511,6 +517,31 @@ support — not an objective determination of the true root cause. A
 come from an offline golden case, engineer confirmation, or later
 operational evidence, none of which the validator consults.
 
+### Repository-scoped Fact-type recurrence (CURRENT/IMPLEMENTED, write side only)
+
+`repository_fact_recurrence` (`database/models.py`,
+`RepositoryFactRecurrenceRow`) is a durable PostgreSQL counter keyed by the
+composite `(repository_owner, repository_name, fact_type)`, independent of
+any single run. At the end of `InvestigationWorkflowService._complete_adaptive_run`
+(`workflows/investigation.py`), for every distinct `fact_type` present in the
+final `FactSet` (deduplicated so one run counts at most once per type), the
+injected `FactRecurrenceRepository` deterministically increments
+`occurrence_count` and sets `promoted_at` the first time the count reaches
+`FACT_RECURRENCE_PROMOTION_THRESHOLD = 3`. It is **not** an `InvestigationFact`
+subclass: it aggregates evidence-backed conclusions across runs and cannot
+carry one run's `evidence_reference_ids`, so representing it as a Fact would
+misstate its provenance. A write failure is reported through existing
+diagnostic telemetry and does not fail an otherwise-successful run, since the
+counter is a side channel outside `GroundedInvestigationResult`.
+
+This is a write path only. Nothing today reads `repository_fact_recurrence`
+back into `ContextBuilder.build()` or any prompt — see
+[ADR-031](decisions/ADR-031-repository-scoped-fact-recurrence-memory.md) for
+the full reasoning, including why exact-Fact-instance recurrence (as opposed
+to Fact-*type* recurrence) can never fire, and why the richer LLM-proposed
+memory shape (naming aliases, narrative root-cause patterns) is deliberately
+deferred as its own future decision.
+
 ## Hypotheses subsystem
 
 `investigations/hypotheses/` generates, validates, and renders causal
@@ -837,11 +868,14 @@ persisted/versioned explanations; LLM SDK-level retries or provider fallback
 (`max_retries=0` everywhere, and runtime retries only the tool-execution
 path); hosted eval services, LLM-as-a-judge grading, or production-traffic
 eval collection; dashboards/alerting on top of the exported telemetry;
-OpenTelemetry log export; long-term/cross-run memory (no consuming write or
-read path exists anywhere in the codebase for it); and cross-source conflict
-resolution (the connector graph is single-source-per-kind by construction, so
-no same-question conflict between sources can occur today). `packages/`,
-`infra/`, and `scripts/` remain empty.
+OpenTelemetry log export; a *read* path for cross-run repository memory (a
+deterministic write path exists — see
+[Repository-scoped Fact-type recurrence](#repository-scoped-fact-type-recurrence-currentimplemented-write-side-only)
+— but nothing consumes `repository_fact_recurrence` back into planning or
+hypothesis generation yet, and no LLM-proposed richer memory shape has been
+built); and cross-source conflict resolution (the connector graph is
+single-source-per-kind by construction, so no same-question conflict between
+sources can occur today). `packages/`, `infra/`, and `scripts/` remain empty.
 Neon and Grafana Cloud resources and application deployment are configuration
 concerns outside this repository, not code paths inside it.
 

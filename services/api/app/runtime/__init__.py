@@ -15,7 +15,14 @@ from app.runtime.errors import (
     RunRepositoryError,
     RunStateConflictError,
 )
-from app.runtime.repository import InMemoryRunRepository, RunRepository
+from app.runtime.repository import (
+    FACT_RECURRENCE_PROMOTION_THRESHOLD,
+    FactRecurrenceRecord,
+    FactRecurrenceRepository,
+    InMemoryFactRecurrenceRepository,
+    InMemoryRunRepository,
+    RunRepository,
+)
 from app.runtime.live_run_tasks import LiveRunTaskRegistry
 from app.runtime.state import (
     InvalidStateTransitionError,
@@ -27,6 +34,10 @@ from app.runtime.state import (
 
 __all__ = [
     "ExplanationSource",
+    "FACT_RECURRENCE_PROMOTION_THRESHOLD",
+    "FactRecurrenceRecord",
+    "FactRecurrenceRepository",
+    "InMemoryFactRecurrenceRepository",
     "InMemoryRunRepository",
     "InvalidStateTransitionError",
     "LiveRunTaskRegistry",

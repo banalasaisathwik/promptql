@@ -18,7 +18,7 @@ from app.api.v1.models import (
 from app.connectors.models import ConnectorRequest
 from app.investigations.models import InvestigationRequest
 from app.connectors.protocols import GitHubConnector, JiraConnector
-from app.database import PostgresRunRepository
+from app.database import PostgresFactRecurrenceRepository, PostgresRunRepository
 from app.explanations import (
     MergeReadinessExplanationError,
     MergeReadinessExplanationService,
@@ -40,6 +40,7 @@ from app.observability import (
 )
 from app.runtime import (
     ExplanationSource,
+    FactRecurrenceRepository,
     MergeReadinessRun,
     RunPersistenceError,
     RunRepository,
@@ -80,6 +81,13 @@ def get_run_repository(
     )
 
 
+def get_fact_recurrence_repository(request: Request) -> FactRecurrenceRepository:
+    session_factory = getattr(request.app.state, "run_session_factory", None)
+    if session_factory is None:
+        raise RunPersistenceError("Runtime persistence is unavailable.")
+    return PostgresFactRecurrenceRepository(session_factory)
+
+
 def get_merge_readiness_explanation_service(
     request: Request,
 ) -> MergeReadinessExplanationService:
@@ -114,6 +122,9 @@ def get_merge_readiness_workflow(
 def get_investigation_workflow(
     request: Request,
     run_repository: Annotated[RunRepository, Depends(get_run_repository)],
+    fact_recurrence_repository: Annotated[
+        FactRecurrenceRepository, Depends(get_fact_recurrence_repository)
+    ],
 ) -> InvestigationWorkflowService:
     return InvestigationWorkflowService(
         run_repository,
@@ -123,6 +134,7 @@ def get_investigation_workflow(
         github_code_source=request.app.state.github_code_source,
         jira_connector=request.app.state.jira_connector,
         telemetry=request.app.state.runtime_telemetry,
+        fact_recurrence_repository=fact_recurrence_repository,
     )
 
 

@@ -29,7 +29,11 @@ def verify_database_ready(engine: Engine) -> None:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
         database_inspector = inspect(engine)
-        required_tables = {"workflow_runs", "workflow_steps"}
+        required_tables = {
+            "workflow_runs",
+            "workflow_steps",
+            "repository_fact_recurrence",
+        }
         if not required_tables.issubset(database_inspector.get_table_names()):
             raise RunPersistenceError(
                 "Runtime database migrations have not been applied."

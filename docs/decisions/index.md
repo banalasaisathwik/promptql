@@ -48,3 +48,4 @@ Create a new ADR, mark the old one superseded, and link both.
 | [ADR-028](ADR-028-passive-langfuse-otlp-generation-tracing.md) | Accepted | Export bounded investigation generation spans to optional Langfuse through a second failure-isolated OTLP trace exporter |
 | [ADR-029](ADR-029-versioned-investigation-component-trajectory-evals.md) | Accepted | Evaluate V2 components and adaptive trajectories with versioned reference cases, deterministic graders, repeated sampling, and separate provider/schema/quality metrics |
 | [ADR-030](ADR-030-openrouter-openai-compatible-explanation-adapter.md) | Accepted | Add explicit OpenRouter identity through the fixed OpenAI-compatible endpoint, reusing the Groq adapter by subclassing it |
+| [ADR-031](ADR-031-repository-scoped-fact-recurrence-memory.md) | Accepted | Deterministically count Fact-type recurrence per repository across investigation runs as a new, non-Fact domain concept; defer LLM-proposed richer memory |

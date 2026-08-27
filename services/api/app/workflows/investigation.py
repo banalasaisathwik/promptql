@@ -10,6 +10,7 @@ from app.investigations import (
     AgentExecutor,
     ExecutionBudget,
     ExecutionStepStatus,
+    FactSet,
     InvestigationRequest,
     ToolInvoker,
 )
@@ -49,6 +50,9 @@ from app.observability import (
     RuntimeTelemetry,
 )
 from app.runtime import (
+    FactRecurrenceRepository,
+    InMemoryFactRecurrenceRepository,
+    RunPersistenceError,
     RunRepository,
     RunStatus,
     RuntimeErrorCode,
@@ -167,6 +171,7 @@ class InvestigationWorkflowService:
         incident_source: IncidentSource | None = None,
         jira_connector: JiraConnector | None = None,
         telemetry: RuntimeTelemetry | None = None,
+        fact_recurrence_repository: FactRecurrenceRepository | None = None,
     ) -> None:
         self._repository = repository
         self._llm_client = llm_client
@@ -176,6 +181,9 @@ class InvestigationWorkflowService:
         self._incident_source = incident_source or FakeIncidentSource()
         self._jira_connector = jira_connector
         self._telemetry = telemetry or NoOpRuntimeTelemetry()
+        self._fact_recurrence_repository = (
+            fact_recurrence_repository or InMemoryFactRecurrenceRepository()
+        )
 
     async def create_persisted_run(
         self, request: InvestigationRequest, run_id: UUID | None = None
@@ -571,6 +579,7 @@ class InvestigationWorkflowService:
                 developer_recommendations,
                 state.working_memory.evidence,
             )
+        self._record_fact_recurrence(running, state.working_memory.facts)
         completed = running.model_copy(
             update={
                 "status": RunStatus.COMPLETED,
@@ -581,6 +590,24 @@ class InvestigationWorkflowService:
         )
         self._repository.save(completed)
         return completed
+
+    def _record_fact_recurrence(self, running: InvestigationRun, facts: FactSet) -> None:
+        observed_at = datetime.now(UTC)
+        for fact_type in sorted({fact.fact_type for fact in facts}):
+            try:
+                self._fact_recurrence_repository.record_occurrence(
+                    running.request.repository_owner,
+                    running.request.repository_name,
+                    fact_type,
+                    running.run_id,
+                    observed_at,
+                )
+            except RunPersistenceError:
+                self._telemetry.record_investigation_diagnostic_failure(
+                    running.run_id,
+                    "investigation.fact_recurrence.write_failed",
+                    fact_type=fact_type,
+                )
 
     def _fail(
         self,

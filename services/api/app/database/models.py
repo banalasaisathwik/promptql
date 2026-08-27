@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    PrimaryKeyConstraint,
     Text,
     UniqueConstraint,
 )
@@ -113,6 +114,58 @@ class WorkflowRunRow(DatabaseModel):
     runtime_error: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB(none_as_null=True)
     )
+
+
+_KNOWN_FACT_TYPES = (
+    "changed_file",
+    "deployment",
+    "stack_frame",
+    "deployment_preceded_incident",
+    "deployment_references_commit",
+    "commit_associated_with_pull_request",
+    "changed_file_matches_failure_file",
+    "changed_hunk_overlaps_failure_line",
+)
+
+
+class RepositoryFactRecurrenceRow(DatabaseModel):
+    __tablename__ = "repository_fact_recurrence"
+    __table_args__ = (
+        CheckConstraint(
+            "length(btrim(repository_owner)) > 0",
+            name="ck_repository_fact_recurrence_owner_not_empty",
+        ),
+        CheckConstraint(
+            "length(btrim(repository_name)) > 0",
+            name="ck_repository_fact_recurrence_name_not_empty",
+        ),
+        CheckConstraint(
+            "fact_type IN ("
+            + ", ".join(f"'{fact_type}'" for fact_type in _KNOWN_FACT_TYPES)
+            + ")",
+            name="ck_repository_fact_recurrence_fact_type",
+        ),
+        CheckConstraint(
+            "occurrence_count > 0",
+            name="ck_repository_fact_recurrence_count_positive",
+        ),
+        PrimaryKeyConstraint("repository_owner", "repository_name", "fact_type"),
+    )
+
+    repository_owner: Mapped[str] = mapped_column(Text)
+    repository_name: Mapped[str] = mapped_column(Text)
+    fact_type: Mapped[str] = mapped_column(Text)
+    occurrence_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    first_observed_run_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), nullable=False
+    )
+    last_observed_run_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), nullable=False
+    )
+    last_observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class WorkflowStepRow(DatabaseModel):
