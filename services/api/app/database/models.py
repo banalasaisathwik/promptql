@@ -65,9 +65,23 @@ class WorkflowRunRow(DatabaseModel):
             name="ck_workflow_runs_result_object",
         ),
         CheckConstraint(
+            "jsonb_typeof(investigation_results) = 'array'",
+            name="ck_workflow_runs_investigation_results_array",
+        ),
+        CheckConstraint(
+            "follow_up_count >= 0",
+            name="ck_workflow_runs_follow_up_count_non_negative",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(recorded_fact_types) = 'array'",
+            name="ck_workflow_runs_recorded_fact_types_array",
+        ),
+        CheckConstraint(
             "runtime_error IS NULL OR jsonb_typeof(runtime_error) = 'object'",
             name="ck_workflow_runs_error_object",
         ),
+
+
         CheckConstraint(
             "(status = 'pending' AND started_at IS NULL AND completed_at IS NULL "
             "AND result IS NULL AND runtime_error IS NULL) OR "
@@ -75,8 +89,9 @@ class WorkflowRunRow(DatabaseModel):
             "AND completed_at IS NULL AND result IS NULL "
             "AND runtime_error IS NULL) OR "
             "(status = 'completed' AND started_at IS NOT NULL "
-            "AND completed_at IS NOT NULL AND result IS NOT NULL "
-            "AND runtime_error IS NULL) OR "
+            "AND completed_at IS NOT NULL AND runtime_error IS NULL AND "
+            "(workflow_name = 'investigation' OR result IS NOT NULL) AND "
+            "(workflow_name <> 'investigation' OR jsonb_array_length(investigation_results) > 0)) OR "
             "(status = 'failed' AND started_at IS NOT NULL "
             "AND completed_at IS NOT NULL AND result IS NULL "
             "AND runtime_error IS NOT NULL) OR "
@@ -113,6 +128,15 @@ class WorkflowRunRow(DatabaseModel):
     )
     runtime_error: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB(none_as_null=True)
+    )
+    investigation_results: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    follow_up_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    recorded_fact_types: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
     )
 
 

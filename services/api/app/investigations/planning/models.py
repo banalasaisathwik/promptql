@@ -101,6 +101,9 @@ class PlannerInput(ContractModel):
     remembered_patterns: tuple[RememberedRepositoryPattern, ...] = ()
 
 
+    prior_result_summary: NonEmptyString | None = None
+
+
 class Literal(ContractModel):
     value_kind: TypingLiteral["literal"] = "literal"
     value: LiteralValue

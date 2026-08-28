@@ -11,6 +11,7 @@ from app.api.v1.models import (
     ApiErrorCode,
     RuntimePersistenceApiError,
 )
+from app.api.v1.rate_limit import FixedWindowRateLimiter, PerIpRateLimitMiddleware
 from app.config import (
     DatabaseSettings,
     GitHubConnectorMode,
@@ -294,6 +295,10 @@ def create_app(
         run_record_invalid_handler,
     )
     application.add_api_route("/health", health, methods=["GET"])
+    application.add_middleware(
+        PerIpRateLimitMiddleware,
+        limiter=FixedWindowRateLimiter(),
+    )
     app_observability.instrument_app(application)
     return application
 

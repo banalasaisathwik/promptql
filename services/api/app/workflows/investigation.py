@@ -15,7 +15,7 @@ from app.investigations import (
     ToolInvoker,
 )
 from app.investigations.evidence_store import EvidenceStore
-from app.investigations.planning import PlanValidator, TypedLLMPlanner
+from app.investigations.planning import ActionSummary, PlanValidator, TypedLLMPlanner
 from app.investigations.code_diagnosis import (
     CodeContextBuilder,
     CodeDiagnosisError,
@@ -54,6 +54,7 @@ from app.runtime import (
     InMemoryFactRecurrenceRepository,
     RunPersistenceError,
     RunRepository,
+    RunStateConflictError,
     RunStatus,
     RuntimeErrorCode,
     RuntimeErrorInfo,
@@ -198,21 +199,47 @@ class InvestigationWorkflowService:
             error=None,
             request=request,
             state=None,
-            result=None,
+            results=(),
         )
         self._repository.save(pending)
         return pending
 
-    async def continue_persisted_run(self, pending: InvestigationRun) -> InvestigationRun:
+    async def reopen_for_follow_up(
+        self, completed: InvestigationRun
+    ) -> InvestigationRun:
+        if completed.status is not RunStatus.COMPLETED:
+            raise RunStateConflictError(
+                "Only a completed investigation can accept a follow-up question.",
+                completed.run_id,
+            )
+        reopened = completed.model_copy(
+            update={
+                "status": RunStatus.RUNNING,
+                "started_at": datetime.now(UTC),
+                "completed_at": None,
+                "follow_up_count": completed.follow_up_count + 1,
+            }
+        )
+        self._repository.save(reopened)
+        return reopened
+
+    async def continue_persisted_run(
+        self,
+        pending: InvestigationRun,
+        *,
+        follow_up_question: str | None = None,
+    ) -> InvestigationRun:
         with self._telemetry.observe_investigation_stage(
             InvestigationStage.INVESTIGATION,
             pending.run_id,
         ) as investigation_observation:
-            terminal = await self._continue_persisted_run(pending)
+            terminal = await self._continue_persisted_run(
+                pending, follow_up_question=follow_up_question
+            )
             state = terminal.state
             termination_reason = (
-                terminal.result.termination_reason.value
-                if terminal.result is not None
+                terminal.results[-1].termination_reason.value
+                if terminal.results
                 else terminal.status.value
             )
             with self._telemetry.observe_investigation_stage(
@@ -247,13 +274,29 @@ class InvestigationWorkflowService:
                 investigation_observation.mark_error(FailureCategory.SYSTEM_FAILURE)
             return terminal
 
-    async def _continue_persisted_run(self, pending: InvestigationRun) -> InvestigationRun:
+    async def _continue_persisted_run(
+        self,
+        pending: InvestigationRun,
+        *,
+        follow_up_question: str | None = None,
+    ) -> InvestigationRun:
         started_at = datetime.now(UTC)
+        is_follow_up = follow_up_question is not None
+        if is_follow_up and pending.status is not RunStatus.RUNNING:
+            raise RunStateConflictError(
+                "A follow-up round can only continue an already-reopened "
+                "investigation.",
+                pending.run_id,
+            )
+
+
+        prior_state = pending.state if is_follow_up else None
         running = pending.model_copy(
             update={
                 "status": RunStatus.RUNNING,
                 "started_at": started_at,
-                "state": self._empty_state(),
+                "completed_at": None,
+                "state": prior_state if is_follow_up else self._empty_state(),
             }
         )
         self._repository.save(running)
@@ -261,6 +304,9 @@ class InvestigationWorkflowService:
         store = EvidenceStore(
             event_logger=self._telemetry.event_logger, run_id=pending.run_id
         )
+        if is_follow_up:
+            for evidence_item in prior_state.working_memory.evidence_content:
+                store.put(evidence_item)
         adapters = build_tool_adapters(
             self._github_code_source,
             self._incident_source,
@@ -277,9 +323,33 @@ class InvestigationWorkflowService:
         )
 
 
+        investigation_goal = (
+            follow_up_question if is_follow_up else running.request.question
+        )
+        prior_rounds = prior_state.execution_state.rounds if is_follow_up else ()
+        prior_action_history = (
+            prior_state.working_memory.action_history if is_follow_up else ()
+        )
+        initial_rounds = len(prior_rounds)
+
+
+        available_tool_calls = (
+            prior_state.execution_state.remaining_tool_calls
+            if is_follow_up
+            else DEFAULT_TOOL_CALL_BUDGET
+        )
+        prior_result_summary = (
+            pending.results[-1].summary if is_follow_up and pending.results else None
+        )
+
         async def save_planned_round(state, planned) -> None:
-            snapshot = self._snapshot_from_adaptive(state, store)
-            round_number = len(state.rounds) + 1
+            snapshot = self._snapshot_from_adaptive(
+                state,
+                store,
+                prior_rounds=prior_rounds,
+                prior_action_history=prior_action_history,
+            )
+            round_number = initial_rounds + len(state.rounds) + 1
             self._telemetry.record_investigation_round(
                 running.run_id, round_number, completed=False
             )
@@ -325,7 +395,16 @@ class InvestigationWorkflowService:
                     completed=True,
                 )
             self._repository.save(
-                running.model_copy(update={"state": self._snapshot_from_adaptive(state, store)})
+                running.model_copy(
+                    update={
+                        "state": self._snapshot_from_adaptive(
+                            state,
+                            store,
+                            prior_rounds=prior_rounds,
+                            prior_action_history=prior_action_history,
+                        )
+                    }
+                )
             )
 
         try:
@@ -338,13 +417,23 @@ class InvestigationWorkflowService:
                 run_id=pending.run_id,
                 fact_recurrence_repository=self._fact_recurrence_repository,
             ).investigate(
-                running.request.question,
+                investigation_goal,
                 tuple(
                     definition
                     for definition in registry.list()
                     if definition.tool_id in ADAPTIVE_INVESTIGATION_ALLOWED_TOOL_IDS
                 ),
-                budget=ExecutionBudget(max_tool_calls=DEFAULT_TOOL_CALL_BUDGET),
+                budget=ExecutionBudget(max_tool_calls=available_tool_calls),
+                initial_evidence=(
+                    prior_state.working_memory.evidence if is_follow_up else ()
+                ),
+                initial_missing_information=(
+                    prior_state.working_memory.missing_information
+                    if is_follow_up
+                    else ()
+                ),
+                initial_rounds=initial_rounds,
+                prior_result_summary=prior_result_summary,
                 request_context=running.request,
                 on_round_planned=save_planned_round,
                 on_round_completed=save_completed_round,
@@ -363,6 +452,8 @@ class InvestigationWorkflowService:
                 running,
                 adaptive_state,
                 store,
+                prior_rounds=prior_rounds,
+                prior_action_history=prior_action_history,
             )
         except asyncio.CancelledError:
             self._cancel(running)
@@ -379,8 +470,16 @@ class InvestigationWorkflowService:
         running: InvestigationRun,
         adaptive_state: AdaptiveInvestigationState,
         store: EvidenceStore,
+        *,
+        prior_rounds: tuple[InvestigationPlanningRoundSnapshot, ...] = (),
+        prior_action_history: tuple[ActionSummary, ...] = (),
     ) -> InvestigationRun:
-        state = self._snapshot_from_adaptive(adaptive_state, store)
+        state = self._snapshot_from_adaptive(
+            adaptive_state,
+            store,
+            prior_rounds=prior_rounds,
+            prior_action_history=prior_action_history,
+        )
         validated_hypotheses = ()
         rejected_hypothesis_count = 0
         hypothesis_metadata = None
@@ -580,21 +679,31 @@ class InvestigationWorkflowService:
                 developer_recommendations,
                 state.working_memory.evidence,
             )
-        self._record_fact_recurrence(running, state.working_memory.facts)
+        recorded_fact_types = self._record_fact_recurrence(
+            running, state.working_memory.facts
+        )
         completed = running.model_copy(
             update={
                 "status": RunStatus.COMPLETED,
                 "completed_at": datetime.now(UTC),
                 "state": state,
-                "result": grounded_result,
+                "results": running.results + (grounded_result,),
+                "recorded_fact_types": recorded_fact_types,
             }
         )
         self._repository.save(completed)
         return completed
 
-    def _record_fact_recurrence(self, running: InvestigationRun, facts: FactSet) -> None:
+    def _record_fact_recurrence(
+        self, running: InvestigationRun, facts: FactSet
+    ) -> tuple[str, ...]:
         observed_at = datetime.now(UTC)
-        for fact_type in sorted({fact.fact_type for fact in facts}):
+        already_recorded = set(running.recorded_fact_types)
+        newly_observed = sorted(
+            {fact.fact_type for fact in facts} - already_recorded
+        )
+        newly_recorded: list[str] = []
+        for fact_type in newly_observed:
             try:
                 self._fact_recurrence_repository.record_occurrence(
                     running.request.repository_owner,
@@ -609,6 +718,9 @@ class InvestigationWorkflowService:
                     "investigation.fact_recurrence.write_failed",
                     fact_type=fact_type,
                 )
+            else:
+                newly_recorded.append(fact_type)
+        return running.recorded_fact_types + tuple(newly_recorded)
 
     def _fail(
         self,
@@ -663,9 +775,13 @@ class InvestigationWorkflowService:
 
     @staticmethod
     def _snapshot_from_adaptive(
-        state: AdaptiveInvestigationState, store: EvidenceStore
+        state: AdaptiveInvestigationState,
+        store: EvidenceStore,
+        *,
+        prior_rounds: tuple[InvestigationPlanningRoundSnapshot, ...] = (),
+        prior_action_history: tuple[ActionSummary, ...] = (),
     ) -> InvestigationRuntimeSnapshot:
-        rounds = tuple(
+        new_rounds = tuple(
             InvestigationPlanningRoundSnapshot(
                 round_number=round.round_number,
                 plan_id=round.plan_id,
@@ -693,10 +809,10 @@ class InvestigationWorkflowService:
                 evidence_content=store.get_many(state.evidence),
                 facts=state.facts,
                 missing_information=state.missing_information,
-                action_history=state.action_history,
+                action_history=prior_action_history + state.action_history,
             ),
             execution_state=ExecutionState(
-                rounds=rounds,
+                rounds=prior_rounds + new_rounds,
                 max_tool_calls=DEFAULT_TOOL_CALL_BUDGET,
                 used_tool_calls=DEFAULT_TOOL_CALL_BUDGET - state.remaining_tool_calls,
                 remaining_tool_calls=state.remaining_tool_calls,

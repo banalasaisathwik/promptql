@@ -81,6 +81,9 @@ class InvestigationRuntimeSnapshot(ContractModel):
     execution_state: ExecutionState
 
 
+MAX_FOLLOW_UPS_PER_CASE = 3
+
+
 class InvestigationRun(ContractModel):
     run_id: UUID
     workflow_name: NonEmptyString
@@ -92,28 +95,36 @@ class InvestigationRun(ContractModel):
     error: RuntimeErrorInfo | None
     request: InvestigationRequest
     state: InvestigationRuntimeSnapshot | None
-    result: GroundedInvestigationResult | None
+    results: tuple[GroundedInvestigationResult, ...] = ()
+
+
+    follow_up_count: Annotated[int, Field(ge=0)] = 0
+
+
+    recorded_fact_types: tuple[NonEmptyString, ...] = ()
 
     @model_validator(mode="after")
     def validate_lifecycle_fields(self) -> Self:
         if self.status is RunStatus.PENDING:
             if self.started_at is not None or self.completed_at is not None:
                 raise ValueError("a pending investigation cannot have timestamps")
-            if self.error is not None or self.state is not None or self.result is not None:
+            if self.error is not None or self.state is not None or self.results:
                 raise ValueError("a pending investigation cannot have execution state")
+            if self.follow_up_count != 0:
+                raise ValueError("a pending investigation cannot have follow-ups yet")
         elif self.status is RunStatus.RUNNING:
             if self.started_at is None or self.completed_at is not None:
                 raise ValueError("a running investigation needs only a start timestamp")
-            if self.error is not None or self.result is not None:
+            if self.error is not None:
                 raise ValueError("a running investigation cannot have terminal output")
         elif self.status is RunStatus.COMPLETED:
             if self.started_at is None or self.completed_at is None:
                 raise ValueError("a completed investigation needs timestamps")
-            if self.error is not None or self.state is None or self.result is None:
-                raise ValueError("a completed investigation needs state and result")
+            if self.error is not None or self.state is None or not self.results:
+                raise ValueError("a completed investigation needs state and at least one result")
         elif self.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
             if self.started_at is None or self.completed_at is None:
                 raise ValueError("a terminal investigation needs timestamps")
-            if self.result is not None:
-                raise ValueError("a failed investigation cannot have a result")
+
+
         return self

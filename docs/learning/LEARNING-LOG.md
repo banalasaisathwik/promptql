@@ -1,5 +1,59 @@
 # Learning log
 
+## 2026-08-28 — Public demo deployment: same-origin rewrite over CORS, hand-rolled rate limiting
+
+- **Concept:** A prior read-only diagnostic found the app had no
+  `CORSMiddleware` anywhere, and `vite.config.ts` explicitly documents this
+  as deliberate ("Browser code always calls relative /v1 URLs... without
+  weakening the API with broad CORS permissions") — the design assumes
+  same-origin deployment. Splitting the frontend to Vercel and the backend
+  to Render (different origins) had two options: add `CORSMiddleware`
+  scoped to the Vercel origin, or keep zero CORS and use a platform-level
+  rewrite so the browser only ever talks to one origin. The owner chose the
+  rewrite (`apps/web/vercel.json`, `/v1/:path*` -> Render), which required
+  zero changes to `api.ts`'s existing relative-path calls and preserved the
+  documented design intent instead of overriding it.
+- **Hand-rolled over a dependency, deliberately:** the project's dependency
+  policy (`CLAUDE.md`) requires justifying any new production dependency
+  before adding it. Public-demo rate limiting used a small in-process
+  fixed-window counter (`app/api/v1/rate_limit.py`,
+  `FixedWindowRateLimiter` + `PerIpRateLimitMiddleware`) instead of a
+  library like `slowapi`, because a Render free-tier deployment is a single
+  process with no shared cache — a plain dict is sufficient at demo scale
+  and the in-memory/per-process/resets-on-redeploy trade-off is acceptable
+  for this specific deployment target, not a general-purpose choice.
+  Scoped to only the two LLM-touching/DB-writing endpoints
+  (`POST /v1/investigations`, `POST /v1/investigations/extract-grounding`)
+  rather than applied globally, since read-only polling costs nothing paid.
+- **Provider safety is a deployment-config guarantee, not a code guarantee
+  that needed new code:** re-confirmed (from the diagnostic) that
+  `LLMSettings`/`GitHubSettings`/`JiraSettings`/`SentrySettings` are each
+  built once from the environment at `create_app()` time and stored on
+  `app.state` — no request field can reach provider selection. The only
+  real risk is a human copying `services/api/.env` (which has live-looking
+  keys like `GROQ_API_KEY` sitting next to `fake` connector modes) into
+  Render's dashboard, so `DEPLOYMENT.md` names this explicitly rather than
+  just listing required variables.
+- **Smoke-tested the demo payload before wiring the UI:** ran the exact
+  `CHECKOUT_500_PRESET` payload (already present in
+  `investigationRequest.ts`, matching `app/evals/investigations/cases.py`'s
+  fixture IDs) through `POST /v1/investigations` against the real Neon
+  database with `PROMPTQL_LLM_PROVIDER=fake` forced, via an ad hoc script
+  using `httpx.AsyncClient` + `ASGITransport` against `create_app()`
+  directly (no running server needed). Confirmed a `completed` run with a
+  supported hypothesis, one code finding, and three recommendations before
+  adding the "Run demo investigation" button — validating the diagnostic's
+  own flag that this fixture path had not been independently re-verified.
+- **Validation:** backend `uv run python -m unittest discover -s tests -v`
+  (541 passed, 6 skipped, all pre-existing); frontend `bun run test:web`
+  (40 passed). New coverage: `services/api/tests/unit/test_rate_limit.py`
+  (7 tests: allow/reject/reset/per-client isolation on the limiter itself,
+  plus 429/reset/path-scoping through the middleware via Starlette's
+  `TestClient`).
+- **Unresolved:** no automated test covers the new demo button itself
+  (only the manual smoke test above); the Vercel rewrite destination is a
+  placeholder until Render assigns a real URL.
+
 ## 2026-08-27 — Natural-language grounding extraction as a stateless pre-step
 
 - **Concept:** `POST /v1/investigations` needs a concrete grounding anchor
@@ -3186,3 +3240,290 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   live-smoke procedure (`docs/TESTING.md`'s existing "manual and
   credential-controlled" posture for Jira), or is one-time capture still
   the right posture for a single-developer portfolio project?
+
+### 2026-08-28 - Scope a terminal-state exception to one run type without touching the shared transition map
+
+- **Concept:** `docs/decisions/ADR-033` needed `InvestigationRun` to move
+  `COMPLETED -> RUNNING` (reopening for a follow-up question) while leaving
+  `MergeReadinessRun`'s terminal guarantee completely untouched. The map
+  that encodes "terminal states cannot transition"
+  (`ALLOWED_RUN_TRANSITIONS`, `app/runtime/state.py`) is shared by both run
+  types and maps `COMPLETED`/`FAILED`/`CANCELLED` to empty sets — editing
+  it to add `COMPLETED -> RUNNING` would have loosened the guarantee for
+  both types at once, since the map has no run-type dimension. The fix
+  reuses a pattern already present three times in
+  `PostgresRunRepository` (`_run_values`, `_save_steps`,
+  `_validate_run_identity`): an `isinstance(run, InvestigationRun)` branch
+  scoped to the repository layer, added as a fourth occurrence in
+  `_update_existing_run`, that intercepts exactly the
+  `COMPLETED -> RUNNING` pair for investigations only and enforces a new
+  `MAX_FOLLOW_UPS_PER_CASE = 3` cap by reading the stored row's
+  `follow_up_count` before the shared `ALLOWED_RUN_TRANSITIONS` check is
+  ever consulted for that pair. A `MergeReadinessRun` attempting the same
+  transition still falls through to the untouched shared check and is
+  still rejected.
+- **Where implemented:** `app/runtime/investigation_models.py`
+  (`InvestigationRun.results` replaces the single nullable `result` field
+  with an ordered, append-only tuple; `follow_up_count` field, `ge=0` only
+  — deliberately with no upper bound, see design decision below);
+  `app/database/models.py` (`investigation_results` JSONB array and
+  `follow_up_count` columns; `ck_workflow_runs_lifecycle` split so its
+  `workflow_name <> 'investigation'` branches stay textually identical to
+  the constraint it replaced, while investigation rows check
+  `investigation_results` instead of `result`);
+  `migrations/versions/20260828_0007_add_investigation_follow_up_results.py`;
+  `app/database/postgres_run_repository.py` (`_run_values`,
+  `_stored_run_values`, `_read_investigation_run`, and the new
+  `_validate_investigation_reopen` branch in `_update_existing_run`).
+- **Key design decision:** the `MAX_FOLLOW_UPS_PER_CASE` cap is enforced
+  only at the repository transition boundary, not as a Pydantic
+  `Field(le=...)` on `follow_up_count`. An upper bound on the field would
+  have made the exact object the repository is supposed to reject (a 4th
+  reopen snapshot) impossible to even construct in Python, silently making
+  the repository's own check unreachable and untestable — caught before
+  writing tests, by asking what object the "reject the 4th reopen" test
+  would actually need to build.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  → 553 tests passed, 9 skipped (all 9 are the opt-in PostgreSQL suite;
+  see below). Isolated re-run of `tests.unit.test_runtime_state` (5 tests,
+  all passing, file untouched by this change — confirmed via
+  `git diff --stat`) specifically re-verifies
+  `test_completed_and_failed_runs_cannot_return_to_running`, the test this
+  ADR's diagnostic flagged as needing genuine reconsideration; it required
+  no change to keep passing. New coverage:
+  `tests/unit/test_investigation_run_model.py` (9 tests: the `results`/
+  `follow_up_count` lifecycle-validator behavior per status, including that
+  the model deliberately does not enforce the follow-up cap) and three new
+  tests appended to `tests/integration/test_postgres_runtime_persistence.py`
+  (`PostgresInvestigationReopenTests`: a completed investigation can
+  reopen; a reopen is rejected once `follow_up_count` reaches the cap; a
+  `MergeReadinessRun` attempting the identical `COMPLETED -> RUNNING` move
+  is still rejected). The opt-in PostgreSQL suite itself could not be
+  exercised against the configured Neon test branch this session —
+  connecting failed with `password authentication failed for user
+  'neondb_owner'` against `TEST_DATABASE_URL`, an infrastructure/credential
+  issue unrelated to this change (the production `DATABASE_URL` branch was
+  not used as a substitute, since running migrations against it was never
+  authorized). The migration file's syntax and its position in the Alembic
+  revision chain (`uv run alembic history`, head resolves to
+  `20260828_0007`) were confirmed without a live connection.
+- **Unresolved question:** the live PostgreSQL validation gap above needs
+  closing before this schema change should be considered fully verified —
+  either the Neon test branch's credentials need rotating in `.env`, or a
+  fresh dedicated test branch needs creating per `docs/TESTING.md`'s
+  documented procedure.
+- **Follow-up (same day):** `_validate_investigation_reopen` originally
+  only checked the cap, trusting a future caller to increment
+  `follow_up_count` correctly. Added a second check —
+  `run.follow_up_count != stored_run.follow_up_count + 1` rejects the
+  write — mirroring the byte-equality precedent the same function already
+  uses for terminal runs: the repository should not trust caller
+  arithmetic any more than it trusts a caller to leave a terminal run's
+  other fields unchanged. `stored=0, incoming=1` (the first reopen) needed
+  no special case; it already satisfies the general `stored + 1` rule.
+  New test: `test_investigation_reopen_rejected_on_a_non_sequential_follow_up_count`
+  (stored=0, incoming=3 is rejected with a message naming the exact
+  invariant, and the stored row is confirmed unchanged afterward, not
+  partially applied). `uv run python -m unittest discover -s tests -v` →
+  554 tests passed, 10 skipped (the 9 opt-in PostgreSQL tests plus this
+  new one, still gated on the same unresolved credential issue above).
+- **Follow-up (same day, live verification):** the credential gap closed
+  once a genuine dedicated Neon test branch was configured
+  (`TEST_DATABASE_URL` rotated to a different host, not the application
+  branch). The first live run against it caught a real bug offline
+  parsing could never have found: migration `20260828_0007`'s upgrade()
+  ran its backfill `UPDATE workflow_runs SET ... result = NULL WHERE
+  workflow_name = 'investigation'` *before* dropping the old
+  `ck_workflow_runs_lifecycle` constraint, which still required
+  `result IS NOT NULL` for any completed row at that point — so the
+  backfill violated the very constraint it existed to retire
+  (`psycopg.errors.CheckViolation` against a real completed investigation
+  row already on the test branch). Postgres rolled the whole migration
+  back transactionally (confirmed after the failure: `alembic_version`
+  unchanged, no new columns, row count unchanged), so nothing was left
+  half-applied. Fix: move `op.drop_constraint("ck_workflow_runs_lifecycle",
+  ...)` to before the backfill `UPDATE`, matching how `downgrade()` had
+  already gotten this ordering right (it drops the new constraint before
+  its own restore `UPDATE`). This is the concrete case for why "alembic
+  history resolves the revision chain" is not migration verification —
+  only a real database enforcing real constraints during real DDL catches
+  an ordering bug like this.
+- **Final validation (live, this test branch):**
+  `tests.integration.test_postgres_runtime_persistence` → all 10 tests
+  pass individually: `test_completed_investigation_can_reopen_to_running`,
+  `test_investigation_reopen_rejected_on_a_non_sequential_follow_up_count`,
+  `test_investigation_reopen_rejected_once_follow_up_cap_reached`,
+  `test_merge_readiness_run_still_cannot_reopen_from_completed`,
+  `test_completed_run_round_trips_with_ordered_steps`,
+  `test_failed_run_and_sanitized_error_are_durable`,
+  `test_groq_explanation_source_round_trips`,
+  `test_migration_creates_only_required_runtime_tables`,
+  `test_pre_provenance_run_remains_readable`,
+  `test_terminal_run_rejects_a_new_pending_snapshot`. Full suite:
+  `uv run python -m unittest discover -s tests -v` → **554 passed, 0
+  skipped**. `alembic_version` on the test branch confirmed at
+  `20260828_0007` with both new columns present. Residual-row check: a
+  direct `SELECT count(*) FROM workflow_runs` on the test branch read
+  112 both immediately before this run and immediately after — every row
+  these tests created was removed by its own `tearDown`, leaving no net
+  residual state.
+
+### 2026-08-28 - Actually running a follow-up round: round offset, fixed budget, evidence rehydration, fact-recurrence delta
+
+- **Concept:** ADR-033 (previous entry) resolved *whether* an
+  `InvestigationRun` may reopen; this pass implements the reopened round
+  itself. Four independent pieces of state all have to carry forward
+  correctly across the same `run_id`, none of which the transition check
+  alone touches: which round number comes next
+  (`AdaptiveInvestigationRuntime.investigate()` had no notion of "resume
+  from"), how much tool-call budget is left case-wide (not per call), what
+  the planner can see of evidence already gathered (only ever persisted as
+  full `Evidence` objects, never re-fetched), and which Fact types this
+  case has already told `FactRecurrenceRepository` about (ADR-031's
+  counter has no per-`run_id` idempotency of its own). Each is a
+  deterministic bookkeeping problem, not a probabilistic one — the LLM
+  only ever sees the new question and, now, a labeled summary of the
+  previous turn's answer.
+- **Decision resolved before implementing:** ADR-033 left one question
+  open — a follow-up's new question becomes `investigation_goal` for its
+  new round(s), so the *original* question and its answer are not part of
+  that string, not part of `facts`/`evidence` (both re-derived
+  deterministically, carrying no narrative), and not part of the durable
+  `InvestigationRequest.question` either (identity-protected by
+  `PostgresRunRepository._validate_run_identity` — rewriting it on a
+  follow-up would raise `RunStateConflictError`). Without a deliberate
+  carrier, the planner would silently lose what was already asked and
+  concluded. `RememberedRepositoryPattern`/`remembered_patterns`
+  (`app/investigations/planning/models.py`) already solves the identical
+  shape of problem for repository-history context: its own labeled
+  `PlannerInput` field plus a guardrail section in the system instructions
+  that only renders when the field is populated
+  (`PLANNER_REMEMBERED_PATTERNS_SECTION`,
+  `app/investigations/planning/instructions.py`), explicitly marking the
+  content as history, not evidence, not a hypothesis, not this run's
+  conclusion. Adopted the same pattern verbatim for prior-turn context:
+  `PlannerInput.prior_result_summary: str | None`, populated only on a
+  follow-up with `pending.results[-1].summary`, with its own
+  `PLANNER_PRIOR_RESULT_SECTION` guardrail appended only when the field is
+  set. Documented as a short follow-up amendment appended to ADR-033
+  itself rather than a new ADR, since it doesn't change any of that ADR's
+  actual decisions.
+- **Where implemented:**
+  - `app/investigations/replanning.py` —
+    `AdaptiveInvestigationRuntime.investigate()` gains `initial_rounds: int
+    = 0`; the round loop becomes `range(initial_rounds + 1,
+    MAX_PLANNING_ROUNDS + 1)` so a follow-up's first new round continues
+    numbering instead of restarting at 1, and a case already at
+    `MAX_PLANNING_ROUNDS` (or already at `remaining_tool_calls == 0`, the
+    pre-existing check at the top of the loop) short-circuits to a
+    terminal state with zero planner calls, before the loop body ever
+    runs.
+  - `app/investigations/planning/{models,prompt,instructions}.py` — the
+    `prior_result_summary` field, `ContextBuilder.build()`'s new keyword
+    argument, and `PLANNER_PRIOR_RESULT_SECTION`.
+  - `app/runtime/investigation_models.py` — `InvestigationRun` gains
+    `recorded_fact_types: tuple[str, ...] = ()`, this run's own ledger of
+    which Fact types it has already reported to
+    `FactRecurrenceRepository.record_occurrence`.
+  - `app/workflows/investigation.py` — the actual two-phase follow-up
+    flow: `reopen_for_follow_up()` (new) performs the single durable
+    `COMPLETED -> RUNNING` write plus `follow_up_count + 1`, mirroring
+    `create_persisted_run`'s role for a fresh case; `continue_persisted_run()`
+    gains a `follow_up_question` keyword — when set, it seeds
+    `investigate()`'s `initial_evidence`/`initial_missing_information`/
+    `initial_rounds`/`prior_result_summary` from the run's own persisted
+    `state`, replays `store.put()` for every item in
+    `state.working_memory.evidence_content` (in persisted order) to
+    rehydrate the `EvidenceStore`, and passes `ExecutionBudget(max_tool_calls=
+    state.execution_state.remaining_tool_calls)` instead of a fresh
+    `DEFAULT_TOOL_CALL_BUDGET` — since `remaining_tool_calls` is already,
+    by construction of how each round's snapshot is computed, "the
+    original cap minus everything consumed across every prior round of
+    this run_id." `_record_fact_recurrence()` now computes
+    `{fact.fact_type for fact in facts} - set(running.recorded_fact_types)`
+    and submits only that delta, returning the updated ledger for the
+    caller to persist. `_snapshot_from_adaptive()` gained
+    `prior_rounds`/`prior_action_history` parameters so a follow-up's
+    persisted `execution_state.rounds`/`working_memory.action_history`
+    stay one continuous audit trail across the whole case instead of the
+    follow-up's snapshot silently replacing the original's.
+  - `app/api/v1/{models,connector_router}.py` —
+    `POST /v1/investigations/{run_id}/follow-up`: 404 if the run doesn't
+    exist or isn't an `InvestigationRun`, `409 runtime_state_conflict`
+    (via `RunStateConflictError`, the same typed error/handler the
+    repository's own transition rejection already produces — for either
+    "not completed" or "cap already reached", one consistent error shape)
+    if `reopen_for_follow_up()` refuses, otherwise `202` with
+    `InvestigationFollowUpStartResponse` (`status: running`, unlike
+    `LiveRunStartResponse`'s `status: pending` — a follow-up reopens
+    straight to `RUNNING`, there is no separate pending-follow-up state)
+    and the actual planning/execution dispatched through the existing
+    `LiveRunTaskRegistry` background-task pattern.
+  - `migrations/versions/20260828_0008_add_investigation_recorded_fact_types.py`
+    — one new JSONB array column plus its array-shape check constraint.
+- **Key design decision — the fact-recurrence dedup mechanism:** ADR-033
+  named two options for tracking "which fact types has this run_id already
+  recorded" — a new field on `InvestigationRun`, or a lookup against
+  already-stored state. Chose the field
+  (`InvestigationRun.recorded_fact_types`) over deriving it from
+  `FactRecurrenceRepository` itself, because the repository's
+  `FactRecurrenceRecord` only tracks one `last_observed_run_id` per
+  `(repository, fact_type)` — under concurrent investigations against the
+  same repository, a different run recording the same fact type between
+  this case's rounds would overwrite that pointer, making "was it *this*
+  run_id that last recorded it" an unreliable question to ask externally.
+  A field owned by the run itself has no such race, and mirrors
+  `results`/`follow_up_count` as precedent: state specific to one case's
+  bookkeeping belongs on that case's own record, not reconstructed from a
+  shared aggregate.
+- **Where the plan's design was followed as stated vs. where judgment was
+  needed:** `AdaptiveInvestigationRuntime.investigate()` only gained
+  `initial_rounds` for numbering, exactly as specified — it does not know
+  about follow-ups otherwise. Merging `prior_rounds`/`prior_action_history`
+  into the persisted snapshot was not explicitly requested by the six
+  steps, but omitting it would have made a follow-up's saved
+  `execution_state.rounds` silently replace the original investigation's
+  round history the moment the follow-up's first snapshot saved — directly
+  contradicting the ADR's own stated concern that round numbers "are
+  referenced in telemetry, planner history, **and action summaries**."
+  Added it at the workflow layer (not inside the runtime) to keep that
+  merge next to the other follow-up-specific plumbing. Hypothesis
+  generation's goal text (`build_hypothesis_generation_input(running.request,
+  ...)`) intentionally still uses the *original* question, not the
+  follow-up question — `running.request` is identity-protected and the
+  task's decision-to-resolve scoped `investigation_goal` replacement to
+  the planner's new round(s) specifically, not to every stage that reads
+  the request.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  → 568 tests passed (554 baseline + 14 new: 4 in
+  `test_adaptive_investigation_runtime.py` covering round-offset numbering,
+  the budget-exhausted and rounds-exhausted short-circuits, and
+  `prior_result_summary` threading; 2 in
+  `test_typed_investigation_planner.py` for the new guardrail section; 5 in
+  `test_investigation_workflow.py` — budget reuse across a follow-up,
+  round-number continuation, a manually-constructed budget-exhausted case
+  completing with zero new tool calls, a fact type recorded once not
+  double-recorded on a follow-up reproducing it, and
+  `reopen_for_follow_up` rejecting a non-completed run; 4 in
+  `tests/integration/test_investigation_api.py` — the full follow-up HTTP
+  flow appending a second result, 404 for an unknown run, 409 for a
+  not-completed run, and a 4th reopen rejected as a clean 409 rather than
+  a raw exception, exercised through a small in-test repository double
+  since `InMemoryRunRepository` performs no transition validation at all).
+  Then re-ran the entire suite with `TEST_DATABASE_URL`/
+  `TEST_DATABASE_CONFIRMATION`/`DATABASE_URL`/`DATABASE_MIGRATION_URL`
+  loaded from `.env` (via a small script parsing the file directly, since
+  bare `source .env` in bash silently mis-parses these URLs — each
+  contains an unquoted `&` in the query string, which bash's `source`
+  interprets as "background the preceding command" mid-assignment) →
+  **568 passed, 0 skipped**, all 10 opt-in PostgreSQL tests genuine passes
+  against the live Neon test branch, migration `20260828_0008` applying
+  cleanly on top of `20260828_0007`. Separately round-tripped a real
+  `recorded_fact_types` value through `PostgresRunRepository.save()`/
+  `.get()` against that same branch (not covered by any existing
+  Postgres-suite test, since none of them populate the field) and deleted
+  the probe row afterward.
+- **No deviation from the six-step plan's substance** — the two additions
+  above (round/action-history merging, and choosing the field-based
+  fact-recurrence mechanism the plan already offered as an option) are
+  both within what Steps 1–5 asked for, not scope changes.

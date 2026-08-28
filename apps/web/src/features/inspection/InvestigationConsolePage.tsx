@@ -21,6 +21,8 @@ export function InvestigationConsolePage({
   const [extractionError, setExtractionError] = useState<string | null>(null)
   const [clarificationQuestion, setClarificationQuestion] = useState<string | null>(null)
   const [contextOpen, setContextOpen] = useState(false)
+  const [demoStarting, setDemoStarting] = useState(false)
+  const [demoError, setDemoError] = useState<string | null>(null)
 
   function update(field: keyof typeof EMPTY_INVESTIGATION_FORM, value: string) {
     setForm((current) => ({ ...current, [field]: value }))
@@ -81,6 +83,32 @@ export function InvestigationConsolePage({
     }
   }
 
+  // Submits the same octo-org/analytics checkout-500 fixture as the "Demo
+  // scenario" preset below, but directly, with zero user input, for a public
+  // demo deployment where a visitor may not want to fill in the form first.
+  async function runDemoScenario() {
+    if (demoStarting) return
+    const request = buildInvestigationRequest(CHECKOUT_500_PRESET)
+    if (typeof request === 'string') {
+      setDemoError(request)
+      return
+    }
+    setDemoStarting(true)
+    setDemoError(null)
+    try {
+      const accepted = await startInvestigationRun(request)
+      onRunStarted(accepted.run_id)
+    } catch (caught) {
+      setDemoError(
+        caught instanceof ConnectorApiError
+          ? caught.message
+          : 'The demo investigation could not be started.',
+      )
+    } finally {
+      setDemoStarting(false)
+    }
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (submitting) return
@@ -121,6 +149,22 @@ export function InvestigationConsolePage({
             Ask about an incident, deployment, or code change. PromptQL uses
             your question as the investigation goal and grounds results in validated Facts.
           </p>
+          <div className="demo-launch">
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={runDemoScenario}
+              disabled={demoStarting}
+            >
+              {demoStarting ? 'Starting demo investigation…' : 'Run demo investigation'}
+            </button>
+            <p className="inline-hint">
+              Runs the checkout-500 example investigation immediately, no
+              form-filling required. First request may take up to a minute if
+              the server has been idle.
+            </p>
+            {demoError && <p className="inline-alert" role="alert">{demoError}</p>}
+          </div>
         </div>
         <form className="investigation-form" onSubmit={submit}>
           <label className="investigation-question">

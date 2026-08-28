@@ -74,6 +74,21 @@ class InvestigationResponse(InvestigationRun):
     pass
 
 
+class FollowUpInvestigationRequest(ContractModel):
+    question: NonEmptyString
+
+
+class InvestigationFollowUpStartResponse(ContractModel):
+    run_id: UUID
+    status: RunStatus
+
+    @model_validator(mode="after")
+    def validate_running_status(self) -> Self:
+        if self.status is not RunStatus.RUNNING:
+            raise ValueError("a newly accepted follow-up run must be running")
+        return self
+
+
 class GroundingExtractionStatus(StrEnum):
     COMPLETE = "complete"
     NEEDS_CLARIFICATION = "needs_clarification"

@@ -347,7 +347,7 @@ async def observe_investigation_case(
     pending = await workflow.create_persisted_run(case.request, run_id=uuid4())
     terminal = await workflow.continue_persisted_run(pending)
     state = terminal.state
-    result = terminal.result
+    result = terminal.results[-1] if terminal.results else None
     adaptive_evidence_ids = (
         set(state.working_memory.evidence) if state is not None else set()
     )

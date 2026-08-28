@@ -88,6 +88,82 @@ class AdaptiveRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(planner.inputs[1].action_history[0].tool_id, InvestigationToolId.GET_INCIDENT)
         self.assertEqual(state.continuation_reason, ContinuationReason.NO_PROGRESS)
 
+    async def test_a_follow_up_round_numbers_continue_from_initial_rounds(self):
+        registry = ToolRegistry(TOOL_DEFINITIONS)
+        planner = SequentialPlanner((self._plan("s1", "two"),))
+        invoker = RecordingInvoker((
+            ToolResult(tool_id=InvestigationToolId.GET_INCIDENT, outcome=ToolOutcome.EMPTY),
+        ))
+        runtime = AdaptiveInvestigationRuntime(planner, PlanValidator(registry), AgentExecutor(registry, invoker, self.store), self.store)
+
+        state = await runtime.investigate(
+            "Why did checkout-api fail?",
+            TOOL_DEFINITIONS,
+            budget=ExecutionBudget(max_tool_calls=5),
+            initial_rounds=2,
+        )
+
+        self.assertEqual(len(state.rounds), 1)
+        self.assertEqual(state.rounds[0].round_number, 3)
+        self.assertEqual(planner.inputs[0].planning_round, 3)
+
+    async def test_a_follow_up_on_an_exhausted_budget_short_circuits_before_planning(self):
+        registry = ToolRegistry(TOOL_DEFINITIONS)
+        planner = SequentialPlanner(())
+        invoker = RecordingInvoker(())
+        runtime = AdaptiveInvestigationRuntime(planner, PlanValidator(registry), AgentExecutor(registry, invoker, self.store), self.store)
+
+        state = await runtime.investigate(
+            "Why did checkout-api fail?",
+            TOOL_DEFINITIONS,
+            budget=ExecutionBudget(max_tool_calls=0),
+            initial_rounds=1,
+        )
+
+        self.assertEqual(state.continuation_reason, ContinuationReason.TOOL_CALL_BUDGET_EXHAUSTED)
+        self.assertEqual(state.rounds, ())
+        self.assertEqual(planner.inputs, [])
+        self.assertEqual(invoker.calls, [])
+
+    async def test_a_follow_up_that_already_used_every_planning_round_still_terminates(self):
+        registry = ToolRegistry(TOOL_DEFINITIONS)
+        planner = SequentialPlanner(())
+        invoker = RecordingInvoker(())
+        runtime = AdaptiveInvestigationRuntime(planner, PlanValidator(registry), AgentExecutor(registry, invoker, self.store), self.store)
+
+        state = await runtime.investigate(
+            "Why did checkout-api fail?",
+            TOOL_DEFINITIONS,
+            budget=ExecutionBudget(max_tool_calls=5),
+            initial_rounds=3,
+        )
+
+        self.assertEqual(state.continuation_reason, ContinuationReason.MAX_PLANNING_ROUNDS)
+        self.assertEqual(state.rounds, ())
+        self.assertEqual(planner.inputs, [])
+
+    async def test_prior_result_summary_is_carried_only_on_a_follow_up_round(self):
+        registry = ToolRegistry(TOOL_DEFINITIONS)
+        planner = SequentialPlanner((self._plan("s1", "two"),))
+        invoker = RecordingInvoker((
+            ToolResult(tool_id=InvestigationToolId.GET_INCIDENT, outcome=ToolOutcome.EMPTY),
+        ))
+        runtime = AdaptiveInvestigationRuntime(planner, PlanValidator(registry), AgentExecutor(registry, invoker, self.store), self.store)
+
+        await runtime.investigate(
+            "What about the deployment?",
+            TOOL_DEFINITIONS,
+            budget=ExecutionBudget(max_tool_calls=5),
+            initial_rounds=1,
+            prior_result_summary="No supported hypotheses were found in the prior turn.",
+        )
+
+        self.assertEqual(planner.inputs[0].investigation_goal, "What about the deployment?")
+        self.assertEqual(
+            planner.inputs[0].prior_result_summary,
+            "No supported hypotheses were found in the prior turn.",
+        )
+
     async def test_global_budget_stops_before_another_planner_call(self):
         registry = ToolRegistry(TOOL_DEFINITIONS)
         planner = SequentialPlanner((self._plan("s1", "one"),))

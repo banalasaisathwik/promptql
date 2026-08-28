@@ -159,6 +159,8 @@ class AdaptiveInvestigationRuntime:
         budget: ExecutionBudget,
         initial_evidence: tuple[InvestigationIdentifier, ...] = (),
         initial_missing_information: tuple[MissingInformation, ...] = (),
+        initial_rounds: int = 0,
+        prior_result_summary: str | None = None,
         request_context: InvestigationRequest | None = None,
         on_round_planned: Callable[
             [AdaptiveInvestigationState, PlannedInvestigation], Awaitable[None]
@@ -175,7 +177,8 @@ class AdaptiveInvestigationRuntime:
         remaining = budget.max_tool_calls
         no_progress_rounds = 0
 
-        for round_number in range(1, MAX_PLANNING_ROUNDS + 1):
+
+        for round_number in range(initial_rounds + 1, MAX_PLANNING_ROUNDS + 1):
             if remaining == 0:
                 return self._state(
                     rounds,
@@ -204,6 +207,7 @@ class AdaptiveInvestigationRuntime:
                     telemetry=self._telemetry,
                     run_id=self._run_id,
                     fact_recurrence_repository=self._fact_recurrence_repository,
+                    prior_result_summary=prior_result_summary,
                 )
                 planner_client = getattr(self._planner, "_client", None)
                 provider = getattr(getattr(planner_client, "provider", None), "value", None)

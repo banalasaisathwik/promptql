@@ -615,7 +615,7 @@ async def run_workflow_call(settings: LLMSettings) -> dict[str, object]:
         pending = await workflow.create_persisted_run(request)
         terminal = await workflow.continue_persisted_run(pending)
         state = terminal.state
-        result = terminal.result
+        result = terminal.results[-1] if terminal.results else None
 
 
         successful_termination_reasons = {

@@ -63,6 +63,7 @@ class ContextBuilder:
         telemetry: RuntimeTelemetry | None = None,
         run_id: UUID | None = None,
         fact_recurrence_repository: FactRecurrenceRepository | None = None,
+        prior_result_summary: str | None = None,
     ) -> PlannerInput:
         remembered_patterns: tuple[RememberedRepositoryPattern, ...] = ()
         if fact_recurrence_repository is not None and request_context is not None:
@@ -97,6 +98,7 @@ class ContextBuilder:
             max_planning_rounds=max_planning_rounds,
             allowed_tools=tuple(_tool_context(definition) for definition in sorted(allowed_tools, key=lambda item: item.tool_id)),
             remembered_patterns=remembered_patterns,
+            prior_result_summary=prior_result_summary,
         )
         if telemetry is not None and run_id is not None:
             telemetry.record_context_size_measured(

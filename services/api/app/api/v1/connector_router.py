@@ -10,10 +10,12 @@ from app.api.v1.models import (
     ApiError,
     ApiErrorCode,
     ExplanationApiError,
+    FollowUpInvestigationRequest,
     GroundingExtractionApiError,
     GroundingExtractionApiErrorCode,
     GroundingExtractionResponse,
     GroundingExtractionStatus,
+    InvestigationFollowUpStartResponse,
     LiveRunStartResponse,
     MergeReadinessResponse,
     MissingGroundingField,
@@ -55,10 +57,12 @@ from app.runtime import (
     MergeReadinessRun,
     RunPersistenceError,
     RunRepository,
+    RunStateConflictError,
     RunStatus,
     RunSources,
     LiveRunTaskRegistry,
 )
+from app.runtime.investigation_models import InvestigationRun
 from app.workflows import InvestigationWorkflowService, MergeReadinessWorkflowService
 
 router = APIRouter(prefix="/v1", tags=["pull-request-inspections"])
@@ -367,6 +371,68 @@ async def _continue_investigation(
         raise
     except Exception:
         return
+
+
+async def _continue_investigation_follow_up(
+    workflow: InvestigationWorkflowService,
+    reopened_run: InvestigationRun,
+    follow_up_question: str,
+) -> None:
+    try:
+        await workflow.continue_persisted_run(
+            reopened_run, follow_up_question=follow_up_question
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return
+
+
+@router.post(
+    "/investigations/{run_id}/follow-up",
+    status_code=202,
+    response_model=InvestigationFollowUpStartResponse,
+    responses={
+        404: {"model": ApiError},
+        409: {"model": RuntimePersistenceApiError},
+        503: {"model": RuntimePersistenceApiError},
+    },
+)
+async def start_investigation_follow_up(
+    run_id: UUID,
+    request: FollowUpInvestigationRequest,
+    workflow: Annotated[
+        InvestigationWorkflowService,
+        Depends(get_investigation_workflow),
+    ],
+    run_repository: Annotated[RunRepository, Depends(get_run_repository)],
+    task_registry: Annotated[
+        LiveRunTaskRegistry,
+        Depends(get_live_run_task_registry),
+    ],
+) -> InvestigationFollowUpStartResponse | JSONResponse:
+    stored_run = run_repository.get(run_id)
+    if stored_run is None or not isinstance(stored_run, InvestigationRun):
+        error = ApiError(
+            code=ApiErrorCode.RUN_NOT_FOUND,
+            message="No investigation exists for this ID.",
+        )
+        return JSONResponse(status_code=404, content=error.model_dump(mode="json"))
+    try:
+        reopened_run = await workflow.reopen_for_follow_up(stored_run)
+    except RunStateConflictError as error:
+        response = RuntimePersistenceApiError(
+            code=ApiErrorCode.RUNTIME_STATE_CONFLICT,
+            message=str(error),
+            run_id=run_id,
+        )
+        return JSONResponse(status_code=409, content=response.model_dump(mode="json"))
+    task_registry.start(
+        _continue_investigation_follow_up(workflow, reopened_run, request.question)
+    )
+    return InvestigationFollowUpStartResponse(
+        run_id=reopened_run.run_id, status=reopened_run.status
+    )
 
 
 @router.get(

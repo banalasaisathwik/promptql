@@ -1,6 +1,8 @@
 import asyncio
 import unittest
+from datetime import UTC, datetime
 from unittest.mock import patch
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -12,6 +14,8 @@ from app.explanations import (
 )
 from app.investigations.hypotheses import (
     CandidateHypothesis,
+    GroundedInvestigationResult,
+    GroundedTerminationReason,
     HypothesisGenerationError,
     HypothesisGenerationFailureCode,
     HypothesisGenerationInput,
@@ -26,8 +30,22 @@ from app.investigations.replanning import (
     ContinuationReason,
 )
 from app.tools import InvestigationToolId
-from app.runtime import InMemoryRunRepository, RunStatus
+from app.runtime import (
+    InMemoryFactRecurrenceRepository,
+    InMemoryRunRepository,
+    RunStateConflictError,
+    RunStatus,
+)
+from app.runtime.investigation_models import (
+    ExecutionState,
+    InvestigationPlanningRoundSnapshot,
+    InvestigationRun,
+    InvestigationRuntimeSnapshot,
+    WorkingMemory,
+)
 from app.workflows.investigation import (
+    INVESTIGATION_WORKFLOW_NAME,
+    INVESTIGATION_WORKFLOW_VERSION,
     InvestigationWorkflowService,
     _code_diagnosis_failure_diagnostics,
     _hypothesis_failure_diagnostics,
@@ -169,10 +187,10 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 for round in completed.state.execution_state.rounds
             )
         )
-        self.assertEqual(len(completed.result.supported_hypotheses), 1)
-        rendered_hypothesis = completed.result.supported_hypotheses[0]
+        self.assertEqual(len(completed.results[-1].supported_hypotheses), 1)
+        rendered_hypothesis = completed.results[-1].supported_hypotheses[0]
         self.assertIn("may have contributed", rendered_hypothesis.statement)
-        self.assertNotIn("provider rationale", completed.result.model_dump_json())
+        self.assertNotIn("provider rationale", completed.results[-1].model_dump_json())
 
 
         self.assertEqual(
@@ -205,11 +223,11 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         completed = await workflow.continue_persisted_run(pending)
 
         self.assertEqual(completed.status, RunStatus.COMPLETED)
-        self.assertEqual(len(completed.result.supported_hypotheses), 1)
-        self.assertEqual(completed.result.code_findings, ())
-        self.assertEqual(completed.result.recommendations, ())
+        self.assertEqual(len(completed.results[-1].supported_hypotheses), 1)
+        self.assertEqual(completed.results[-1].code_findings, ())
+        self.assertEqual(completed.results[-1].recommendations, ())
         self.assertEqual(
-            completed.result.termination_reason,
+            completed.results[-1].termination_reason,
             "code_diagnosis_failure",
         )
 
@@ -268,6 +286,8 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             budget,
             initial_evidence=(),
             initial_missing_information=(),
+            initial_rounds=0,
+            prior_result_summary=None,
             request_context=None,
             on_round_planned=None,
             on_round_completed=None,
@@ -294,7 +314,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored.status, RunStatus.CANCELLED)
         self.assertIsNotNone(stored.started_at)
         self.assertIsNotNone(stored.completed_at)
-        self.assertIsNone(stored.result)
+        self.assertEqual(stored.results, ())
 
     async def test_persisted_investigation_reuses_snapshot_repository_and_renders_result(self):
         repository = InMemoryRunRepository()
@@ -320,9 +340,9 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(completed.state)
         self.assertEqual(len(completed.state.execution_state.rounds), 2)
         self.assertGreater(len(completed.state.working_memory.evidence), 0)
-        self.assertIsNotNone(completed.result)
-        self.assertEqual(completed.result.supported_hypotheses, ())
-        self.assertIn("not sufficient", completed.result.summary)
+        self.assertTrue(completed.results)
+        self.assertEqual(completed.results[-1].supported_hypotheses, ())
+        self.assertIn("not sufficient", completed.results[-1].summary)
         self.assertIs(repository.get(completed.run_id), completed)
 
     async def test_second_adaptive_round_receives_first_round_state(self):
@@ -437,6 +457,163 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         pending = await workflow.create_persisted_run(request)
         return await workflow.continue_persisted_run(pending)
+
+
+class InvestigationFollowUpTests(unittest.IsolatedAsyncioTestCase):
+    def _request(self) -> InvestigationRequest:
+        return InvestigationRequest(
+            repository_owner="octo-org",
+            repository_name="analytics",
+            question="Why did checkout failures increase?",
+            incident_reference="incident:checkout-500",
+        )
+
+    async def test_follow_up_reuses_remaining_budget_and_continues_round_numbers(self):
+        repository = InMemoryRunRepository()
+        planner = SequentialPlannerClient((incident_plan("incident:checkout-500"),) * 3)
+        workflow = InvestigationWorkflowService(
+            repository, FakeLLMClient(), planner_client=planner
+        )
+        pending = await workflow.create_persisted_run(self._request())
+        completed = await workflow.continue_persisted_run(pending)
+
+
+        self.assertEqual(len(completed.state.execution_state.rounds), 2)
+        self.assertEqual(completed.state.execution_state.remaining_tool_calls, 8)
+        self.assertEqual(len(completed.results), 1)
+
+        reopened = await workflow.reopen_for_follow_up(completed)
+        self.assertEqual(reopened.status, RunStatus.RUNNING)
+        self.assertEqual(reopened.follow_up_count, 1)
+
+        follow_up_completed = await workflow.continue_persisted_run(
+            reopened, follow_up_question="What about the deployment?"
+        )
+
+        self.assertEqual(follow_up_completed.status, RunStatus.COMPLETED)
+        rounds = follow_up_completed.state.execution_state.rounds
+        self.assertEqual([round.round_number for round in rounds], [1, 2, 3])
+
+
+        self.assertEqual(follow_up_completed.state.execution_state.remaining_tool_calls, 7)
+        self.assertEqual(planner.inputs[2].remaining_tool_calls, 8)
+        self.assertEqual(planner.inputs[2].planning_round, 3)
+        self.assertEqual(planner.inputs[2].investigation_goal, "What about the deployment?")
+
+
+        self.assertEqual(len(follow_up_completed.results), 2)
+        self.assertEqual(follow_up_completed.results[0], completed.results[0])
+        self.assertEqual(repository.get(completed.run_id), follow_up_completed)
+
+    async def test_follow_up_on_an_exhausted_budget_case_completes_with_zero_new_tool_calls(
+        self,
+    ) -> None:
+        repository = InMemoryRunRepository()
+
+
+        planner = SequentialPlannerClient(())
+        workflow = InvestigationWorkflowService(
+            repository, FakeLLMClient(), planner_client=planner
+        )
+        now = datetime.now(UTC)
+        exhausted_round = InvestigationPlanningRoundSnapshot(
+            round_number=1,
+            plan_id="round-1",
+            plan_validation_status="accepted",
+            completed=True,
+        )
+        exhausted = InvestigationRun(
+            run_id=uuid4(),
+            workflow_name=INVESTIGATION_WORKFLOW_NAME,
+            workflow_version=INVESTIGATION_WORKFLOW_VERSION,
+            status=RunStatus.COMPLETED,
+            started_at=now,
+            completed_at=now,
+            error=None,
+            request=self._request(),
+            state=InvestigationRuntimeSnapshot(
+                working_memory=WorkingMemory(),
+                execution_state=ExecutionState(
+                    rounds=(exhausted_round,),
+                    max_tool_calls=10,
+                    used_tool_calls=10,
+                    remaining_tool_calls=0,
+                    termination_reason="tool_call_budget_exhausted",
+                ),
+            ),
+            results=(
+                GroundedInvestigationResult(
+                    termination_reason=GroundedTerminationReason.BUDGET_EXHAUSTED,
+                    summary="Investigation stopped: tool-call budget exhausted.",
+                ),
+            ),
+        )
+        repository.save(exhausted)
+
+        reopened = await workflow.reopen_for_follow_up(exhausted)
+        follow_up_completed = await workflow.continue_persisted_run(
+            reopened, follow_up_question="Anything else in the logs?"
+        )
+
+        self.assertEqual(follow_up_completed.status, RunStatus.COMPLETED)
+        self.assertEqual(len(follow_up_completed.results), 2)
+        self.assertEqual(
+            follow_up_completed.state.execution_state.rounds, (exhausted_round,)
+        )
+        self.assertEqual(follow_up_completed.state.execution_state.remaining_tool_calls, 0)
+        self.assertEqual(follow_up_completed.state.execution_state.used_tool_calls, 10)
+
+    async def test_follow_up_does_not_double_record_an_already_recorded_fact_type(self):
+        repository = InMemoryRunRepository()
+        fact_recurrence_repository = InMemoryFactRecurrenceRepository()
+        planner = SequentialPlannerClient((hypothesis_plan(), hypothesis_plan(), hypothesis_plan()))
+        workflow = InvestigationWorkflowService(
+            repository,
+            FakeLLMClient(),
+            planner_client=planner,
+            fact_recurrence_repository=fact_recurrence_repository,
+        )
+        request = InvestigationRequest(
+            repository_owner="octo-org",
+            repository_name="analytics",
+            question="Why did checkout fail?",
+            incident_reference="incident:checkout-500",
+            pull_request_number=42,
+        )
+        pending = await workflow.create_persisted_run(request)
+        completed = await workflow.continue_persisted_run(pending)
+
+        self.assertEqual(
+            set(completed.recorded_fact_types),
+            {"changed_file", "changed_file_matches_failure_file"},
+        )
+        recorded_before = fact_recurrence_repository.get(
+            "octo-org", "analytics", "changed_file"
+        )
+        self.assertEqual(recorded_before.occurrence_count, 1)
+
+        reopened = await workflow.reopen_for_follow_up(completed)
+        follow_up_completed = await workflow.continue_persisted_run(
+            reopened, follow_up_question="What else changed in that PR?"
+        )
+
+
+        recorded_after = fact_recurrence_repository.get(
+            "octo-org", "analytics", "changed_file"
+        )
+        self.assertEqual(recorded_after.occurrence_count, 1)
+        self.assertEqual(
+            set(follow_up_completed.recorded_fact_types),
+            set(completed.recorded_fact_types),
+        )
+
+    async def test_reopen_for_follow_up_rejects_a_run_that_is_not_completed(self) -> None:
+        repository = InMemoryRunRepository()
+        workflow = InvestigationWorkflowService(repository, FakeLLMClient())
+        pending = await workflow.create_persisted_run(self._request())
+
+        with self.assertRaises(RunStateConflictError):
+            await workflow.reopen_for_follow_up(pending)
 
 
 if __name__ == "__main__":

@@ -914,6 +914,110 @@ event history/replay is still not built.
 
 See [ADR-018](decisions/ADR-018-live-run-dashboard-snapshot-polling.md) (merge-readiness) and [ADR-025](decisions/ADR-025-investigation-console-snapshot-integration.md) (investigation) for why polling the existing snapshot was chosen over a new event mechanism.
 
+## Public demo deployment (Current/Implemented)
+
+`apps/web/vercel.json` rewrites `/v1/:path*` to the Render backend origin,
+so a Vercel-hosted frontend and a Render-hosted backend stay same-origin
+from the browser's perspective — no `CORSMiddleware` was added to
+`main.py`, preserving `vite.config.ts`'s existing same-origin design intent
+rather than opening cross-origin access.
+
+`PerIpRateLimitMiddleware` (`services/api/app/api/v1/rate_limit.py`) is a
+hand-rolled, in-memory, per-process fixed-window limiter applied only to
+`POST /v1/investigations` and `POST /v1/investigations/extract-grounding` —
+the two endpoints that trigger an LLM call or a database write. It is
+intentionally not a new dependency (no Redis/shared cache): state is a
+plain per-process dict, acceptable because a Render free-tier deployment is
+a single instance and resets on redeploy. Read-only polling
+(`GET /v1/runs/{id}`) is left unrestricted.
+
+The investigation console's "Run demo investigation" button
+(`InvestigationConsolePage.tsx`) submits the same static, fixed payload as
+the existing "Demo scenario" preset (`CHECKOUT_500_PRESET` in
+`investigationRequest.ts`, matching the fixture identifiers in
+`app/evals/investigations/cases.py`) directly to the unmodified
+`POST /v1/investigations`, with no visitor-supplied input — it is a
+convenience wrapper around the same request path the manual form already
+uses, not a new backend capability.
+
+Provider/connector safety on a public deployment rests entirely on
+deployment configuration, not request-time logic: `PROMPTQL_LLM_PROVIDER`,
+`PROMPTQL_GITHUB_CONNECTOR`, `PROMPTQL_JIRA_CONNECTOR`, and
+`PROMPTQL_SENTRY_CONNECTOR` are each read once from the environment at
+process startup (`app/config.py`) into a process-lifetime client on
+`app.state`; no request field can select or override provider/connector
+mode. See [DEPLOYMENT.md](../DEPLOYMENT.md) for the exact Render
+environment variables and the warning against copying `.env` wholesale.
+
+## Investigation reopening (follow-up questions)
+
+Per [ADR-033](decisions/ADR-033-reopening-completed-investigations-for-follow-up.md).
+
+**Current/Implemented — schema and transition scoping:**
+`InvestigationRun.result: GroundedInvestigationResult | None` is now
+`results: tuple[GroundedInvestigationResult, ...]` — an ordered,
+append-only sequence stored in a new `investigation_results` JSONB array
+column (`workflow_runs`), separate from the `result` column that
+`MergeReadinessRun` still owns exclusively. A `follow_up_count` integer
+column tracks how many times a case has reopened, and a
+`recorded_fact_types` JSONB array column tracks which Fact types this
+`run_id` has already reported to `FactRecurrenceRepository` (see fact
+recurrence delta below). `PostgresRunRepository._update_existing_run` has
+a fourth `isinstance(run, InvestigationRun)` branch, alongside the three
+that already existed, permitting `COMPLETED -> RUNNING` specifically for
+investigations and rejecting a reopen once `follow_up_count` reaches
+`MAX_FOLLOW_UPS_PER_CASE = 3` (`app/runtime/investigation_models.py`).
+`ALLOWED_RUN_TRANSITIONS` and `RunStatus` (`app/runtime/state.py`,
+`app/runtime/models.py`) are untouched; `MergeReadinessRun` still cannot
+leave a terminal state, verified by a repository-layer test that attempts
+the identical `COMPLETED -> RUNNING` move on a `MergeReadinessRun` and
+confirms it is still rejected.
+
+**Current/Implemented — the reopen flow itself:**
+`POST /v1/investigations/{run_id}/follow-up` (`app/api/v1/connector_router.py`)
+accepts `{"question": "..."}` against a `COMPLETED` investigation. It
+validates existence (404) and status, delegates the actual
+`COMPLETED -> RUNNING` transition plus `follow_up_count + 1` to
+`InvestigationWorkflowService.reopen_for_follow_up()` (one durable write,
+mirroring `create_persisted_run`'s role for a brand-new case; refusal —
+not completed, or the repository-enforced cap — surfaces as
+`RunStateConflictError`, handled as a clean `409 runtime_state_conflict`
+rather than a raw exception), then dispatches the actual round through the
+existing `LiveRunTaskRegistry` background-task pattern and returns `202`
+with `run_id`/`status: running`. The dispatched work is
+`InvestigationWorkflowService.continue_persisted_run(reopened_run,
+follow_up_question=...)`: it replays `store.put()` for every item in the
+run's persisted `working_memory.evidence_content` (in order) to rehydrate
+the `EvidenceStore`, seeds `AdaptiveInvestigationRuntime.investigate()`'s
+new `initial_rounds`/`initial_evidence`/`initial_missing_information`
+parameters from the run's own last-persisted state, and passes
+`ExecutionBudget(max_tool_calls=state.execution_state.remaining_tool_calls)`
+so the tool-call budget is fixed at the case's original cap and only ever
+drawn down — never reset. `investigate()`'s round loop runs
+`range(initial_rounds + 1, MAX_PLANNING_ROUNDS + 1)`, so round numbers
+continue across the case rather than restarting at 1, and a follow-up
+against a case already at the round cap or the budget cap terminates
+immediately with zero new planner calls. `_record_fact_recurrence`
+(`app/workflows/investigation.py`) now submits only the delta of Fact
+types not already in `InvestigationRun.recorded_fact_types` for this
+`run_id`, so a follow-up reproducing an already-recorded Fact type does
+not double-count it in the ADR-031 repository-scoped counter. The
+follow-up's new question becomes `investigation_goal` for its new
+round(s); the previous turn's `GroundedInvestigationResult.summary` is
+carried separately as `PlannerInput.prior_result_summary` (mirroring how
+`remembered_patterns` already carries repository history), with its own
+guardrail section in the planner's system instructions so it is never
+mistaken for this run's own evidence or facts — documented as a follow-up
+amendment to ADR-033 rather than a new ADR.
+
+**Target/Planned (not yet implemented):** the frontend contract change
+(`apps/web/src/features/inspection/types.ts`, `responseValidation.ts`,
+`InvestigationDashboard.tsx`) needed because the HTTP response shape
+(`InvestigationResponse`) changed from a single `result` field to an
+ordered `results` sequence, and because a follow-up UI affordance (a
+"reopen with a follow-up question" action calling the new endpoint) does
+not exist yet.
+
 ## Not implemented
 
 As of this writing, the following are genuinely absent from the repository
@@ -935,8 +1039,12 @@ Option C, richer LLM-proposed memory candidates, remains deferred); and
 cross-source conflict resolution (the connector graph is
 single-source-per-kind by construction, so no same-question conflict between
 sources can occur today). `packages/`, `infra/`, and `scripts/` remain empty.
-Neon and Grafana Cloud resources and application deployment are configuration
-concerns outside this repository, not code paths inside it.
+Neon and Grafana Cloud resources themselves, and provisioning the actual
+Render/Vercel services, remain configuration concerns outside this
+repository; the code-level deployment topology (the Vercel rewrite, the
+demo-scoped rate limiter) is now in-repo — see
+[Public demo deployment](#public-demo-deployment-currentimplemented) above
+and [DEPLOYMENT.md](../DEPLOYMENT.md).
 
 A UI gap rather than a missing backend capability: there is currently no
 reachable way to *start* a merge-readiness run from the browser.

@@ -24,7 +24,11 @@ from app.runtime.models import (
     RuntimeStep,
     StepStatus,
 )
-from app.runtime.investigation_models import InvestigationRun, InvestigationRuntimeSnapshot
+from app.runtime.investigation_models import (
+    MAX_FOLLOW_UPS_PER_CASE,
+    InvestigationRun,
+    InvestigationRuntimeSnapshot,
+)
 from app.runtime.repository import RuntimeRun
 from app.runtime.state import ALLOWED_RUN_TRANSITIONS, ALLOWED_STEP_TRANSITIONS
 
@@ -49,9 +53,14 @@ def _run_values(run: RuntimeRun) -> dict[str, Any]:
             "request_payload": _json_value(run.request),
             "github_facts": None,
             "jira_facts": None,
-            "result": _json_value(run.result),
+            "result": None,
             "investigation_state": _json_value(run.state),
             "runtime_error": _json_value(run.error),
+            "investigation_results": [
+                result.model_dump(mode="json") for result in run.results
+            ],
+            "follow_up_count": run.follow_up_count,
+            "recorded_fact_types": list(run.recorded_fact_types),
         }
     sources = run.sources
     return {
@@ -71,6 +80,9 @@ def _run_values(run: RuntimeRun) -> dict[str, Any]:
         "result": _json_value(run.result),
         "investigation_state": None,
         "runtime_error": _json_value(run.error),
+        "investigation_results": [],
+        "follow_up_count": 0,
+        "recorded_fact_types": [],
     }
 
 
@@ -250,11 +262,12 @@ class PostgresRunRepository:
                 if stored_run.investigation_state is not None
                 else None
             ),
-            result=(
-                GroundedInvestigationResult.model_validate(stored_run.result)
-                if stored_run.result is not None
-                else None
+            results=tuple(
+                GroundedInvestigationResult.model_validate(result)
+                for result in stored_run.investigation_results
             ),
+            follow_up_count=stored_run.follow_up_count,
+            recorded_fact_types=tuple(stored_run.recorded_fact_types),
         )
 
     def _confirmed_run_id(self, run_id: UUID) -> UUID | None:
@@ -282,15 +295,22 @@ class PostgresRunRepository:
         incoming_status = run.status.value
 
         if stored_status != incoming_status:
-            allowed_statuses = {
-                status.value
-                for status in ALLOWED_RUN_TRANSITIONS[RunStatus(stored_status)]
-            }
-            if incoming_status not in allowed_statuses:
-                raise RunStateConflictError(
-                    "The stored run does not permit this state transition.",
-                    run.run_id,
-                )
+            if (
+                isinstance(run, InvestigationRun)
+                and stored_status == RunStatus.COMPLETED.value
+                and incoming_status == RunStatus.RUNNING.value
+            ):
+                self._validate_investigation_reopen(stored_run, run)
+            else:
+                allowed_statuses = {
+                    status.value
+                    for status in ALLOWED_RUN_TRANSITIONS[RunStatus(stored_status)]
+                }
+                if incoming_status not in allowed_statuses:
+                    raise RunStateConflictError(
+                        "The stored run does not permit this state transition.",
+                        run.run_id,
+                    )
         elif incoming_status in {"completed", "failed", "cancelled"}:
             if _run_values(run) == self._stored_run_values(stored_run):
                 return
@@ -312,6 +332,23 @@ class PostgresRunRepository:
         if update_result.rowcount != 1:
             raise RunStateConflictError(
                 "The stored runtime state changed concurrently.",
+                run.run_id,
+            )
+
+    @staticmethod
+    def _validate_investigation_reopen(
+        stored_run: WorkflowRunRow,
+        run: InvestigationRun,
+    ) -> None:
+        if run.follow_up_count != stored_run.follow_up_count + 1:
+            raise RunStateConflictError(
+                "A reopened investigation must record exactly one more "
+                "follow-up than the stored case.",
+                run.run_id,
+            )
+        if stored_run.follow_up_count >= MAX_FOLLOW_UPS_PER_CASE:
+            raise RunStateConflictError(
+                "This investigation has reached its follow-up limit.",
                 run.run_id,
             )
 
@@ -401,6 +438,9 @@ class PostgresRunRepository:
             "result": stored_run.result,
             "investigation_state": stored_run.investigation_state,
             "runtime_error": stored_run.runtime_error,
+            "investigation_results": stored_run.investigation_results,
+            "follow_up_count": stored_run.follow_up_count,
+            "recorded_fact_types": stored_run.recorded_fact_types,
         }
 
     @staticmethod

@@ -30,7 +30,21 @@ it as evidence, do not fabricate an explanation for why it recurred, and do not
 treat it as already established by this run's facts or evidence."""
 
 
+PLANNER_PRIOR_RESULT_SECTION = """
+
+Prior turn's answer for this case (not evidence from this run, not a
+conclusion already established by current facts): the `prior_result_summary`
+field is the summary this case's previous investigation turn produced, before
+this follow-up question was asked. Treat it only as context for what was
+already asked and answered. Do not cite it as evidence, do not treat it as
+already proven by this round's facts, and do not repeat it verbatim as if it
+were a new finding."""
+
+
 def build_planner_system_instructions(planner_input: PlannerInput) -> str:
-    if not planner_input.remembered_patterns:
-        return PLANNER_SYSTEM_INSTRUCTIONS
-    return PLANNER_SYSTEM_INSTRUCTIONS + PLANNER_REMEMBERED_PATTERNS_SECTION
+    instructions = PLANNER_SYSTEM_INSTRUCTIONS
+    if planner_input.remembered_patterns:
+        instructions += PLANNER_REMEMBERED_PATTERNS_SECTION
+    if planner_input.prior_result_summary is not None:
+        instructions += PLANNER_PRIOR_RESULT_SECTION
+    return instructions

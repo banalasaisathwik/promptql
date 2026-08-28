@@ -333,5 +333,50 @@ class RepositoryMemoryPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("not evidence from this run", client.request.system_instructions)
 
 
+class PriorResultSummaryPromptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_system_instructions_omit_section_when_no_prior_result_summary(self) -> None:
+        class RecordingClient:
+            provider = FakeLLMClient.provider
+            model = "recording"
+            request = None
+
+            async def generate_typed(self, request):
+                self.request = request
+                return {"output": _plan().model_dump(mode="json")}
+
+        client = RecordingClient()
+        await TypedLLMPlanner(client).plan(build_planner_input(_request(), _result(), TOOL_DEFINITIONS))
+
+        self.assertNotIn("Prior turn's answer", client.request.system_instructions)
+
+    async def test_system_instructions_include_labeled_section_when_prior_result_summary_present(
+        self,
+    ) -> None:
+        planner_input = ContextBuilder().build(
+            "What about the deployment?",
+            (),
+            (),
+            (),
+            TOOL_DEFINITIONS,
+            request_context=_request(),
+            prior_result_summary="No supported hypotheses were found in the prior turn.",
+        )
+
+        class RecordingClient:
+            provider = FakeLLMClient.provider
+            model = "recording"
+            request = None
+
+            async def generate_typed(self, request):
+                self.request = request
+                return {"output": _plan().model_dump(mode="json")}
+
+        client = RecordingClient()
+        await TypedLLMPlanner(client).plan(planner_input)
+
+        self.assertIn("Prior turn's answer for this case", client.request.system_instructions)
+        self.assertIn("not evidence from this run", client.request.system_instructions)
+
+
 if __name__ == "__main__":
     unittest.main()
