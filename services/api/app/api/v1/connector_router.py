@@ -1,9 +1,11 @@
 import asyncio
+import os
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.api.v1.models import (
@@ -22,6 +24,20 @@ from app.api.v1.models import (
     InvestigationResponse,
     RuntimePersistenceApiError,
 )
+from app.api.v1.auth_router import get_current_user_optional
+from app.api.v1.credentials_router import get_credential_repository
+from app.api.v1.request_lifecycle import request_scoped_http_client
+from app.auth import CredentialProvider, User
+from app.config import GitHubSettings, JiraSettings, SentrySettings
+from app.connectors.factory import (
+    create_github_code_evidence_source,
+    create_github_connector,
+    create_github_http_client,
+    create_incident_source,
+    create_jira_connector,
+    create_jira_http_client,
+    create_sentry_http_client,
+)
 from app.connectors.models import ConnectorRequest
 from app.investigations.grounding_extraction import (
     GroundingExtractionError,
@@ -30,7 +46,12 @@ from app.investigations.grounding_extraction import (
     TypedGroundingExtractor,
 )
 from app.investigations.models import InvestigationRequest, has_required_grounding_reference
-from app.connectors.protocols import GitHubConnector, IncidentSource, JiraConnector
+from app.connectors.protocols import (
+    GitHubCodeEvidenceSource,
+    GitHubConnector,
+    IncidentSource,
+    JiraConnector,
+)
 from app.database import PostgresFactRecurrenceRepository, PostgresRunRepository
 from app.explanations import (
     MergeReadinessExplanationError,
@@ -68,16 +89,127 @@ from app.workflows import InvestigationWorkflowService, MergeReadinessWorkflowSe
 router = APIRouter(prefix="/v1", tags=["pull-request-inspections"])
 
 
-def get_github_connector(request: Request) -> GitHubConnector:
-    return request.app.state.github_connector
+async def get_github_connector(
+    request: Request,
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
+) -> AsyncIterator[GitHubConnector]:
+    if current_user is None:
+        yield request.app.state.github_connector
+        return
+
+    credential_repository = get_credential_repository(request)
+    token = credential_repository.get_decrypted_credential(
+        current_user.id, CredentialProvider.GITHUB
+    )
+    if token is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Connect your GitHub account before starting an investigation that needs it."
+            ),
+        )
+
+    settings = GitHubSettings.from_stored_credential(token)
+    async for http_client in request_scoped_http_client(
+        lambda: create_github_http_client(settings)
+    ):
+        yield create_github_connector(
+            settings, get_runtime_telemetry(request), http_client
+        )
 
 
-def get_jira_connector(request: Request) -> JiraConnector:
-    return request.app.state.jira_connector
+async def get_github_code_evidence_source(
+    request: Request,
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
+) -> AsyncIterator[GitHubCodeEvidenceSource]:
+    if current_user is None:
+        yield request.app.state.github_code_source
+        return
+
+    credential_repository = get_credential_repository(request)
+    token = credential_repository.get_decrypted_credential(
+        current_user.id, CredentialProvider.GITHUB
+    )
+    if token is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Connect your GitHub account before starting an investigation that needs it."
+            ),
+        )
+
+    settings = GitHubSettings.from_stored_credential(token)
+    async for http_client in request_scoped_http_client(
+        lambda: create_github_http_client(settings)
+    ):
+        yield create_github_code_evidence_source(
+            settings, get_runtime_telemetry(request), http_client
+        )
 
 
-def get_incident_source(request: Request) -> IncidentSource:
-    return request.app.state.incident_source
+async def get_jira_connector(
+    request: Request,
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
+) -> AsyncIterator[JiraConnector]:
+    if current_user is None:
+        yield request.app.state.jira_connector
+        return
+
+    credential_repository = get_credential_repository(request)
+    token = credential_repository.get_decrypted_credential(
+        current_user.id, CredentialProvider.JIRA
+    )
+    if token is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Connect your Jira account before starting an investigation that needs it."
+            ),
+        )
+
+    settings = JiraSettings.from_stored_credential(
+        token,
+        base_url=os.environ.get("JIRA_BASE_URL", ""),
+        email=os.environ.get("JIRA_EMAIL", ""),
+    )
+    async for http_client in request_scoped_http_client(
+        lambda: create_jira_http_client(settings)
+    ):
+        yield create_jira_connector(
+            settings, get_runtime_telemetry(request), http_client
+        )
+
+
+async def get_incident_source(
+    request: Request,
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
+) -> AsyncIterator[IncidentSource]:
+    if current_user is None:
+        yield request.app.state.incident_source
+        return
+
+    credential_repository = get_credential_repository(request)
+    token = credential_repository.get_decrypted_credential(
+        current_user.id, CredentialProvider.SENTRY
+    )
+    if token is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Connect your Sentry account before starting an investigation that needs it."
+            ),
+        )
+
+    settings = SentrySettings.from_stored_credential(
+        token,
+        organization_slug=os.environ.get("SENTRY_ORGANIZATION_SLUG", ""),
+    )
+    async for http_client in request_scoped_http_client(
+        lambda: create_sentry_http_client(settings)
+    ):
+        yield create_incident_source(
+            settings, get_runtime_telemetry(request), http_client
+        )
 
 
 def get_runtime_telemetry(request: Request) -> RuntimeTelemetry:
@@ -144,16 +276,20 @@ def get_investigation_workflow(
     fact_recurrence_repository: Annotated[
         FactRecurrenceRepository, Depends(get_fact_recurrence_repository)
     ],
+    github_code_source: Annotated[
+        GitHubCodeEvidenceSource, Depends(get_github_code_evidence_source)
+    ],
     incident_source: Annotated[IncidentSource, Depends(get_incident_source)],
+    jira_connector: Annotated[JiraConnector, Depends(get_jira_connector)],
 ) -> InvestigationWorkflowService:
     return InvestigationWorkflowService(
         run_repository,
         request.app.state.investigation_hypothesis_client,
         planner_client=request.app.state.investigation_planner_client,
         code_diagnosis_client=request.app.state.investigation_code_diagnosis_client,
-        github_code_source=request.app.state.github_code_source,
+        github_code_source=github_code_source,
         incident_source=incident_source,
-        jira_connector=request.app.state.jira_connector,
+        jira_connector=jira_connector,
         telemetry=request.app.state.runtime_telemetry,
         fact_recurrence_repository=fact_recurrence_repository,
     )

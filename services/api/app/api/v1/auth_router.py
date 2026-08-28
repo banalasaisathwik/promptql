@@ -85,6 +85,19 @@ def get_current_user(
     return user
 
 
+def get_current_user_optional(request: Request) -> User | None:
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if token is None:
+        return None
+
+    user_repository = get_user_repository(request)
+    session_signer = get_session_signer(request)
+    user_id = session_signer.unsign(token)
+    if user_id is None:
+        return None
+    return user_repository.get_by_id(user_id)
+
+
 def _user_response(user: User) -> UserResponse:
     return UserResponse(id=user.id, email=user.email, created_at=user.created_at)
 
