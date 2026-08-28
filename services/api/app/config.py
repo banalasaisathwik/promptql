@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from math import isfinite
@@ -7,7 +8,11 @@ from urllib.parse import unquote, urlsplit
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
-from app.connectors.errors import GitHubConfigurationError, JiraConfigurationError
+from app.connectors.errors import (
+    GitHubConfigurationError,
+    JiraConfigurationError,
+    SentryConfigurationError,
+)
 
 
 class DatabaseConfigurationError(RuntimeError):
@@ -26,6 +31,11 @@ class GitHubConnectorMode(StrEnum):
 class JiraConnectorMode(StrEnum):
     FAKE = "fake"
     JIRA = "jira"
+
+
+class SentryConnectorMode(StrEnum):
+    FAKE = "fake"
+    SENTRY = "sentry"
 
 
 class LLMProvider(StrEnum):
@@ -139,6 +149,49 @@ def _parse_jira_timeout(raw_timeout: str) -> float:
     if not isfinite(timeout) or timeout <= 0 or timeout > 60:
         raise JiraConfigurationError(
             "JIRA_REQUEST_TIMEOUT_SECONDS must be greater than 0 and at most 60."
+        )
+    return timeout
+
+
+def _parse_sentry_api_base_url(raw_url: str) -> str:
+    url = raw_url.strip().rstrip("/")
+    parsed_url = urlsplit(url)
+    if (
+        parsed_url.scheme != "https"
+        or not parsed_url.hostname
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_url.query
+        or parsed_url.fragment
+    ):
+        raise SentryConfigurationError(
+            "SENTRY_API_BASE_URL must be a credential-free HTTPS URL."
+        )
+    return url
+
+
+_SENTRY_SLUG_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+
+
+def _parse_sentry_organization_slug(raw_slug: str) -> str:
+    slug = raw_slug.strip()
+    if not _SENTRY_SLUG_PATTERN.fullmatch(slug):
+        raise SentryConfigurationError(
+            "SENTRY_ORGANIZATION_SLUG must be a valid Sentry organization slug."
+        )
+    return slug
+
+
+def _parse_sentry_timeout(raw_timeout: str) -> float:
+    try:
+        timeout = float(raw_timeout)
+    except ValueError:
+        raise SentryConfigurationError(
+            "SENTRY_REQUEST_TIMEOUT_SECONDS must be a number."
+        ) from None
+    if not isfinite(timeout) or timeout <= 0 or timeout > 60:
+        raise SentryConfigurationError(
+            "SENTRY_REQUEST_TIMEOUT_SECONDS must be greater than 0 and at most 60."
         )
     return timeout
 
@@ -382,6 +435,54 @@ class JiraSettings:
             api_token=api_token,
             request_timeout_seconds=_parse_jira_timeout(
                 os.environ.get("JIRA_REQUEST_TIMEOUT_SECONDS", "10")
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class SentrySettings:
+    mode: SentryConnectorMode
+    token: str | None = field(repr=False)
+    organization_slug: str | None
+    api_base_url: str
+    request_timeout_seconds: float
+
+    @classmethod
+    def from_environment(cls) -> "SentrySettings":
+        raw_mode = os.environ.get("PROMPTQL_SENTRY_CONNECTOR", "fake").strip()
+        try:
+            mode = SentryConnectorMode(raw_mode)
+        except ValueError:
+            raise SentryConfigurationError(
+                "PROMPTQL_SENTRY_CONNECTOR must be fake or sentry."
+            ) from None
+
+        token = os.environ.get("SENTRY_TOKEN", "").strip() or None
+        raw_organization_slug = os.environ.get("SENTRY_ORGANIZATION_SLUG", "").strip()
+        if mode is SentryConnectorMode.SENTRY:
+            if token is None:
+                raise SentryConfigurationError(
+                    "SENTRY_TOKEN is required when the Sentry connector mode is sentry."
+                )
+            if not raw_organization_slug:
+                raise SentryConfigurationError(
+                    "SENTRY_ORGANIZATION_SLUG is required when the Sentry "
+                    "connector mode is sentry."
+                )
+
+        return cls(
+            mode=mode,
+            token=token,
+            organization_slug=(
+                _parse_sentry_organization_slug(raw_organization_slug)
+                if raw_organization_slug
+                else None
+            ),
+            api_base_url=_parse_sentry_api_base_url(
+                os.environ.get("SENTRY_API_BASE_URL", "https://sentry.io/api/0")
+            ),
+            request_timeout_seconds=_parse_sentry_timeout(
+                os.environ.get("SENTRY_REQUEST_TIMEOUT_SECONDS", "10")
             ),
         )
 

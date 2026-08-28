@@ -20,17 +20,22 @@ from app.config import (
     LLMProvider,
     LLMSettings,
     LLMTask,
+    SentryConnectorMode,
+    SentrySettings,
 )
 from app.connectors.errors import FixtureNotFoundError
 from app.connectors.factory import (
     create_github_code_evidence_source,
     create_github_connector,
     create_github_http_client,
+    create_incident_source,
     create_jira_connector,
     create_jira_http_client,
+    create_sentry_http_client,
 )
 from app.connectors.github_http import HttpGitHubConnector
 from app.connectors.jira_http import HttpJiraConnector
+from app.connectors.sentry_http import HttpSentrySource
 from app.database import (
     create_database_engine,
     create_session_factory,
@@ -109,6 +114,7 @@ def create_app(
     observability: Observability | None = None,
     github_settings: GitHubSettings | None = None,
     jira_settings: JiraSettings | None = None,
+    sentry_settings: SentrySettings | None = None,
     llm_settings: LLMSettings | None = None,
     llm_client: LLMClient | None = None,
 ) -> FastAPI:
@@ -150,6 +156,21 @@ def create_app(
         resolved_jira_settings,
         app_observability.runtime_telemetry,
         jira_http_client,
+    )
+
+    if sentry_settings is not None:
+        resolved_sentry_settings = sentry_settings
+    else:
+        resolved_sentry_settings = SentrySettings.from_environment()
+
+    sentry_http_client = None
+    if resolved_sentry_settings.mode is SentryConnectorMode.SENTRY:
+        sentry_http_client = create_sentry_http_client(resolved_sentry_settings)
+
+    incident_source = create_incident_source(
+        resolved_sentry_settings,
+        app_observability.runtime_telemetry,
+        sentry_http_client,
     )
 
     if llm_client is not None:
@@ -205,6 +226,7 @@ def create_app(
                     "runtime.connector_sources.selected",
                     github_source=github_connector.source,
                     jira_source=jira_connector.source,
+                    sentry_source=incident_source.source,
                 )
             settings = DatabaseSettings.from_environment()
             engine = create_database_engine(settings)
@@ -222,6 +244,8 @@ def create_app(
                 await github_connector.aclose()
             if isinstance(jira_connector, HttpJiraConnector):
                 await jira_connector.aclose()
+            if isinstance(incident_source, HttpSentrySource):
+                await incident_source.aclose()
             for client in {
                 id(selected_llm_client): selected_llm_client,
                 id(investigation_planner_client): investigation_planner_client,
@@ -240,6 +264,7 @@ def create_app(
     application.state.runtime_telemetry = app_observability.runtime_telemetry
     application.state.github_connector = github_connector
     application.state.jira_connector = jira_connector
+    application.state.incident_source = incident_source
     application.state.merge_readiness_explanation_service = explanation_service
     application.state.investigation_llm_client = selected_llm_client
     application.state.investigation_planner_client = investigation_planner_client

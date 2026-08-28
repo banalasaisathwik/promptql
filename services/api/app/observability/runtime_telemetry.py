@@ -327,6 +327,10 @@ class RuntimeTelemetry:
             ("github", "live", "get_changed_file_evidence"),
             ("jira", "fake", "get_issue"),
             ("jira", "live", "get_issue"),
+            ("sentry", "live", "get_incident_evidence"),
+            ("sentry", "live", "get_deployment_evidence"),
+            ("sentry", "live", "get_failure_location_evidence"),
+            ("sentry", "live", "get_telemetry_window_evidence"),
         }
         identity = (connector_name, connector_source, operation)
         if identity not in allowed_identities:

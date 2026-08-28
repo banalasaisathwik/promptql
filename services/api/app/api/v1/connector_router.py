@@ -28,7 +28,7 @@ from app.investigations.grounding_extraction import (
     TypedGroundingExtractor,
 )
 from app.investigations.models import InvestigationRequest, has_required_grounding_reference
-from app.connectors.protocols import GitHubConnector, JiraConnector
+from app.connectors.protocols import GitHubConnector, IncidentSource, JiraConnector
 from app.database import PostgresFactRecurrenceRepository, PostgresRunRepository
 from app.explanations import (
     MergeReadinessExplanationError,
@@ -70,6 +70,10 @@ def get_github_connector(request: Request) -> GitHubConnector:
 
 def get_jira_connector(request: Request) -> JiraConnector:
     return request.app.state.jira_connector
+
+
+def get_incident_source(request: Request) -> IncidentSource:
+    return request.app.state.incident_source
 
 
 def get_runtime_telemetry(request: Request) -> RuntimeTelemetry:
@@ -136,6 +140,7 @@ def get_investigation_workflow(
     fact_recurrence_repository: Annotated[
         FactRecurrenceRepository, Depends(get_fact_recurrence_repository)
     ],
+    incident_source: Annotated[IncidentSource, Depends(get_incident_source)],
 ) -> InvestigationWorkflowService:
     return InvestigationWorkflowService(
         run_repository,
@@ -143,6 +148,7 @@ def get_investigation_workflow(
         planner_client=request.app.state.investigation_planner_client,
         code_diagnosis_client=request.app.state.investigation_code_diagnosis_client,
         github_code_source=request.app.state.github_code_source,
+        incident_source=incident_source,
         jira_connector=request.app.state.jira_connector,
         telemetry=request.app.state.runtime_telemetry,
         fact_recurrence_repository=fact_recurrence_repository,

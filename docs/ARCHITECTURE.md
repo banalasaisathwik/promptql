@@ -213,25 +213,32 @@ three async protocols in `protocols.py`: `GitHubConnector`, `JiraConnector`,
 and `GitHubCodeEvidenceSource`/`IncidentSource` for investigation evidence.
 
 - `factory.py` selects fake or HTTP implementations from `GitHubSettings` /
-  `JiraSettings` mode (`config.py`); neither live mode falls back to fixture
-  data on failure, and both default to `fake`.
-- `github_http.py` / `jira_http.py` / `github_code_http.py` validate raw
-  provider JSON against private strict response models before it becomes a
-  domain value; `github_diff.py` parses unified-diff patch text into typed
-  hunk evidence. The GitHub files-list call pages at 100 records with a
-  10-page local maximum — a complete empty response yields no evidence,
-  reaching the bound raises `GitHubIncompleteResultError`, and malformed
-  JSON/schema/patch syntax raises `GitHubInvalidResponseError`.
-- `IncidentSource` currently has only one implementation:
-  `FakeIncidentSource` (`incident_fakes.py`), whose fixed fixtures back
-  `get_incident_evidence`, `get_deployment_evidence`,
-  `get_failure_location_evidence`, and `get_telemetry_window_evidence`. No
-  HTTP/live incident source exists, and nothing in `config.py` or
-  `main.py` selects one — `InvestigationWorkflowService` always falls back
-  to `FakeIncidentSource()` unless a caller passes a different
-  implementation explicitly (`workflows/investigation.py`), so investigation
-  incident/deployment/telemetry evidence is fake-only today regardless of
-  the configured GitHub/Jira connector mode.
+  `JiraSettings` / `SentrySettings` mode (`config.py`); no live mode falls
+  back to fixture data on failure, and all three default to `fake`.
+- `github_http.py` / `jira_http.py` / `github_code_http.py` / `sentry_http.py`
+  validate raw provider JSON against private strict response models before
+  it becomes a domain value; `github_diff.py` parses unified-diff patch text
+  into typed hunk evidence. The GitHub files-list call pages at 100 records
+  with a 10-page local maximum — a complete empty response yields no
+  evidence, reaching the bound raises `GitHubIncompleteResultError`, and
+  malformed JSON/schema/patch syntax raises `GitHubInvalidResponseError`.
+- `IncidentSource` has two implementations: `FakeIncidentSource`
+  (`incident_fakes.py`), whose fixed fixtures back `get_incident_evidence`,
+  `get_deployment_evidence`, `get_failure_location_evidence`, and
+  `get_telemetry_window_evidence`; and `HttpSentrySource`
+  (`sentry_http.py`), a self-contained (no shared HTTP base class) live
+  Sentry REST implementation of the same four methods, selected by
+  `PROMPTQL_SENTRY_CONNECTOR` and defaulting to `fake`
+  (`main.py`/`api/v1/connector_router.py` wire
+  `application.state.incident_source` into `InvestigationWorkflowService`
+  the same way as the GitHub/Jira connectors). `HttpSentrySource` always sets
+  `IncidentEvidenceContent.environment` and `.category` to `None` — Sentry
+  does not return either as a faithful field on an issue, so neither is
+  passed through unverified nor heuristically parsed
+  (`docs/decisions/ADR-032-read-only-sentry-rest-connector.md`).
+  `DeploymentEvidenceRequest.deployment_reference` is parsed as
+  `"version:environment"` to resolve one Sentry deploy unambiguously, since
+  a release can have several environment-scoped deploys.
 - A lookup with no matching fixture raises `FixtureNotFoundError` rather than
   returning empty evidence, preserving the distinction between "unavailable"
   and "observed zero results."
@@ -914,9 +921,8 @@ As of this writing, the following are genuinely absent from the repository
 earlier description): a cancellation API or any code path that ever
 transitions a run to `cancelled`; crash recovery / checkpoint-resume for
 investigation execution (which is process-local and in-memory only); a
-distributed worker or queue; GitHub or Jira OAuth/app authentication or any
-multi-tenant connector credential model; a live/HTTP `IncidentSource`
-(only `FakeIncidentSource` exists, in every environment); retention policies;
+distributed worker or queue; GitHub, Jira, or Sentry OAuth/app authentication
+or any multi-tenant connector credential model; retention policies;
 persisted/versioned explanations; LLM SDK-level retries or provider fallback
 (`max_retries=0` everywhere, and runtime retries only the tool-execution
 path); hosted eval services, LLM-as-a-judge grading, or production-traffic
@@ -1245,7 +1251,7 @@ instead of repeating it here.
 | V2.1 Investigation Domain Model | Implemented | [Investigations subsystem structure](#investigations-subsystem-structure) |
 | V2.2 Evidence Model | Implemented | [Evidence & Fact model](#evidence--fact-model) |
 | V2.3 GitHub code/diff evidence | Implemented | [Connectors subsystem](#connectors-subsystem) |
-| V2.4 IncidentSource abstraction | Implemented (fake-only in every environment) | [Connectors subsystem](#connectors-subsystem) |
+| V2.4 IncidentSource abstraction | Implemented (fake by default; live `HttpSentrySource` behind `PROMPTQL_SENTRY_CONNECTOR`) | [Connectors subsystem](#connectors-subsystem) |
 | V2.5 Tool abstraction and registry | Implemented (now 8 tools, not 7) | [Tools subsystem](#tools-subsystem) |
 | V2.6 Deterministic investigation baseline | Implemented (not the live path) | [Investigations subsystem structure](#investigations-subsystem-structure) |
 | V2.7 Typed planner | Implemented | [Planning subsystem](#planning-subsystem-planner-validator-and-replanning) |

@@ -180,6 +180,110 @@ class JiraConfigurationError(JiraConnectorError):
         super().__init__(ConnectorErrorCategory.CONFIGURATION_ERROR, message)
 
 
+class SentryConnectorError(RuntimeError):
+    category: ConnectorErrorCategory
+
+    def __init__(self, category: ConnectorErrorCategory, message: str) -> None:
+        self.category = category
+        super().__init__(message)
+
+
+class SentryConfigurationError(SentryConnectorError):
+    def __init__(
+        self,
+        message: str = "Sentry connector configuration is invalid.",
+    ) -> None:
+        super().__init__(ConnectorErrorCategory.CONFIGURATION_ERROR, message)
+
+
+class SentryUnauthorizedError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.UNAUTHORIZED,
+            "Sentry authentication failed.",
+        )
+
+
+class SentryForbiddenError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.FORBIDDEN,
+            "Sentry denied access to the requested operation.",
+        )
+
+
+class SentryNotFoundError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.NOT_FOUND,
+            "The requested Sentry resource was not found.",
+        )
+
+
+class SentryRateLimitedError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.RATE_LIMITED,
+            "Sentry rate limiting prevented the operation.",
+        )
+
+
+class SentryTimeoutError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.TIMEOUT,
+            "The Sentry request timed out.",
+        )
+
+
+class SentryUpstreamUnavailableError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.UPSTREAM_UNAVAILABLE,
+            "Sentry is currently unavailable.",
+        )
+
+
+class SentryInvalidResponseError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.INVALID_RESPONSE,
+            "Sentry returned an invalid response.",
+        )
+
+
+class SentryInvalidDeploymentReferenceError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.INVALID_REQUEST,
+            "The Sentry deployment reference must be \"version:environment\".",
+        )
+
+
+class SentryReleaseMissingCommitError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.INVALID_RESPONSE,
+            "The Sentry release has no associated commit.",
+        )
+
+
+class SentryDeployNotFoundError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.NOT_FOUND,
+            "No single Sentry deploy matches the requested environment.",
+        )
+
+
+class SentryUnsupportedTelemetrySignalError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.INVALID_REQUEST,
+            "This telemetry signal has no verified Sentry query mapping.",
+        )
+
+
 class ConnectorUnavailableError(RuntimeError):
     def __init__(self, connector_name: str) -> None:
         self.connector_name = connector_name

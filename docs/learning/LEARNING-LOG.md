@@ -3084,3 +3084,105 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   `PlannerInput` gain a new field, and should a promoted counter ever be
   allowed to expire/demote, or does "once promoted, always promoted" hold
   indefinitely? ADR-031 defers both.
+
+### 2026-08-28 - Live-verify a new connector's exact field casing, don't trust adjacent documentation
+
+- **V2 milestone:** V2.4 IncidentSource abstraction — first live implementation.
+- **Engineering concept and syntax:** `IncidentSource` (`connectors/protocols.py`)
+  had only ever had `FakeIncidentSource`. `HttpSentrySource`
+  (`connectors/sentry_http.py`) is its first live implementation, following
+  the established fake/live-switching pattern (`SentrySettings`,
+  `SentryConnectorMode`, `create_incident_source` in `factory.py`) with no
+  shared HTTP base class — Sentry's cursor/`Link`-header pagination doesn't
+  fit `github_http_base.py`'s page-number shape, and none of the four
+  `IncidentSource` methods needs list pagination at all (each fetches by
+  direct reference), so it mirrors `jira_http.py`'s self-contained shape
+  instead.
+- **Implementation locations:** `connectors/sentry_http_models.py` (raw
+  response models), `connectors/sentry_http.py` (`HttpSentrySource`),
+  `connectors/errors.py` (`SentryConnectorError` family), `config.py`
+  (`SentrySettings`), `factory.py`/`main.py`/`api/v1/connector_router.py`
+  (wiring `application.state.incident_source` into
+  `InvestigationWorkflowService`, replacing its previous hardcoded
+  `FakeIncidentSource()`-only default), `observability/structured_logging.py`
+  (`sentry_source` added to `ALLOWED_EVENT_FIELDS`).
+  [ADR-032](decisions/ADR-032-read-only-sentry-rest-connector.md) records the
+  `environment`/`category` always-`None` decision, the `unresolved`/
+  `resolved`/`ignored` -> `ACTIVE`/`RESOLVED`/`UNKNOWN` status mapping, the
+  `"version:environment"` composite `deployment_reference` (a release can
+  have several environment-scoped deploys, so the bare version can't resolve
+  one unambiguously), and the free-tier demo-fragility mitigation below.
+- **The live-verification catch:** A prior diagnostic and this
+  implementation's raw response models took Sentry's stack-frame field names
+  (`filename`/`function`/`lineno`) from `develop.sentry.dev`'s SDK-to-Sentry
+  *ingestion* payload spec — the document describing what an SDK sends
+  Sentry, not what Sentry's REST API sends back. Every mocked unit test used
+  that same assumed shape, so they were internally consistent and green
+  while being wrong. Live verification against a real captured event (one
+  deliberate `ValueError` triggered through the actual `sentry-sdk`,
+  ingested into a real free-tier Sentry org) showed the REST API actually
+  returns `lineNo` (camelCase) — every frame in the real payload had
+  `"lineno": null`/absent, so `SentryStackFrameResponse.lineno` silently
+  validated to its `None` default instead of raising, and
+  `StackFrameEvidenceContent.line_number` was silently wrong in a way no
+  schema-validation failure would ever surface. Fixed by renaming the field
+  to `lineNo` (matching every other raw-response field in this file, which
+  already keep Sentry's actual camelCase key as the attribute name) and
+  re-verified against the same real event: `line_number` came back `10`,
+  matching the actual `raise` line in the trigger script. This is the
+  concrete version of "never treat successful schema parsing as evidence a
+  response is correct" (`app/investigations/CLAUDE.md`) — the failure mode
+  wasn't a crash, it was a quietly wrong optional field, and the fix
+  documents in `sentry_http_models.py` exactly which document was trusted
+  and why it was wrong for this call.
+- **Decision and invariant:** `HttpSentrySource` never fabricates
+  `IncidentEvidenceContent.environment`/`.category` (always `None` for
+  Sentry-sourced evidence) and never constructs `DeploymentEvidenceContent`
+  with a null-derived `commit_sha` (`SentryReleaseMissingCommitError` instead
+  — confirmed live: the SDK's auto-created release had `lastCommit: null`
+  until a release was explicitly created through the Releases API with a
+  `commits` entry). `evidence_id` values built from free-text provider
+  strings (release version, environment, `incident_reference`, `service`)
+  are SHA-256 digested before use, mirroring `github_code_http.py`'s
+  existing `_digest()` precedent, because `Evidence.evidence_id`'s
+  `InvestigationIdentifier` pattern (`^[A-Za-z0-9][A-Za-z0-9._:-]*$`) rejects
+  characters like `@`/`+`/`%` that real Sentry release versions and
+  caller-supplied references can contain — caught by an early ad hoc script,
+  then locked in with permanent tests
+  (`EvidenceIdentifierSanitizationTests`).
+- **Failure behavior and trade-off:** Sentry's Developer (free) plan gives
+  30-day retention and a 5,000 error/month quota — unlike GitHub/Jira live
+  objects, a verified Sentry issue is not durable. `PROMPTQL_SENTRY_CONNECTOR`
+  defaults to `fake`; live mode was enabled only for this one deliberate
+  verification pass (one real issue via `sentry-sdk`, one real release with
+  an explicit commit, one real deploy, created through the account's own
+  free-tier API) and reset to `fake` immediately after capture. All four
+  `IncidentSource` methods were run against real data with the connector's
+  actual code (not a reimplementation): `get_incident_evidence` returned
+  `status=active, service=python-flask, environment=None, category=None`;
+  `get_failure_location_evidence` returned the correct crash frame
+  (`file_path=sentry_trigger_error.py, function_name=create_order,
+  line_number=10, error_category=ValueError`) after the `lineNo` fix;
+  `get_telemetry_window_evidence` returned `event_count=1`, matching the one
+  real event; `get_deployment_evidence` returned
+  `environment=production, commit_sha` (40 hex chars, `CommitSha`-valid),
+  `deployed_at` from the deploy's real `dateFinished`. The bearer token was
+  never printed, logged, or committed at any point in this process.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  → 534 tests passed, 6 skipped. New coverage:
+  `test_sentry_connector_factory.py` (6 tests: mode selection, missing
+  configuration, invalid organization slug, secret hiding),
+  `test_sentry_http_connector.py` (21 tests: success-path normalization for
+  all four methods, all three status mappings, crash-frame selection — last
+  frame not first, since Sentry orders frames oldest-to-newest — the
+  `lineNo` regression test, deploy-environment disambiguation, stats-bucket
+  summation, malformed-input/response rejection before and after HTTP,
+  HTTP status taxonomy sanitization, and `evidence_id` sanitization for
+  unsafe free-text characters).
+- **Unresolved question:** `docs/decisions/ADR-032`'s free-tier mitigation
+  treats live Sentry as a one-time proof, not a standing integration test —
+  if this connector needs re-verification later (a Sentry API version
+  change, a new method), should there be a lighter-weight, repeatable
+  live-smoke procedure (`docs/TESTING.md`'s existing "manual and
+  credential-controlled" posture for Jira), or is one-time capture still
+  the right posture for a single-developer portfolio project?
