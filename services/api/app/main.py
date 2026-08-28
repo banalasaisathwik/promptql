@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.api.v1.auth_router import router as auth_router
 from app.api.v1.connector_router import router as connector_router
 from app.api.v1.live_events_router import router as live_events_router
 from app.api.v1.models import (
@@ -12,6 +13,7 @@ from app.api.v1.models import (
     RuntimePersistenceApiError,
 )
 from app.api.v1.rate_limit import FixedWindowRateLimiter, PerIpRateLimitMiddleware
+from app.auth import AuthPersistenceError
 from app.config import (
     DatabaseSettings,
     GitHubConnectorMode,
@@ -94,6 +96,17 @@ async def run_state_conflict_handler(
         run_id=error.run_id,
     )
     return JSONResponse(status_code=409, content=response.model_dump(mode="json"))
+
+
+async def auth_persistence_error_handler(
+    _request: Request,
+    _error: AuthPersistenceError,
+) -> JSONResponse:
+    error = ApiError(
+        code=ApiErrorCode.AUTH_PERSISTENCE_UNAVAILABLE,
+        message="Auth persistence is unavailable.",
+    )
+    return JSONResponse(status_code=503, content=error.model_dump(mode="json"))
 
 
 async def run_record_invalid_handler(
@@ -278,9 +291,14 @@ def create_app(
     application.state.live_event_broker = live_event_broker
     application.include_router(connector_router)
     application.include_router(live_events_router)
+    application.include_router(auth_router)
     application.add_exception_handler(
         FixtureNotFoundError,
         fixture_not_found_handler,
+    )
+    application.add_exception_handler(
+        AuthPersistenceError,
+        auth_persistence_error_handler,
     )
     application.add_exception_handler(
         RunPersistenceError,

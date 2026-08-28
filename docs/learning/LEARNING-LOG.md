@@ -1,5 +1,87 @@
 # Learning log
 
+## 2026-08-28 — Multi-user auth core Phase 1: schema, Argon2id, signed sessions, and staying additive
+
+- **Concept:** ADR-034 scopes the eventual per-user-credential goal down
+  to just an identity primitive first: a `users` table, Argon2id password
+  hashing, and a stateless signed session cookie, with the domain/
+  persistence split already established by the runtime subsystem
+  (`RunRepository`/`FactRecurrenceRepository` protocols in
+  `app/runtime/repository.py` against their Postgres implementations)
+  reused for a new `UserRepository` protocol in `app/auth/repository.py`
+  against `PostgresUserRepository` in `app/database/`.
+- **Implementation location:** `app/auth/` (models, errors, `security.py`
+  Argon2 hashing, `session.py` `itsdangerous` signing, `repository.py`
+  protocol + `InMemoryUserRepository`); `app/database/models.py`
+  (`UserRow`) and `app/database/postgres_user_repository.py`;
+  `migrations/versions/20260828_0009_create_users.py`;
+  `app/api/v1/auth_router.py` (register/login/logout, `get_current_user`);
+  `app/config.py` (`AuthSettings`); tests in
+  `tests/unit/test_auth_security.py`, `test_auth_session.py`,
+  `test_auth_dependencies.py`, and `tests/integration/test_auth_api.py`.
+- **Design decision:** `AuthSettings.from_environment()` is resolved
+  lazily inside the `get_session_signer` FastAPI dependency and cached on
+  `app.state` after the first success — not eagerly in `lifespan()`, even
+  though that is exactly where `DatabaseSettings` is resolved. The
+  difference is real: standing up the database engine is genuine I/O that
+  must succeed before the app is "ready," while building an
+  `itsdangerous` `SessionSigner` from a secret string does none, so there
+  is no reason to force `AUTH_SESSION_SECRET_KEY`'s presence into the
+  async startup path. This was not a stylistic preference — the first
+  implementation *did* resolve it eagerly in `lifespan()`, and running the
+  full suite immediately surfaced a genuine failure:
+  `test_startup_logs_selected_github_and_jira_sources`
+  (`tests/unit/test_application_startup_logging.py`) calls
+  `application.router.lifespan_context(application)` directly without
+  ever issuing an HTTP request, and only mocks out the four
+  `DatabaseSettings`-related calls it already knew it needed to mock. An
+  eager `AuthSettings.from_environment()` in `lifespan()` would have
+  forced that pre-existing test to change just to keep passing — exactly
+  the "existing test needed to change" outcome the task asked to be
+  flagged and stopped on before proceeding. Moving the resolution to be
+  lazy and request-scoped removed the need to touch that test at all,
+  which is a better design on its own merits (no I/O forced into a place
+  that does not need it), not just a workaround.
+- **Invariant or failure behavior:** No existing table, route, or
+  connector dependency function (`get_github_connector`,
+  `get_jira_connector`, `get_incident_source`) changed. `get_current_user`
+  exists but is not a dependency of anything yet. A missing or too-short
+  `AUTH_SESSION_SECRET_KEY` fails the first request that needs signing
+  (`AuthPersistenceError` → HTTP 503), not application startup and not
+  module import.
+- **Trade-off learned:** Deferring settings resolution to request time
+  instead of startup time trades "fail fast at process boot" for "avoid
+  forcing a new required secret into the import/startup path of a
+  codebase whose existing tests assume that path stays cheap." For a
+  value with no I/O cost to construct, the second property mattered more
+  here, given the project's explicit zero-test-file-edit bar for this
+  phase.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  → 591 tests passed, 10 skipped (opt-in PostgreSQL tests skip without
+  credentials), zero existing test assertions changed — only one new test
+  method added to the pre-existing `test_database_config.py` and four new
+  test files. Then `PROMPTQL_LLM_PROVIDER=fake uv run --env-file .env
+  python -m unittest discover -s tests -v` (forcing fake mode back on
+  because `.env`'s `PROMPTQL_LLM_PROVIDER=groq` — unrelated,
+  pre-existing — makes three fake-mode-only explanation tests hit live
+  Groq and fail when `.env` is loaded wholesale) → **591 passed, 0
+  skipped**, all 10 opt-in PostgreSQL tests genuine passes against the
+  live Neon test branch, migration `20260828_0009` applying cleanly on
+  top of `20260828_0008` on both the application and dedicated test
+  branches. Separately round-tripped `PostgresUserRepository.create_user`/
+  `authenticate`/`get_by_id` and duplicate-email rejection against the
+  live test branch directly (not covered by the dependency-override-based
+  integration tests, which use `InMemoryUserRepository`), then deleted
+  the probe row.
+- **Unresolved question:** `secure=True` on the session cookie means a
+  browser will not store it over plain `http://localhost` during local
+  frontend development, and no `CORSMiddleware` exists yet for a
+  cross-origin credentialed request. Both are flagged in ADR-034 as
+  needing to be solved together once a real login UI is built, not
+  before — is there a lower-friction local-HTTPS setup for this project
+  worth documenting when that phase starts, or is a one-time local proxy
+  script sufficient?
+
 ## 2026-08-28 — Frontend follow-up thread: ordered `results`, resumable polling, real end-to-end proof
 
 - **Concept:** ADR-033's backend half (Batch 2) had already changed

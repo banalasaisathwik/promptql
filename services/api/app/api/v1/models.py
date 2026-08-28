@@ -17,6 +17,9 @@ class ApiErrorCode(StrEnum):
     RUNTIME_PERSISTENCE_UNAVAILABLE = "runtime_persistence_unavailable"
     RUNTIME_STATE_CONFLICT = "runtime_state_conflict"
     RUNTIME_RECORD_INVALID = "runtime_record_invalid"
+    USER_ALREADY_EXISTS = "user_already_exists"
+    INVALID_CREDENTIALS = "invalid_credentials"
+    AUTH_PERSISTENCE_UNAVAILABLE = "auth_persistence_unavailable"
 
 
 class ApiError(ContractModel):

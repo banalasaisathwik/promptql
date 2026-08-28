@@ -23,6 +23,10 @@ class TelemetryConfigurationError(RuntimeError):
     pass
 
 
+class AuthConfigurationError(RuntimeError):
+    pass
+
+
 class GitHubConnectorMode(StrEnum):
     FAKE = "fake"
     GITHUB = "github"
@@ -338,6 +342,46 @@ def parse_postgresql_url(raw_url: str, variable_name: str) -> URL:
 
 
     return url.set(drivername="postgresql+psycopg")
+
+
+_MIN_SESSION_SECRET_KEY_LENGTH = 32
+_MAX_SESSION_MAX_AGE_SECONDS = 2_592_000
+
+
+def _parse_session_max_age_seconds(raw_value: str) -> int:
+    try:
+        max_age_seconds = int(raw_value)
+    except ValueError:
+        raise AuthConfigurationError(
+            "AUTH_SESSION_MAX_AGE_SECONDS must be an integer."
+        ) from None
+    if max_age_seconds < 1 or max_age_seconds > _MAX_SESSION_MAX_AGE_SECONDS:
+        raise AuthConfigurationError(
+            "AUTH_SESSION_MAX_AGE_SECONDS must be between 1 and "
+            f"{_MAX_SESSION_MAX_AGE_SECONDS}."
+        )
+    return max_age_seconds
+
+
+@dataclass(frozen=True)
+class AuthSettings:
+    session_secret_key: str = field(repr=False)
+    session_max_age_seconds: int
+
+    @classmethod
+    def from_environment(cls) -> "AuthSettings":
+        secret_key = os.environ.get("AUTH_SESSION_SECRET_KEY", "").strip()
+        if len(secret_key) < _MIN_SESSION_SECRET_KEY_LENGTH:
+            raise AuthConfigurationError(
+                "AUTH_SESSION_SECRET_KEY is required and must be at least "
+                f"{_MIN_SESSION_SECRET_KEY_LENGTH} characters."
+            )
+        return cls(
+            session_secret_key=secret_key,
+            session_max_age_seconds=_parse_session_max_age_seconds(
+                os.environ.get("AUTH_SESSION_MAX_AGE_SECONDS", "1209600")
+            ),
+        )
 
 
 @dataclass(frozen=True)

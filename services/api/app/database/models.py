@@ -152,6 +152,26 @@ _KNOWN_FACT_TYPES = (
 )
 
 
+class UserRow(DatabaseModel):
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "length(btrim(email)) > 0",
+            name="ck_users_email_not_empty",
+        ),
+        CheckConstraint(
+            "length(btrim(password_hash)) > 0",
+            name="ck_users_password_hash_not_empty",
+        ),
+        UniqueConstraint("email", name="uq_users_email"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class RepositoryFactRecurrenceRow(DatabaseModel):
     __tablename__ = "repository_fact_recurrence"
     __table_args__ = (

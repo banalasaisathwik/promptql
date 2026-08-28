@@ -76,6 +76,7 @@ same routing contract.
 
 ```text
 services/api/app/
+├── auth/                 # Multi-user identity core: hashing, sessions, user repository protocol (ADR-034 Phase 1)
 ├── connectors/          # GitHub/Jira/incident provider access (fake + live)
 ├── tools/                # Typed, read-only investigation tool registry over connectors
 ├── inspection/           # Fixture-only raw GitHub+Jira lookup (legacy/demo route)
@@ -96,7 +97,8 @@ services/api/app/
 │   └── live_event_broker.py    # In-process per-run pub/sub feeding the live SSE tap
 ├── workflows/                  # Orchestrates connectors/policy/investigation into one run
 ├── api/v1/                      # FastAPI routes and HTTP-facing models
-│   └── live_events_router.py     # GET /v1/runs/{run_id}/events - live SSE tap
+│   ├── live_events_router.py     # GET /v1/runs/{run_id}/events - live SSE tap
+│   └── auth_router.py             # POST /v1/auth/register|login|logout (ADR-034 Phase 1)
 └── main.py                       # Application assembly (DI wiring, lifespan, routes)
 ```
 
@@ -1043,6 +1045,30 @@ function that bumps an internal generation counter, recreating the polling
 controller without clearing the currently displayed snapshot, and
 `RunDashboardPage.tsx` passes it down as `onFollowUpSubmitted`.
 
+## Multi-user auth core (ADR-034 Phase 1) (Current/Implemented)
+
+Per [ADR-034](decisions/ADR-034-multi-user-auth-and-per-user-credential-storage.md).
+A `users` table (`id`, `email`, `password_hash`, `created_at`) exists
+alongside the existing runtime tables, with no foreign key in either
+direction. `app/auth/` holds the domain model (`User`), Argon2id password
+hashing (`argon2-cffi`), stateless signed session tokens (`itsdangerous`),
+and the `UserRepository` protocol with an `InMemoryUserRepository` test
+double; `app/database/postgres_user_repository.py` is the only place an
+Argon2 hash is read or written. `app/api/v1/auth_router.py` exposes
+`POST /v1/auth/register`, `POST /v1/auth/login`, and
+`POST /v1/auth/logout`, each setting or clearing a signed,
+`httponly`/`secure`/`samesite=lax` cookie holding only `user_id`, plus a
+`get_current_user` dependency that reads and validates that cookie.
+
+This phase is deliberately additive and coexists with, rather than
+replaces, the anonymous demo path described below:
+`get_github_connector`, `get_jira_connector`, `get_incident_source`, and
+every route that existed before this ADR are unmodified, and
+`get_current_user` is not a dependency of any of them. Per-user
+GitHub/Jira/Sentry credential storage and rewiring the connector
+dependencies to resolve per-user are named as future phases in ADR-034
+but are not implemented.
+
 ## Not implemented
 
 As of this writing, the following are genuinely absent from the repository
@@ -1051,7 +1077,11 @@ earlier description): a cancellation API or any code path that ever
 transitions a run to `cancelled`; crash recovery / checkpoint-resume for
 investigation execution (which is process-local and in-memory only); a
 distributed worker or queue; GitHub, Jira, or Sentry OAuth/app authentication
-or any multi-tenant connector credential model; retention policies;
+or any multi-tenant connector credential model (a password-based
+multi-user *identity* core exists per [ADR-034 Phase 1](#multi-user-auth-core-adr-034-phase-1-currentimplemented),
+but no user's own connector credentials are stored or used anywhere, and
+`get_github_connector`/`get_jira_connector`/`get_incident_source` remain
+process-wide singletons); retention policies;
 persisted/versioned explanations; LLM SDK-level retries or provider fallback
 (`max_retries=0` everywhere, and runtime retries only the tool-execution
 path); hosted eval services, LLM-as-a-judge grading, or production-traffic
