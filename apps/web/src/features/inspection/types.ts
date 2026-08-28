@@ -273,6 +273,14 @@ export interface LiveRunStart {
   status: 'pending'
 }
 
+// ADR-033: accepting a follow-up reopens an already-completed case straight
+// to running (there is no separate pending-follow-up state), unlike starting
+// a brand-new investigation above.
+export interface FollowUpRunStart {
+  run_id: string
+  status: 'running'
+}
+
 export interface InvestigationRequest {
   repository_owner: string
   repository_name: string
@@ -491,7 +499,11 @@ interface InvestigationRunBase {
 export interface InvestigationRun extends InvestigationRunBase {
   error: InvestigationRuntimeError | null
   state: InvestigationRuntimeState | null
-  result: GroundedInvestigationResult | null
+  // Ordered, append-only: the original investigation's result is always
+  // index 0; each follow-up (ADR-033) appends one more entry after it. A
+  // completed investigation has at least one entry; a pending investigation
+  // has none.
+  results: GroundedInvestigationResult[]
 }
 
 export type RuntimeRun = PullRequestMergeReadiness | InvestigationRun

@@ -1010,13 +1010,38 @@ guardrail section in the planner's system instructions so it is never
 mistaken for this run's own evidence or facts — documented as a follow-up
 amendment to ADR-033 rather than a new ADR.
 
-**Target/Planned (not yet implemented):** the frontend contract change
-(`apps/web/src/features/inspection/types.ts`, `responseValidation.ts`,
-`InvestigationDashboard.tsx`) needed because the HTTP response shape
-(`InvestigationResponse`) changed from a single `result` field to an
-ordered `results` sequence, and because a follow-up UI affordance (a
-"reopen with a follow-up question" action calling the new endpoint) does
-not exist yet.
+**Current/Implemented — the frontend contract and follow-up UI:**
+`InvestigationRun` (`apps/web/src/features/inspection/types.ts`) declares
+`results: GroundedInvestigationResult[]` instead of the old single nullable
+`result` field, matching `InvestigationResponse`'s wire shape one-for-one.
+`responseValidation.ts`'s `parseInvestigationRun` narrows `results` as an
+ordered array (`Array.isArray` plus a per-element `isGroundedResult` check)
+and enforces the same per-status invariants the Pydantic model does: a
+`pending` run's `results` must be empty; a `completed` run's must be
+non-empty; a `running` run is intentionally unconstrained, since a
+follow-up round in progress still carries every result produced by earlier
+rounds of the same case. `InvestigationDashboard.tsx` renders the sequence
+as a growing thread — a `GroundedResultSection` per entry, labeled
+"Original investigation result" for index 0 and "Follow-up result N" for
+each entry after it, with nothing replaced or removed as more entries
+arrive. `InvestigationTraceView.tsx` was reviewed and makes no
+result-shape assumption at all (it only renders the live SSE event list),
+so it needed no change.
+
+A `FollowUpForm` inside `InvestigationDashboard.tsx` calls
+`startInvestigationFollowUp` (`api.ts`), which posts to `POST
+/v1/investigations/{run_id}/follow-up` and is only rendered once
+`run.status === 'completed'`. The backend's `RunStateConflictError` (409,
+not-completed or follow-up-cap-reached) and unknown-run (404) messages are
+already written as direct, user-facing sentences (e.g. "This investigation
+has reached its follow-up limit."), so the form surfaces
+`ConnectorApiError.message` as-is rather than re-mapping it. Because
+accepting a follow-up reopens a `completed` run back to `running`,
+`RunPollingController` (which stops polling once it observes a terminal
+status) needs to resume: `useRunSnapshot.ts` exposes a `resumePolling()`
+function that bumps an internal generation counter, recreating the polling
+controller without clearing the currently displayed snapshot, and
+`RunDashboardPage.tsx` passes it down as `onFollowUpSubmitted`.
 
 ## Not implemented
 

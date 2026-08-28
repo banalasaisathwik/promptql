@@ -11,6 +11,7 @@ import type {
   ConnectorRequest,
   EvidenceReference,
   ExplanationApiError,
+  FollowUpRunStart,
   GitHubPullRequest,
   GitHubUser,
   GroundingExtractionOutput,
@@ -856,21 +857,30 @@ export function parseInvestigationRun(value: unknown): InvestigationRun {
     !isInvestigationRequest(value.request) ||
     !(value.error === null || isRecord(value.error)) ||
     !(value.state === null || isInvestigationState(value.state)) ||
-    !(value.result === null || isGroundedResult(value.result))
+    !Array.isArray(value.results) ||
+    !value.results.every(isGroundedResult)
   ) {
     throw new ConnectorApiError('The investigation response is malformed.')
   }
 
-  if (value.status === 'completed' &&
-      (value.error !== null || !isInvestigationState(value.state) || !isGroundedResult(value.result))) {
+  // A pending investigation has not run yet, so it can carry neither a
+  // runtime error nor any result (ADR-033: `results` is append-only and
+  // starts empty). A running investigation may already carry a follow-up's
+  // prior result(s) (ADR-033), so `results` is intentionally unconstrained
+  // here -- only a runtime error still cannot coexist with "running".
+  if (value.status === 'pending' &&
+      (value.error !== null || value.results.length !== 0)) {
     throw new ConnectorApiError('The investigation response is malformed.')
   }
-  if ((value.status === 'pending' || value.status === 'running') &&
-      (value.error !== null || value.result !== null)) {
+  if (value.status === 'running' && value.error !== null) {
+    throw new ConnectorApiError('The investigation response is malformed.')
+  }
+  if (value.status === 'completed' &&
+      (value.error !== null || !isInvestigationState(value.state) || value.results.length === 0)) {
     throw new ConnectorApiError('The investigation response is malformed.')
   }
   if (value.status === 'failed' &&
-      (!isRecord(value.error) || !isNonEmptyString(value.error.code) || !isNonEmptyString(value.error.message) || value.result !== null)) {
+      (!isRecord(value.error) || !isNonEmptyString(value.error.code) || !isNonEmptyString(value.error.message))) {
     throw new ConnectorApiError('The investigation response is malformed.')
   }
 
@@ -885,8 +895,20 @@ export function parseInvestigationRun(value: unknown): InvestigationRun {
     request: value.request as InvestigationRun['request'],
     error: value.error as InvestigationRun['error'],
     state: value.state as InvestigationRun['state'],
-    result: value.result as InvestigationRun['result'],
+    results: value.results as InvestigationRun['results'],
   }
+}
+
+
+export function parseFollowUpRunStart(value: unknown): FollowUpRunStart {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyString(value.run_id) ||
+    value.status !== 'running'
+  ) {
+    throw new ConnectorApiError('The follow-up start response is malformed.')
+  }
+  return { run_id: value.run_id, status: value.status }
 }
 
 

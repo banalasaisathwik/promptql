@@ -72,7 +72,7 @@ const RUN: InvestigationRun = {
       termination_reason: 'provider_failure',
     },
   },
-  result: {
+  results: [{
     termination_reason: 'provider_failure',
     summary: 'The investigation found relevant evidence, but it is not sufficient to support a causal hypothesis.',
     supported_hypotheses: [],
@@ -80,7 +80,7 @@ const RUN: InvestigationRun = {
     recommendations: [],
     key_fact_ids: [],
     missing_information: [],
-  },
+  }],
 }
 
 
@@ -102,7 +102,7 @@ test('renders a budget stop separately from a failed or blocked tool state', () 
     ...RUN,
     status: 'running',
     completed_at: null,
-    result: null,
+    results: [],
     state: {
       ...RUN.state,
       execution_state: {
@@ -147,8 +147,8 @@ test('shows only validated hypotheses in the final grounded result', () => {
         }],
       },
     },
-    result: {
-      ...RUN.result!,
+    results: [{
+      ...RUN.results[0],
       supported_hypotheses: [{
         hypothesis_id: 'H1',
         kind: 'code_change_may_have_contributed',
@@ -156,7 +156,7 @@ test('shows only validated hypotheses in the final grounded result', () => {
         statement: 'Changes associated with checkout.py may have contributed to the incident.',
         supporting_fact_ids: ['F1'],
       }],
-    },
+    }],
   }} />)
 
   expect(markup).toContain('Likely contributing factor')
@@ -195,14 +195,14 @@ test('projects only backend-validated code locations and recommendations', () =>
         developer_recommendations: [recommendation],
       },
     },
-    result: {
-      ...RUN.result!,
+    results: [{
+      ...RUN.results[0],
       code_findings: [{
         ...codeFinding,
         statement: 'The validated evidence identifies an error handling concern at checkout.py:42.',
       }],
       recommendations: [recommendation],
-    },
+    }],
   }} />)
 
   expect(markup).toContain('Validated code findings')
@@ -210,4 +210,41 @@ test('projects only backend-validated code locations and recommendations', () =>
   expect(markup).toContain('The validated evidence identifies an error handling concern')
   expect(markup).toContain('Verify the error-handling path at the validated location.')
   expect(markup).not.toContain('provider code rationale')
+})
+
+
+test('renders each follow-up result as a growing thread below the original result', () => {
+  const followUpResult = {
+    termination_reason: 'goal_satisfied',
+    summary: 'The deployment introduced the regression the first result already pointed to.',
+    supported_hypotheses: [],
+    code_findings: [],
+    recommendations: [],
+    key_fact_ids: [],
+    missing_information: [],
+  }
+  const run: InvestigationRun = { ...RUN, results: [RUN.results[0], followUpResult] }
+
+  const markup = renderToStaticMarkup(<InvestigationDashboard run={run} />)
+
+  expect(markup).toContain('Original investigation result')
+  expect(markup).toContain(RUN.results[0].summary)
+  expect(markup).toContain('Follow-up result 1')
+  expect(markup).toContain(followUpResult.summary)
+  // The original result must still render fully, ahead of the follow-up
+  // result, rather than being replaced by it.
+  expect(markup.indexOf('Original investigation result')).toBeLessThan(
+    markup.indexOf('Follow-up result 1'),
+  )
+})
+
+
+test('offers the follow-up form only once the investigation has completed', () => {
+  const runningMarkup = renderToStaticMarkup(
+    <InvestigationDashboard run={{ ...RUN, status: 'running', completed_at: null, results: [] }} />,
+  )
+  const completedMarkup = renderToStaticMarkup(<InvestigationDashboard run={RUN} />)
+
+  expect(runningMarkup).not.toContain('Ask a follow-up')
+  expect(completedMarkup).toContain('Ask a follow-up')
 })

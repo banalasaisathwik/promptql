@@ -1,5 +1,83 @@
 # Learning log
 
+## 2026-08-28 — Frontend follow-up thread: ordered `results`, resumable polling, real end-to-end proof
+
+- **Concept:** ADR-033's backend half (Batch 2) had already changed
+  `InvestigationRun.result: GroundedInvestigationResult | None` to
+  `results: tuple[GroundedInvestigationResult, ...]` on the wire. This
+  batch closed the frontend half of that same deterministic/LLM boundary:
+  `types.ts`'s `InvestigationRun.results: GroundedInvestigationResult[]`,
+  `responseValidation.ts`'s `parseInvestigationRun` narrowing an ordered
+  array with per-status invariants that mirror the Pydantic model exactly
+  (`pending` must be empty, `completed` must be non-empty, `running` is
+  intentionally unconstrained because a follow-up round in progress still
+  carries every result from earlier rounds of the same case), and
+  `InvestigationDashboard.tsx` rendering the sequence as a growing thread
+  (`GroundedResultSection` per entry: "Original investigation result" at
+  index 0, "Follow-up result N" after it) instead of one nullable block.
+  `InvestigationTraceView.tsx` was explicitly reviewed per the ADR's own
+  flag and needed no change — it only renders the live SSE event list and
+  never referenced `result`/`results`.
+- **Key design decision — resuming a stopped poller instead of a second
+  polling mechanism:** `RunPollingController` already stops once it
+  observes a terminal status (`isTerminalRun`), which is exactly what a
+  completed investigation is before a follow-up. Accepting a follow-up
+  moves that same run back to `running`, so the dashboard needs polling to
+  resume without inventing a second mechanism. Chose a `pollGeneration`
+  counter in `useRunSnapshot.ts`: bumping it (via a new `resumePolling()`
+  the hook returns) re-runs the effect that constructs
+  `RunPollingController` and calls `.start()`, while a *separate* effect
+  keyed only on `runId` (not `pollGeneration`) owns clearing the snapshot —
+  so resuming polling does not blank the dashboard back to a loading state
+  while the follow-up round executes. `RunDashboardPage.tsx` wires this
+  through as `onFollowUpSubmitted`, reusing the existing prop-drilling
+  pattern rather than adding new shared state.
+- **The backend's error messages were already the UI copy:** `POST
+  /v1/investigations/{run_id}/follow-up`'s 404/409 bodies
+  (`RunStateConflictError` text like "This investigation has reached its
+  follow-up limit.") were written as direct, complete sentences in Batch
+  2, not internal diagnostic strings. `FollowUpForm` (inside
+  `InvestigationDashboard.tsx`) surfaces `ConnectorApiError.message`
+  as-is rather than re-mapping status codes to new copy — re-mapping would
+  have meant maintaining a second copy of text the backend already owns.
+- **Validation evidence:** `bun run test:web` → 45 passed (frontend suite,
+  including two new `InvestigationDashboard.test.tsx` cases — a two-entry
+  growing thread with the original result strictly ahead of "Follow-up
+  result 1" in the rendered markup, and the follow-up form appearing only
+  once `status === 'completed'` — plus three new `investigationApi.test.ts`
+  cases for `startInvestigationFollowUp`'s request shape and its 404/409
+  message pass-through). `bunx tsc -b --noEmit` (run from `apps/web`, since
+  the root `node_modules` has no TypeScript install of its own) → clean.
+  `uv run python -m unittest discover -s tests -v` → unaffected at 568
+  passed (this batch touched no backend file). Then a genuine end-to-end
+  run against the real HTTP contract: `TestClient(app)` with
+  `get_run_repository`/`get_investigation_workflow` overridden to a real
+  `PostgresRunRepository` backed by the guarded `TEST_DATABASE_URL` Neon
+  branch (the same safety gate `tests/postgres_support.py` uses) and
+  `FakeLLMClient`, driving the checkout-500 fixture through
+  `POST /v1/investigations` to completion (1 result, rounds `[1, 2]`,
+  budget `6/10` used), then three real `POST .../follow-up` calls in
+  sequence: round numbers kept climbing without resetting (`[1,2,3]` after
+  follow-up 1, budget `9/10`), `follow_up_count` incremented
+  monotonically (1, 2, 3), each response's `results` array strictly
+  extended the previous one's prefix (`results[0]` identical byte-for-byte
+  across all four fetches), and once the case hit `MAX_PLANNING_ROUNDS`
+  the second and third follow-ups still produced a new appended result —
+  terminating immediately with `planning_limit_reached` and zero new
+  rounds, exactly the "reason from existing evidence only" behavior ADR-033
+  specifies for a budget-exhausted follow-up, extended here to a
+  rounds-exhausted one. A fourth follow-up attempt was rejected with a
+  clean `409 runtime_state_conflict` ("This investigation has reached its
+  follow-up limit."). The one run row created was deleted from the test
+  branch afterward.
+- **No deviation from the five-step plan.** The one addition beyond its
+  literal text was forcing `PROMPTQL_LLM_PROVIDER=fake` and the connector/
+  telemetry env vars inside the end-to-end script itself rather than
+  relying on `.env`'s values, discovered only when the first script draft
+  inherited `.env`'s `PROMPTQL_LLM_PROVIDER=groq` — required to keep the
+  manual smoke script side-effect-free (no live LLM call, no telemetry
+  export to a real vendor), not a change to what Step 5 asked to verify.
+
 ## 2026-08-28 — Public demo deployment: same-origin rewrite over CORS, hand-rolled rate limiting
 
 - **Concept:** A prior read-only diagnostic found the app had no

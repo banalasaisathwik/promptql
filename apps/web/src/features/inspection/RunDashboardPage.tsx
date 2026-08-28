@@ -172,16 +172,22 @@ export function RunDashboard({ run }: { run: PullRequestMergeReadiness }) {
 }
 
 
-export function RuntimeDashboard({ run }: { run: RuntimeRun }) {
+export function RuntimeDashboard({
+  run,
+  onFollowUpSubmitted,
+}: {
+  run: RuntimeRun
+  onFollowUpSubmitted?: () => void
+}) {
   if (run.workflow_name === 'investigation') {
-    return <InvestigationDashboard run={run as InvestigationRun} />
+    return <InvestigationDashboard run={run as InvestigationRun} onFollowUpSubmitted={onFollowUpSubmitted} />
   }
   return <RunDashboard run={run as PullRequestMergeReadiness} />
 }
 
 
 export function RunDashboardPage({ runId }: { runId: string }) {
-  const { snapshot, loading, refreshError } = useRunSnapshot(runId)
+  const { snapshot, loading, refreshError, resumePolling } = useRunSnapshot(runId)
 
   return (
     <main className="app-shell">
@@ -206,7 +212,7 @@ export function RunDashboardPage({ runId }: { runId: string }) {
             <p>The dashboard will render only after the API response is validated.</p>
           </div>
         ) : snapshot ? (
-          <RuntimeDashboard run={snapshot} />
+          <RuntimeDashboard run={snapshot} onFollowUpSubmitted={resumePolling} />
         ) : (
           <div className="empty-state">
             <div className="empty-symbol" aria-hidden="true">!</div>

@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
-import { fetchRuntimeRun, startInvestigationRun } from './api'
+import { fetchRuntimeRun, startInvestigationFollowUp, startInvestigationRun } from './api'
+import { ConnectorApiError } from './apiError'
 
 
 const originalFetch = globalThis.fetch
@@ -45,7 +46,7 @@ test('parses a pending investigation snapshot through the shared run route', asy
     },
     error: null,
     state: null,
-    result: null,
+    results: [],
   }), { status: 200 })) as typeof fetch
 
   const run = await fetchRuntimeRun('run-1')
@@ -88,8 +89,53 @@ test('rejects a completed snapshot with an unvalidated code-location shape', asy
         remaining_tool_calls: 9, termination_reason: 'completed',
       },
     },
-    result: null,
+    results: [],
   }), { status: 200 })) as typeof fetch
 
   await expect(fetchRuntimeRun('run-1')).rejects.toThrow('response is malformed')
+})
+
+
+test('submits a follow-up question through the reopen endpoint', async () => {
+  let requestUrl = ''
+  let requestBody = ''
+  globalThis.fetch = (async (url, init) => {
+    requestUrl = String(url)
+    requestBody = String(init?.body)
+    return new Response(JSON.stringify({ run_id: 'run-1', status: 'running' }), { status: 202 })
+  }) as typeof fetch
+
+  const accepted = await startInvestigationFollowUp('run-1', 'What about the deployment?')
+
+  expect(requestUrl).toBe('/v1/investigations/run-1/follow-up')
+  expect(JSON.parse(requestBody)).toEqual({ question: 'What about the deployment?' })
+  expect(accepted).toEqual({ run_id: 'run-1', status: 'running' })
+})
+
+
+test('surfaces the backend follow-up-limit message on a 409 conflict', async () => {
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    code: 'runtime_state_conflict',
+    message: 'This investigation has reached its follow-up limit.',
+    run_id: 'run-1',
+  }), { status: 409 })) as typeof fetch
+
+  await expect(startInvestigationFollowUp('run-1', 'Anything else?')).rejects.toMatchObject({
+    message: 'This investigation has reached its follow-up limit.',
+    status: 409,
+  })
+})
+
+
+test('surfaces a 404 for a follow-up against an unknown run', async () => {
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    code: 'run_not_found',
+    message: 'No investigation exists for this ID.',
+  }), { status: 404 })) as typeof fetch
+
+  const error = await startInvestigationFollowUp('missing-run', 'Anything else?').catch((caught) => caught)
+
+  expect(error).toBeInstanceOf(ConnectorApiError)
+  expect(error.message).toBe('No investigation exists for this ID.')
+  expect(error.status).toBe(404)
 })

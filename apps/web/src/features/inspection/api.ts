@@ -8,11 +8,13 @@
 
 import { ConnectorApiError } from './apiError'
 import {
+  parseFollowUpRunStart,
   parseGroundingExtractionResponse,
   parseLiveRunStart,
   parseRuntimeRun,
 } from './responseValidation'
 import type {
+  FollowUpRunStart,
   GroundingExtractionInput,
   GroundingExtractionResponse,
   InvestigationRequest,
@@ -136,6 +138,25 @@ export async function extractGrounding(
     body: JSON.stringify(input),
   })
   return parseGroundingExtractionResponse(body)
+}
+
+
+export async function startInvestigationFollowUp(
+  runId: string,
+  question: string,
+): Promise<FollowUpRunStart> {
+  // ADR-033: reopens an already-completed case; the backend rejects a
+  // not-yet-completed run (409) or an unknown run_id (404) with a message
+  // already meant for direct display, so this call adds no extra mapping.
+  const body = await requestJson(
+    `/v1/investigations/${encodeURIComponent(runId)}/follow-up`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    },
+  )
+  return parseFollowUpRunStart(body)
 }
 
 
