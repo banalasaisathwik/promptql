@@ -4,3 +4,11 @@ class UserAlreadyExistsError(RuntimeError):
 
 class AuthPersistenceError(RuntimeError):
     pass
+
+
+class CredentialConfigurationError(RuntimeError):
+    pass
+
+
+class CredentialDecryptionError(RuntimeError):
+    pass

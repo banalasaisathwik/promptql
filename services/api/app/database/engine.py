@@ -34,6 +34,7 @@ def verify_database_ready(engine: Engine) -> None:
             "workflow_steps",
             "repository_fact_recurrence",
             "users",
+            "credentials",
         }
         if not required_tables.issubset(database_inspector.get_table_names()):
             raise RunPersistenceError(

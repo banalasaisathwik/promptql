@@ -54,6 +54,9 @@ POST /v1/pull-request-merge-readiness-runs -> accepted pending run ID (202)
 POST /v1/investigations                    -> accepted pending investigation run ID (202)
 POST /v1/investigations/extract-grounding  -> proposed grounding fields from free text; never creates a run (200/502)
 GET  /v1/runs/{run_id}                     -> persisted current run snapshot (merge-readiness or investigation)
+POST /v1/credentials                       -> authenticated encrypted provider-token upsert (provider/status only)
+GET  /v1/credentials                       -> authenticated GitHub/Jira/Sentry connection status only
+DELETE /v1/credentials/{provider}          -> authenticated provider-token removal (204)
 GET  /health                               -> liveness check
 ```
 
@@ -76,7 +79,7 @@ same routing contract.
 
 ```text
 services/api/app/
-├── auth/                 # Multi-user identity core: hashing, sessions, user repository protocol (ADR-034 Phase 1)
+├── auth/                 # Multi-user identity and encrypted credential contracts (ADR-034 Phases 1-2)
 ├── connectors/          # GitHub/Jira/incident provider access (fake + live)
 ├── tools/                # Typed, read-only investigation tool registry over connectors
 ├── inspection/           # Fixture-only raw GitHub+Jira lookup (legacy/demo route)

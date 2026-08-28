@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api.v1.auth_router import router as auth_router
+from app.api.v1.credentials_router import router as credentials_router
 from app.api.v1.connector_router import router as connector_router
 from app.api.v1.live_events_router import router as live_events_router
 from app.api.v1.models import (
@@ -13,7 +14,11 @@ from app.api.v1.models import (
     RuntimePersistenceApiError,
 )
 from app.api.v1.rate_limit import FixedWindowRateLimiter, PerIpRateLimitMiddleware
-from app.auth import AuthPersistenceError
+from app.auth import (
+    AuthPersistenceError,
+    CredentialConfigurationError,
+    CredentialDecryptionError,
+)
 from app.config import (
     DatabaseSettings,
     GitHubConnectorMode,
@@ -105,6 +110,17 @@ async def auth_persistence_error_handler(
     error = ApiError(
         code=ApiErrorCode.AUTH_PERSISTENCE_UNAVAILABLE,
         message="Auth persistence is unavailable.",
+    )
+    return JSONResponse(status_code=503, content=error.model_dump(mode="json"))
+
+
+async def credential_error_handler(
+    _request: Request,
+    _error: CredentialConfigurationError | CredentialDecryptionError,
+) -> JSONResponse:
+    error = ApiError(
+        code=ApiErrorCode.AUTH_PERSISTENCE_UNAVAILABLE,
+        message="Credential storage is unavailable.",
     )
     return JSONResponse(status_code=503, content=error.model_dump(mode="json"))
 
@@ -292,6 +308,7 @@ def create_app(
     application.include_router(connector_router)
     application.include_router(live_events_router)
     application.include_router(auth_router)
+    application.include_router(credentials_router)
     application.add_exception_handler(
         FixtureNotFoundError,
         fixture_not_found_handler,
@@ -299,6 +316,14 @@ def create_app(
     application.add_exception_handler(
         AuthPersistenceError,
         auth_persistence_error_handler,
+    )
+    application.add_exception_handler(
+        CredentialConfigurationError,
+        credential_error_handler,
+    )
+    application.add_exception_handler(
+        CredentialDecryptionError,
+        credential_error_handler,
     )
     application.add_exception_handler(
         RunPersistenceError,

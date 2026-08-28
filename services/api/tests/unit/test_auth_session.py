@@ -20,7 +20,14 @@ class SessionSignerTests(unittest.TestCase):
     def test_a_tampered_token_is_rejected(self) -> None:
         signer = SessionSigner(secret_key="a" * 32, max_age_seconds=60)
         token = signer.sign(uuid4())
-        tampered_token = token[:-1] + ("a" if token[-1] != "a" else "b")
+
+
+        signature_start = token.rfind(".") + 1
+        tamper_index = signature_start + 1
+        replacement_character = "a" if token[tamper_index] != "a" else "b"
+        tampered_token = (
+            token[:tamper_index] + replacement_character + token[tamper_index + 1 :]
+        )
 
         self.assertIsNone(signer.unsign(tampered_token))
 

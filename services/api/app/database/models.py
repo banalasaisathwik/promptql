@@ -172,6 +172,27 @@ class UserRow(DatabaseModel):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class CredentialRow(DatabaseModel):
+    __tablename__ = "credentials"
+    __table_args__ = (
+        CheckConstraint(
+            "provider IN ('github', 'jira', 'sentry')",
+            name="ck_credentials_provider",
+        ),
+        UniqueConstraint("user_id", "provider", name="uq_credentials_user_provider"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    encrypted_token: Mapped[bytes] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class RepositoryFactRecurrenceRow(DatabaseModel):
     __tablename__ = "repository_fact_recurrence"
     __table_args__ = (

@@ -432,6 +432,21 @@ class GitHubSettings:
             ),
         )
 
+    @classmethod
+    def from_stored_credential(
+        cls,
+        token: str,
+        *,
+        api_base_url: str = "https://api.github.com",
+        request_timeout_seconds: float = 10,
+    ) -> "GitHubSettings":
+        return cls(
+            mode=GitHubConnectorMode.GITHUB,
+            token=token,
+            api_base_url=_parse_github_api_base_url(api_base_url),
+            request_timeout_seconds=_parse_github_timeout(str(request_timeout_seconds)),
+        )
+
 
 @dataclass(frozen=True)
 class JiraSettings:
@@ -482,6 +497,27 @@ class JiraSettings:
             ),
         )
 
+    @classmethod
+    def from_stored_credential(
+        cls,
+        token: str,
+        *,
+        base_url: str,
+        email: str,
+        request_timeout_seconds: float = 10,
+    ) -> "JiraSettings":
+        if not _is_valid_jira_email(email):
+            raise JiraConfigurationError(
+                "JIRA_EMAIL must be a non-empty account email in Jira mode."
+            )
+        return cls(
+            mode=JiraConnectorMode.JIRA,
+            base_url=_parse_jira_base_url(base_url),
+            email=email,
+            api_token=token,
+            request_timeout_seconds=_parse_jira_timeout(str(request_timeout_seconds)),
+        )
+
 
 @dataclass(frozen=True)
 class SentrySettings:
@@ -528,6 +564,23 @@ class SentrySettings:
             request_timeout_seconds=_parse_sentry_timeout(
                 os.environ.get("SENTRY_REQUEST_TIMEOUT_SECONDS", "10")
             ),
+        )
+
+    @classmethod
+    def from_stored_credential(
+        cls,
+        token: str,
+        *,
+        organization_slug: str,
+        api_base_url: str = "https://sentry.io/api/0",
+        request_timeout_seconds: float = 10,
+    ) -> "SentrySettings":
+        return cls(
+            mode=SentryConnectorMode.SENTRY,
+            token=token,
+            organization_slug=_parse_sentry_organization_slug(organization_slug),
+            api_base_url=_parse_sentry_api_base_url(api_base_url),
+            request_timeout_seconds=_parse_sentry_timeout(str(request_timeout_seconds)),
         )
 
 

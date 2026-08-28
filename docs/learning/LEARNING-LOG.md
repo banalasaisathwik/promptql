@@ -1,5 +1,26 @@
 # Learning log
 
+## 2026-08-28 - ADR-034 Phase 2: authenticated encryption at rest
+
+- **Concept reinforced:** provider credentials cross a narrow security boundary:
+  plaintext is accepted only by the authenticated route and repository, Fernet
+  ciphertext is the only persisted form, and public API responses project only
+  `{provider, connected}` state. `TokenCipher` reads and validates
+  `PROMPTQL_CREDENTIAL_ENCRYPTION_KEY` lazily, so anonymous demo startup remains
+  credential-key-free.
+- **Where:** `app/auth/token_cipher.py`, `app/auth/credentials.py`,
+  `app/database/postgres_credential_repository.py`, and
+  `app/api/v1/credentials_router.py`; migration
+  `20260828_0010_create_credentials.py` adds the composite provider/user key
+  and a cascading user FK.
+- **Decision:** use Fernet through `cryptography` rather than a custom
+  encryption scheme because it provides authenticated encryption and key
+  validation. The repository owns encryption/decryption; connectors remain
+  intentionally untouched until Phase 3.
+- **Validation:** unit/API coverage uses freshly generated Fernet keys;
+  PostgreSQL coverage proves the stored value is ciphertext and upsert leaves
+  one row. Full local and guarded PostgreSQL test suites were run.
+
 ## 2026-08-28 — Multi-user auth core Phase 1: schema, Argon2id, signed sessions, and staying additive
 
 - **Concept:** ADR-034 scopes the eventual per-user-credential goal down

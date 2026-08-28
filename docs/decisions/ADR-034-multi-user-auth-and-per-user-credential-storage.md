@@ -224,6 +224,29 @@ ADR:
 
 ## Consequences
 
+## Implementation update (2026-08-28)
+
+**IMPLEMENTED: Phase 2 credential storage.** A new additive `credentials`
+table holds one Fernet-encrypted GitHub, Jira, or Sentry token per user and
+provider. `POST`/`GET`/`DELETE /v1/credentials` require the Phase 1 current
+user dependency and expose connection status only. Fernet-key resolution is
+lazy, on first credential use. Connector dependency factories remain
+unchanged: stored credentials are not used to construct a connector until
+Phase 3 is explicitly designed and implemented.
+
+- New module `app/auth/token_cipher.py` validates
+  `PROMPTQL_CREDENTIAL_ENCRYPTION_KEY` only at use time and maps malformed
+  cryptographic inputs to sanitized application errors.
+- New `CredentialRepository` and `PostgresCredentialRepository` own
+  encryption-before-write, decryption-on-read, provider-only listing, and
+  composite-key upsert behavior. Tokens and ciphertext are excluded from
+  representations and HTTP responses.
+- `GitHubSettings`, `JiraSettings`, and `SentrySettings` now provide pure
+  `from_stored_credential()` constructors, but no connector factory calls
+  them yet.
+
+The original Phase 1 decision record remains otherwise unchanged below.
+
 - New module `app/auth/` (domain model, errors, Argon2 hashing,
   `itsdangerous` session signing, the `UserRepository` protocol, and an
   `InMemoryUserRepository` test double), matching the existing
