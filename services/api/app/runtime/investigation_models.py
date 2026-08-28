@@ -86,6 +86,9 @@ MAX_FOLLOW_UPS_PER_CASE = 3
 
 class InvestigationRun(ContractModel):
     run_id: UUID
+
+
+    user_id: UUID | None = Field(default=None, exclude=True)
     workflow_name: NonEmptyString
     workflow_version: NonEmptyString
     status: RunStatus

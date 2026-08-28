@@ -63,14 +63,20 @@ class ObservedRunRepository:
                 }
             )
 
-    def get(self, run_id: UUID) -> MergeReadinessRun | None:
+    def get(
+        self, run_id: UUID, user_id: UUID | None = None
+    ) -> MergeReadinessRun | None:
         with self._telemetry.observe_persistence(
             PersistenceOperation.GET,
             run_id,
             None,
         ) as observation:
             try:
-                run = self._inner.get(run_id)
+                run = (
+                    self._inner.get(run_id, user_id)
+                    if user_id is not None
+                    else self._inner.get(run_id)
+                )
             except Exception as error:
                 category = persistence_failure_category(error)
                 observation.set_attributes(

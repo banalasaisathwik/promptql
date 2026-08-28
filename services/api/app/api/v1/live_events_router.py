@@ -1,12 +1,18 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.api.v1.auth_router import get_current_user_optional
+from app.api.v1.connector_router import get_run_repository
+from app.api.v1.models import ApiError, ApiErrorCode
+from app.auth import User
 from app.observability.live_event_broker import LiveEventBroker
+from app.runtime import RunRepository
 
 
 router = APIRouter(prefix="/v1", tags=["live-events"])
@@ -40,8 +46,24 @@ async def _stream_events(
         broker.unsubscribe(subscriber_key, queue)
 
 
-@router.get("/runs/{run_id}/events")
-async def stream_run_events(run_id: UUID, request: Request) -> StreamingResponse:
+@router.get("/runs/{run_id}/events", response_model=None)
+async def stream_run_events(
+    run_id: UUID,
+    request: Request,
+    run_repository: Annotated[RunRepository, Depends(get_run_repository)],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
+) -> StreamingResponse | JSONResponse:
+    stored_run = (
+        run_repository.get(run_id, current_user.id)
+        if current_user is not None
+        else run_repository.get(run_id)
+    )
+    if stored_run is None:
+        error = ApiError(
+            code=ApiErrorCode.RUN_NOT_FOUND,
+            message="No runtime run exists for this ID.",
+        )
+        return JSONResponse(status_code=404, content=error.model_dump(mode="json"))
     broker = get_live_event_broker(request)
     return StreamingResponse(
         _stream_events(broker, run_id),

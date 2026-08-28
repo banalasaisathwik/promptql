@@ -42,6 +42,7 @@ def _json_value(model) -> dict[str, Any] | None:
 def _run_values(run: RuntimeRun) -> dict[str, Any]:
     if isinstance(run, InvestigationRun):
         return {
+            "user_id": run.user_id,
             "workflow_name": run.workflow_name,
             "workflow_version": run.workflow_version,
             "github_source": None,
@@ -64,6 +65,7 @@ def _run_values(run: RuntimeRun) -> dict[str, Any]:
         }
     sources = run.sources
     return {
+        "user_id": run.user_id,
         "workflow_name": run.workflow_name,
         "workflow_version": run.workflow_version,
         "github_source": sources.github.value if sources and sources.github else None,
@@ -152,10 +154,20 @@ class PostgresRunRepository:
                 self._confirmed_run_id(run.run_id),
             ) from None
 
-    def get(self, run_id: UUID) -> RuntimeRun | None:
+    def get(self, run_id: UUID, user_id: UUID | None = None) -> RuntimeRun | None:
         try:
             with self._session_factory() as session:
-                stored_run = session.get(WorkflowRunRow, run_id)
+                ownership_condition = WorkflowRunRow.user_id.is_(None)
+                if user_id is not None:
+                    ownership_condition = ownership_condition | (
+                        WorkflowRunRow.user_id == user_id
+                    )
+                stored_run = session.scalar(
+                    select(WorkflowRunRow).where(
+                        WorkflowRunRow.run_id == run_id,
+                        ownership_condition,
+                    )
+                )
                 if stored_run is None:
                     return None
                 stored_steps = tuple(
@@ -228,6 +240,7 @@ class PostgresRunRepository:
 
         return MergeReadinessRun(
             run_id=stored_run.run_id,
+            user_id=stored_run.user_id,
             workflow_name=stored_run.workflow_name,
             workflow_version=stored_run.workflow_version,
             sources=sources,
@@ -246,6 +259,7 @@ class PostgresRunRepository:
     def _read_investigation_run(stored_run: WorkflowRunRow) -> InvestigationRun:
         return InvestigationRun(
             run_id=stored_run.run_id,
+            user_id=stored_run.user_id,
             workflow_name=stored_run.workflow_name,
             workflow_version=stored_run.workflow_version,
             status=stored_run.status,
@@ -424,6 +438,7 @@ class PostgresRunRepository:
     @staticmethod
     def _stored_run_values(stored_run: WorkflowRunRow) -> dict[str, Any]:
         return {
+            "user_id": stored_run.user_id,
             "workflow_name": stored_run.workflow_name,
             "workflow_version": stored_run.workflow_version,
             "github_source": stored_run.github_source,
@@ -450,7 +465,8 @@ class PostgresRunRepository:
     ) -> None:
         if isinstance(run, InvestigationRun):
             if (
-                stored_run.workflow_name != run.workflow_name
+                stored_run.user_id != run.user_id
+                or stored_run.workflow_name != run.workflow_name
                 or stored_run.workflow_version != run.workflow_version
                 or stored_run.request_payload != _json_value(run.request)
             ):
@@ -460,7 +476,8 @@ class PostgresRunRepository:
                 )
             return
         if (
-            stored_run.workflow_name != run.workflow_name
+            stored_run.user_id != run.user_id
+            or stored_run.workflow_name != run.workflow_name
             or stored_run.workflow_version != run.workflow_version
             or stored_run.github_source
             != (run.sources.github.value if run.sources and run.sources.github else None)

@@ -112,6 +112,9 @@ class RuntimeStep(ContractModel):
 
 class MergeReadinessRun(ContractModel):
     run_id: UUID
+
+
+    user_id: UUID | None = Field(default=None, exclude=True)
     workflow_name: NonEmptyString
     workflow_version: NonEmptyString
     sources: RunSources | None = None

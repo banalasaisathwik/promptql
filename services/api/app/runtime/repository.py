@@ -17,7 +17,9 @@ RuntimeRun = MergeReadinessRun
 class RunRepository(Protocol):
     def save(self, run: RuntimeRun) -> None: ...
 
-    def get(self, run_id: UUID) -> RuntimeRun | None: ...
+    def get(
+        self, run_id: UUID, user_id: UUID | None = None
+    ) -> RuntimeRun | None: ...
 
 
 class InMemoryRunRepository:
@@ -30,8 +32,13 @@ class InMemoryRunRepository:
         self._runs[run.run_id] = run
         self._history.append(run)
 
-    def get(self, run_id: UUID) -> RuntimeRun | None:
-        return self._runs.get(run_id)
+    def get(self, run_id: UUID, user_id: UUID | None = None) -> RuntimeRun | None:
+        run = self._runs.get(run_id)
+        if run is None:
+            return None
+        if run.user_id is None or run.user_id == user_id:
+            return run
+        return None
 
     @property
     def history(self) -> tuple[RuntimeRun, ...]:

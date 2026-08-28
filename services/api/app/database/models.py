@@ -103,6 +103,11 @@ class WorkflowRunRow(DatabaseModel):
 
 
     run_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("users.id"),
+        index=True,
+    )
     workflow_name: Mapped[str] = mapped_column(Text, nullable=False)
     workflow_version: Mapped[str] = mapped_column(Text, nullable=False)
     github_source: Mapped[str | None] = mapped_column(Text)

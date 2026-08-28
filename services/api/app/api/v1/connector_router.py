@@ -422,8 +422,12 @@ async def start_investigation(
         LiveRunTaskRegistry,
         Depends(get_live_run_task_registry),
     ],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> LiveRunStartResponse:
-    pending_run = await workflow.create_persisted_run(request)
+    pending_run = await workflow.create_persisted_run(
+        request,
+        user_id=current_user.id if current_user is not None else None,
+    )
     task_registry.start(_continue_investigation(workflow, pending_run))
     return LiveRunStartResponse(run_id=pending_run.run_id, status=pending_run.status)
 
@@ -546,8 +550,13 @@ async def start_investigation_follow_up(
         LiveRunTaskRegistry,
         Depends(get_live_run_task_registry),
     ],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> InvestigationFollowUpStartResponse | JSONResponse:
-    stored_run = run_repository.get(run_id)
+    stored_run = (
+        run_repository.get(run_id, current_user.id)
+        if current_user is not None
+        else run_repository.get(run_id)
+    )
     if stored_run is None or not isinstance(stored_run, InvestigationRun):
         error = ApiError(
             code=ApiErrorCode.RUN_NOT_FOUND,
@@ -587,8 +596,13 @@ async def get_runtime_run(
         MergeReadinessExplanationService,
         Depends(get_merge_readiness_explanation_service),
     ],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> MergeReadinessResponse | InvestigationResponse | JSONResponse:
-    stored_run = run_repository.get(run_id)
+    stored_run = (
+        run_repository.get(run_id, current_user.id)
+        if current_user is not None
+        else run_repository.get(run_id)
+    )
     if stored_run is None:
         error = ApiError(
             code=ApiErrorCode.RUN_NOT_FOUND,

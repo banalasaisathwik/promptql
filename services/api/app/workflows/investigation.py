@@ -187,10 +187,15 @@ class InvestigationWorkflowService:
         )
 
     async def create_persisted_run(
-        self, request: InvestigationRequest, run_id: UUID | None = None
+        self,
+        request: InvestigationRequest,
+        run_id: UUID | None = None,
+        *,
+        user_id: UUID | None = None,
     ) -> InvestigationRun:
         pending = InvestigationRun(
             run_id=run_id or uuid4(),
+            user_id=user_id,
             workflow_name=INVESTIGATION_WORKFLOW_NAME,
             workflow_version=INVESTIGATION_WORKFLOW_VERSION,
             status=RunStatus.PENDING,
@@ -751,7 +756,11 @@ class InvestigationWorkflowService:
         return failed
 
     def _cancel(self, running: InvestigationRun) -> InvestigationRun:
-        latest = self._repository.get(running.run_id)
+        latest = (
+            self._repository.get(running.run_id, running.user_id)
+            if running.user_id is not None
+            else self._repository.get(running.run_id)
+        )
         base = latest if isinstance(latest, InvestigationRun) else running
         cancelled = base.model_copy(
             update={

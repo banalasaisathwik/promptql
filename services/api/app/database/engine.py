@@ -46,7 +46,7 @@ def verify_database_ready(engine: Engine) -> None:
             column["name"]
             for column in database_inspector.get_columns("workflow_runs")
         }
-        if "investigation_state" not in workflow_run_columns:
+        if not {"investigation_state", "user_id"}.issubset(workflow_run_columns):
             raise RunPersistenceError(
                 "Runtime database migrations have not been applied."
             )
