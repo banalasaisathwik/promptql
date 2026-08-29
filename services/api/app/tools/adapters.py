@@ -7,6 +7,7 @@ from app.connectors.errors import (
     FixtureNotFoundError,
     GitHubConnectorError,
     JiraConnectorError,
+    SentryConnectorError,
 )
 from app.connectors.models import (
     DeploymentEvidenceRequest,
@@ -74,7 +75,10 @@ class _EvidenceTool:
         if isinstance(error, ConnectorUnavailableError):
             code = ToolFailureCode.CAPABILITY_UNAVAILABLE
             message = "the underlying capability is unavailable"
-        elif isinstance(error, (GitHubConnectorError, JiraConnectorError)):
+        elif isinstance(
+            error,
+            (GitHubConnectorError, JiraConnectorError, SentryConnectorError),
+        ):
             code = ToolFailureCode(error.category.value)
             message = "the provider source failed to return evidence"
         elif isinstance(error, FixtureNotFoundError):
@@ -145,7 +149,11 @@ class GetIncidentTool(_EvidenceTool):
         request = self._arguments(arguments)
         try:
             return self._observed(await self._source.get_incident_evidence(request))
-        except (ConnectorUnavailableError, FixtureNotFoundError) as error:
+        except (
+            ConnectorUnavailableError,
+            FixtureNotFoundError,
+            SentryConnectorError,
+        ) as error:
             return self._failed(error)
 
 
@@ -166,7 +174,11 @@ class GetFailureLocationTool(_EvidenceTool):
             return self._observed(
                 await self._source.get_failure_location_evidence(request)
             )
-        except (ConnectorUnavailableError, FixtureNotFoundError) as error:
+        except (
+            ConnectorUnavailableError,
+            FixtureNotFoundError,
+            SentryConnectorError,
+        ) as error:
             return self._failed(error)
 
 
@@ -181,7 +193,11 @@ class GetDeploymentsTool(_EvidenceTool):
         request = self._arguments(arguments)
         try:
             return self._observed(await self._source.get_deployment_evidence(request))
-        except (ConnectorUnavailableError, FixtureNotFoundError) as error:
+        except (
+            ConnectorUnavailableError,
+            FixtureNotFoundError,
+            SentryConnectorError,
+        ) as error:
             return self._failed(error)
 
 
@@ -196,7 +212,11 @@ class QueryTelemetryTool(_EvidenceTool):
         request = self._arguments(arguments)
         try:
             return self._observed(await self._source.get_telemetry_window_evidence(request))
-        except (ConnectorUnavailableError, FixtureNotFoundError) as error:
+        except (
+            ConnectorUnavailableError,
+            FixtureNotFoundError,
+            SentryConnectorError,
+        ) as error:
             return self._failed(error)
 
 

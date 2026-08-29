@@ -1,7 +1,11 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { TraceEventList } from './InvestigationTraceView'
-import type { LiveRunEvent } from './types'
+import {
+  FactChainPanel,
+  TraceEventList,
+  TraceRoundSidebar,
+} from './InvestigationTraceView'
+import type { InvestigationPlanningRound, LiveRunEvent } from './types'
 
 
 const TOOL_CALL_EVENT: LiveRunEvent = {
@@ -21,14 +25,52 @@ test('shows an empty state before any event arrives', () => {
 })
 
 
-test('renders each received event with its name, time, level, and fields', () => {
+test('renders each received event as a streaming log line with its semantic tag and fields', () => {
   const markup = renderToStaticMarkup(
-    <TraceEventList events={[TOOL_CALL_EVENT]} status="open" />,
+    <TraceEventList events={[TOOL_CALL_EVENT]} status="open" streaming />,
   )
 
   expect(markup).toContain('investigation.tool.call_completed')
-  expect(markup).toContain('info')
-  expect(markup).toContain('tool_id')
-  expect(markup).toContain('get_incident')
-  expect(markup).toContain('1 received')
+  expect(markup).toContain('tool_id=get_incident')
+  expect(markup).toContain('trace-log-tag--tool')
+  expect(markup).toContain('streaming')
+  expect(markup).toContain('trace-cursor')
+})
+
+
+test('renders persisted planning rounds as the left-hand checklist', () => {
+  const rounds: InvestigationPlanningRound[] = [{
+    round_number: 1,
+    plan_id: 'round-1',
+    plan_validation_status: 'accepted',
+    completed: true,
+    evidence_delta_ids: [],
+    fact_delta_ids: [],
+    steps: [{
+      step_id: 'step-1',
+      tool_id: 'get_diff',
+      status: 'succeeded',
+      attempts: 1,
+      failure_code: null,
+      failure_message: null,
+      block_reason: null,
+    }],
+  }]
+
+  const markup = renderToStaticMarkup(<TraceRoundSidebar rounds={rounds} />)
+
+  expect(markup).toContain('Round 1')
+  expect(markup).toContain('complete')
+  expect(markup).toContain('get_diff')
+  expect(markup).toContain('trace-round-step--succeeded')
+})
+
+
+test('renders only a backend-grounded connected fact chain', () => {
+  const markup = renderToStaticMarkup(<FactChainPanel chain={['F-deploy', 'F-commit']} />)
+
+  expect(markup).toContain('Fact chain forming')
+  expect(markup).toContain('F-deploy')
+  expect(markup).toContain('F-commit')
+  expect(markup).toContain('trace-chain-node--active')
 })

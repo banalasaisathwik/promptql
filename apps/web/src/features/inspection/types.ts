@@ -385,6 +385,9 @@ export interface ValidatedHypothesis {
 
 export interface GroundedHypothesis extends ValidatedHypothesis {
   statement: string
+  // The deterministic backend only attaches this when its relationship graph
+  // can prove a clean chain between the hypothesis's cited entities.
+  connected_fact_chain?: string[] | null
 }
 
 export interface ValidatedCodeFinding {

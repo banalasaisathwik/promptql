@@ -1,5 +1,131 @@
 # Learning log
 
+## 2026-08-29 - extraction UI is a projection of the typed response
+
+- **Concept:** `InvestigationConsolePage.tsx` has two separate concerns:
+  the compact question-and-demo layout, and the extraction review state. The
+  live extraction endpoint can propose values, but the UI must copy those
+  values into the controlled form inputs so the review card shows what the
+  backend actually returned rather than an independent "not detected" view.
+- **Where:** `extractDetails()` writes each `response.extracted` field to
+  `form` before rendering the review card. The console heading now uses the
+  compact `NEW INVESTIGATION` / `What happened?` hierarchy and the demo path
+  follows the question form rather than appearing above it as introductory
+  marketing content. `InvestigationConsolePage.test.tsx` protects the retired
+  heading and paragraph from returning.
+- **Validation evidence:** With `PROMPTQL_LLM_PROVIDER=groq`, a live local
+  `POST /v1/investigations/extract-grounding` for `PR 42 in
+  octo-org/analytics, deployment 1042, checkout throwing errors` returned
+  `repository_owner=octo-org`, `repository_name=analytics`,
+  `pull_request_number=42`, `deployment_reference=1042`, and
+  `incident_reference=null`. That is complete and correct for text that does
+  not name an incident.
+- **Design decision:** preserve the existing controlled-input prefill rather
+  than add a parallel display-only extraction state. The user can still edit
+  every value before the unchanged submit path starts a run.
+
+## 2026-08-29 — close the users-table startup check gap ADR-035 left open
+
+- **Concept:** `verify_database_ready()` (`app/database/engine.py`) is the
+  one deterministic gate meant to fail startup loudly whenever the schema
+  the ORM models expect is not the schema actually applied, instead of
+  letting the app boot and surface the mismatch as a generic sanitized 503
+  on the first real query. ADR-035's `20260829_0012_add_users_is_demo.py`
+  migration added `UserRow.is_demo` without extending this check, so a
+  database still on `20260828_0011` booted successfully and only failed
+  inside `PostgresUserRepository.authenticate()`, where the resulting
+  `psycopg.errors.UndefinedColumn` was caught by the generic
+  `except SQLAlchemyError` and re-raised as `AuthPersistenceError("Auth
+  persistence is unavailable.")` — a message identical to the one used for
+  an actually-unreachable database, giving no hint that the real cause was
+  one specific missing column. Reproduced live: `alembic current` showed
+  `20260828_0011` against a repo whose `alembic heads` was `20260829_0012`.
+- **Where:** `verify_database_ready()` now also inspects `users`' columns
+  and requires `{"id", "email", "password_hash", "created_at",
+  "is_demo"}`, raising the same `RunPersistenceError("Runtime database
+  migrations have not been applied.")` the existing `workflow_runs` check
+  raises — deliberately the same error type and message shape as every
+  other missing-migration case this function already guards, not a new
+  auth-specific one. Test:
+  `test_startup_rejects_users_table_missing_is_demo_column` in
+  `tests/unit/test_database_config.py`, mirroring
+  `test_startup_rejects_database_missing_users_table` immediately above it.
+- **Design decision:** extend the existing single startup check rather than
+  add a second one scoped to auth. `verify_database_ready()` already mixes
+  runtime and auth tables in one place; splitting it by domain would add a
+  second failure path with no behavioral benefit for a check that only
+  runs once, at startup.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  — 629 tests, OK, 14 pre-existing skips (630 total: one net-new test vs.
+  the 628 recorded in the ADR-035 entry below, alongside a small counting
+  discrepancy in that older entry).
+- **Unresolved question:** the live dev database is still one migration
+  behind (`alembic upgrade head` was not run as part of this change, since
+  it was out of scope for what was asked) — the next server restart will
+  now fail startup loudly with the new check instead of serving broken
+  logins, which is the intended behavior change, but the migration itself
+  still needs to be applied to actually fix login.
+
+## 2026-08-29 — ADR-035: an identity-flag bypass is safer than a fake credential
+
+- **Concept:** when one account's traffic must never reach a real external
+  system, the safest place to enforce that is the exact code path that is
+  already the single, exhaustive producer of a live connection — not a new
+  parallel check, and not a plausible-looking-but-inert stored credential.
+  ADR-035's `is_demo` flag is checked inside the same four functions
+  (`get_github_connector`, `get_github_code_evidence_source`,
+  `get_jira_connector`, `get_incident_source` in
+  `app/api/v1/connector_router.py`) that ADR-034 Phase 3 already made the
+  *only* place anywhere in the backend that turns a stored credential into
+  a live connector, confirmed by grepping every caller of
+  `from_stored_credential`/`get_credential_repository` before writing the
+  ADR. The rejected alternative — provisioning the demo account with a
+  real `credentials` row holding a syntactically valid but non-functional
+  token — would have been strictly worse than "meaningless encrypted
+  data": Phase 3's resolution code has no concept of a known-bad token, so
+  that account would still attempt a real outbound call on every
+  investigation step, with safety resting on an unenforced runtime
+  assumption (the token staying broken forever) instead of on code that
+  structurally prevents the call from being attempted.
+- **Where:** migration `20260829_0012_add_users_is_demo.py`; the
+  `current_user.is_demo` branch added to the four functions above; the
+  matching `GET/POST/DELETE /v1/credentials` short-circuits in
+  `app/api/v1/credentials_router.py`; `scripts/seed_demo_account.py`
+  (manual, idempotent, never a public endpoint) and the new public
+  `GET /v1/demo-account` config endpoint
+  (`app/api/v1/demo_account_router.py`) that serves the frontend the same
+  values the seed script provisioned, from the same
+  `PROMPTQL_DEMO_ACCOUNT_EMAIL`/`PROMPTQL_DEMO_ACCOUNT_PASSWORD` pair, so
+  the password exists in exactly one place rather than being duplicated
+  into frontend source.
+- **Design decision:** the demo account's password is deliberately not
+  secret — it is visibly pre-filled on a public landing page. That is
+  safe specifically *because* safety was built to depend on the `is_demo`
+  bypass alone, not on the password being hard to find or on restricting
+  who can reach the login form; anyone who retyped the visible
+  email/password directly, bypassing the "Try the Demo" button entirely,
+  would land on exactly the same safe, bypassed account.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  (628 tests, OK, 14 pre-existing skips) and `bun run test:web` (55
+  passed) after every implementation step, plus a live run against a
+  dedicated Neon test branch (never the application branch): the seed
+  script run twice proved idempotent; login and `GET /v1/credentials`
+  proved the demo response shape; a real investigation completed using
+  `app.state`'s `Fake*` connectors, confirmed to hold no HTTP client
+  attribute at all (no transport for a live call to travel over,
+  independent of any application logic); and a freshly registered
+  non-demo user with no stored credential was confirmed still rejected
+  with the original, unchanged `409`.
+- **Unresolved question:** ADR-034 Phases 3 and 4 themselves (per-request
+  connector resolution, and `workflow_runs.user_id` ownership isolation)
+  merged with zero documentation updates in their own commits — no
+  ARCHITECTURE.md or LEARNING-LOG.md entry existed for either until this
+  session's doc pass folded the ARCHITECTURE.md side of that gap in
+  alongside ADR-035. Whether Phases 3/4 also deserve their own
+  LEARNING-LOG.md entries, written after the fact, is an open question
+  this session did not resolve — it was raised but scoped out as separate
+  from ADR-035's own documentation debt.
+
 ## 2026-08-28 - ADR-034 Phase 2: authenticated encryption at rest
 
 - **Concept reinforced:** provider credentials cross a narrow security boundary:

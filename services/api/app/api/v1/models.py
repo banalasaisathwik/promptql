@@ -20,6 +20,7 @@ class ApiErrorCode(StrEnum):
     USER_ALREADY_EXISTS = "user_already_exists"
     INVALID_CREDENTIALS = "invalid_credentials"
     AUTH_PERSISTENCE_UNAVAILABLE = "auth_persistence_unavailable"
+    DEMO_ACCOUNT_CREDENTIALS_IMMUTABLE = "demo_account_credentials_immutable"
 
 
 class ApiError(ContractModel):

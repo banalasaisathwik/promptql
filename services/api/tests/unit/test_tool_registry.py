@@ -3,7 +3,11 @@ from datetime import UTC, datetime
 
 from pydantic import ValidationError
 
-from app.connectors.errors import ConnectorUnavailableError, GitHubRateLimitedError
+from app.connectors.errors import (
+    ConnectorUnavailableError,
+    GitHubRateLimitedError,
+    SentryNotFoundError,
+)
 from app.connectors.fakes import FakeJiraConnector
 from app.connectors.github_code_fakes import (
     FIXTURE_COMMIT_REQUEST,
@@ -215,6 +219,35 @@ class ToolAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result.failure.code, ToolFailureCode.CAPABILITY_UNAVAILABLE)
+
+    async def test_sentry_failures_remain_typed_for_every_sentry_adapter(self) -> None:
+        class NotFoundSentrySource(FakeIncidentSource):
+            async def get_incident_evidence(self, request):
+                raise SentryNotFoundError()
+
+            async def get_deployment_evidence(self, request):
+                raise SentryNotFoundError()
+
+            async def get_failure_location_evidence(self, request):
+                raise SentryNotFoundError()
+
+            async def get_telemetry_window_evidence(self, request):
+                raise SentryNotFoundError()
+
+        source = NotFoundSentrySource()
+        cases = (
+            (GetIncidentTool(source, EvidenceStore()), INCIDENT_REQUEST),
+            (GetDeploymentsTool(source, EvidenceStore()), DEPLOYMENT_REQUEST),
+            (GetFailureLocationTool(source, EvidenceStore()), FAILURE_LOCATION_REQUEST),
+            (QueryTelemetryTool(source, EvidenceStore()), TELEMETRY_REQUEST),
+        )
+
+        for tool, request in cases:
+            with self.subTest(tool=tool.definition.tool_id):
+                result = await tool.execute(request.model_dump())
+                self.assertEqual(result.outcome, ToolOutcome.FAILED)
+                self.assertEqual(result.failure.code, ToolFailureCode.NOT_FOUND)
+                self.assertNotIn("Sentry", result.failure.message)
 
     async def test_telemetry_input_keeps_time_and_signal_structured(self) -> None:
         with self.assertRaises(InvalidToolArgumentsError):

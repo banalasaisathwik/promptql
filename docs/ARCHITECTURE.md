@@ -36,15 +36,20 @@ browser -> Vite React application -> FastAPI API -> Neon PostgreSQL
                                       `-> optional bounded OTLP traces -> Langfuse
 ```
 
-The frontend's root route (`/`) renders `InvestigationConsolePage`, which
-submits an investigation request and navigates to `/runs/:runId` to poll the
-persisted snapshot. `/runs/:runId` renders either an investigation dashboard
-or a merge-readiness dashboard depending on the stored `workflow_name`, so a
-merge-readiness run remains viewable if one already exists — but nothing in
-the current routing lets a browser *start* one: `MergeReadinessPage.tsx` and
-`RequestForm.tsx` still exist and have their own tests, but `App.tsx` never
-imports them, so they are unreachable dead code in the running app. The API
-also serves `GET /health`.
+The frontend's root route (`/`) renders `LandingPage` (ADR-035), whose
+"Try the Demo" button leads to the authenticated flow
+(`/login`/`/signup` -> `/connect` -> investigation submission). The
+original, unauthenticated investigation console (`InvestigationConsolePage`)
+now lives at `/console` — unmodified, and linked from the landing page as
+a secondary entry point — and still navigates to `/runs/:runId` to poll
+the persisted snapshot the same way it always did. `/runs/:runId` renders
+either an investigation dashboard or a merge-readiness dashboard
+depending on the stored `workflow_name`, so a merge-readiness run remains
+viewable if one already exists — but nothing in the current routing lets
+a browser *start* one: `MergeReadinessPage.tsx` and `RequestForm.tsx`
+still exist and have their own tests, but `App.tsx` never imports them,
+so they are unreachable dead code in the running app. The API also
+serves `GET /health`.
 
 ```text
 GET  /v1/demo/pull-request-scenarios       -> selectable fixture metadata
@@ -54,9 +59,13 @@ POST /v1/pull-request-merge-readiness-runs -> accepted pending run ID (202)
 POST /v1/investigations                    -> accepted pending investigation run ID (202)
 POST /v1/investigations/extract-grounding  -> proposed grounding fields from free text; never creates a run (200/502)
 GET  /v1/runs/{run_id}                     -> persisted current run snapshot (merge-readiness or investigation)
-POST /v1/credentials                       -> authenticated encrypted provider-token upsert (provider/status only)
-GET  /v1/credentials                       -> authenticated GitHub/Jira/Sentry connection status only
-DELETE /v1/credentials/{provider}          -> authenticated provider-token removal (204)
+POST /v1/auth/register                     -> create account, set session cookie (201)
+POST /v1/auth/login                        -> authenticate, set session cookie
+POST /v1/auth/logout                       -> clear session cookie (204)
+POST /v1/credentials                       -> authenticated encrypted provider-token upsert (provider/status/source only)
+GET  /v1/credentials                       -> authenticated GitHub/Jira/Sentry connection status only (source: real|demo)
+DELETE /v1/credentials/{provider}          -> authenticated provider-token removal (204; 403 for an is_demo account)
+GET  /v1/demo-account                      -> public, unauthenticated demo email/password (ADR-035)
 GET  /health                               -> liveness check
 ```
 
@@ -68,12 +77,12 @@ same routing contract.
 
 | Path | Current responsibility |
 | --- | --- |
-| `apps/web` | Browser UI for the investigation console (request submission, run polling, hypothesis/finding presentation) and a shared run dashboard that also renders a merge-readiness run's decision/evidence if one is opened directly by ID; a merge-readiness *submission* form exists in source but is not reachable from the app's routing |
+| `apps/web` | Browser UI: a public landing page and the authenticated register/login/connect-tools flow (ADR-034, ADR-035), the investigation console (request submission, run polling, hypothesis/finding presentation), and a shared run dashboard that also renders a merge-readiness run's decision/evidence if one is opened directly by ID; a merge-readiness *submission* form exists in source but is not reachable from the app's routing |
 | `services/api` | Backend HTTP boundary, independently selected fake/live GitHub and Jira connectors, merge-readiness and investigation workflow execution, PostgreSQL persistence, deterministic policy, planning/execution/hypothesis generation for investigations, and observability export |
 | `packages` | Reserved for reusable TypeScript packages; not yet present |
 | `docs` | Product, architecture, testing, decisions, and work records |
 | `infra` | Reserved for future infrastructure configuration; not yet present |
-| `scripts` | Reserved for future repository automation; not yet present |
+| `scripts` (top-level) | Reserved for future repository automation; not yet present. Distinct from `services/api/scripts/`, which holds one manual operational script, `seed_demo_account.py` (ADR-035) |
 
 ## Module map
 
@@ -101,7 +110,10 @@ services/api/app/
 ├── workflows/                  # Orchestrates connectors/policy/investigation into one run
 ├── api/v1/                      # FastAPI routes and HTTP-facing models
 │   ├── live_events_router.py     # GET /v1/runs/{run_id}/events - live SSE tap
-│   └── auth_router.py             # POST /v1/auth/register|login|logout (ADR-034 Phase 1)
+│   ├── auth_router.py             # POST /v1/auth/register|login|logout (ADR-034 Phase 1)
+│   ├── credentials_router.py       # POST/GET/DELETE /v1/credentials - encrypted per-user tokens (ADR-034 Phase 2)
+│   ├── connector_router.py          # get_github_connector/get_jira_connector/get_incident_source: per-request, per-user resolution (ADR-034 Phase 3), is_demo bypass (ADR-035); investigation/run routes
+│   └── demo_account_router.py        # GET /v1/demo-account - public, non-secret demo credentials (ADR-035)
 └── main.py                       # Application assembly (DI wiring, lifespan, routes)
 ```
 
@@ -123,9 +135,12 @@ apps/web/src/
     ├── useRunLiveEvents.ts                        # Live-event hook wrapping liveEventStream.ts
     ├── MergeReadinessPage.tsx                    # Merge-readiness request form (unreachable — App.tsx never imports it)
     ├── RunDashboardPage.tsx                       # Live run dashboard; dispatches on workflow_name
-    ├── InvestigationConsolePage.tsx                # Investigation request submission UI (the actual `/` route)
+    ├── InvestigationConsolePage.tsx                # Investigation request submission UI (now at `/console`, the preserved anonymous no-login path — ADR-035)
     ├── InvestigationDashboard.tsx                   # Live investigation run dashboard
     ├── InvestigationTraceView.tsx                   # /runs/{id}/trace - live SSE event list, additive to the dashboard
+    ├── LandingPage.tsx                               # The `/` route: headline, product description, "Try the Demo" button (ADR-035)
+    ├── WorkspaceAuthPage.tsx                          # `/login` and `/signup`; accepts demo-account prefill props (ADR-035)
+    ├── ConnectToolsPage.tsx                            # `/connect`; renders "Connected — Demo Data" for source==="demo" providers (ADR-035)
     └── components/
         ├── RequestForm.tsx                           # Merge-readiness request input form (used only by the unreachable page above)
         └── MergeReadinessPanel.tsx                    # Decision/evidence rendering, reused by RunDashboardPage for a merge-readiness run
@@ -183,8 +198,9 @@ omitted above for brevity.
 - One application-lifetime SQLAlchemy engine owns a 5-connection pool with a
   5-second timeout and pings/recycles connections
   (`database/engine.py`). Startup (`verify_database_ready`) fails fast if the
-  `workflow_runs`/`workflow_steps`/`repository_fact_recurrence` tables or the
-  `investigation_state` column are missing, rather than accepting requests it
+  `workflow_runs`/`workflow_steps`/`repository_fact_recurrence`/`users`
+  tables, the `workflow_runs.investigation_state`/`user_id` columns, or the
+  `users.is_demo` column are missing, rather than accepting requests it
   cannot persist. Alembic owns schema creation; the application never runs
   migrations or calls `create_all()`.
 - `FactRecurrenceRepository` isolates the repository-scoped Fact-type
@@ -945,14 +961,21 @@ the existing "Demo scenario" preset (`CHECKOUT_500_PRESET` in
 convenience wrapper around the same request path the manual form already
 uses, not a new backend capability.
 
-Provider/connector safety on a public deployment rests entirely on
-deployment configuration, not request-time logic: `PROMPTQL_LLM_PROVIDER`,
-`PROMPTQL_GITHUB_CONNECTOR`, `PROMPTQL_JIRA_CONNECTOR`, and
-`PROMPTQL_SENTRY_CONNECTOR` are each read once from the environment at
-process startup (`app/config.py`) into a process-lifetime client on
-`app.state`; no request field can select or override provider/connector
-mode. See [DEPLOYMENT.md](../DEPLOYMENT.md) for the exact Render
-environment variables and the warning against copying `.env` wholesale.
+Provider/connector safety for an anonymous or `is_demo` request rests
+entirely on deployment configuration, not request-time logic:
+`PROMPTQL_LLM_PROVIDER`, `PROMPTQL_GITHUB_CONNECTOR`,
+`PROMPTQL_JIRA_CONNECTOR`, and `PROMPTQL_SENTRY_CONNECTOR` are each read
+once from the environment at process startup (`app/config.py`) into a
+process-lifetime client on `app.state`; no request field can select or
+override provider/connector mode, and both the anonymous path and the
+ADR-035 `is_demo` bypass resolve to that same fixed `app.state`
+connector. A real authenticated user (ADR-034 Phase 3) is the one
+exception: their request *does* select which connector is used, keyed on
+their own stored credential — but never which *mode* (fake/live) a
+connector runs in, since that is still fixed process-wide by the same
+environment variables. See [DEPLOYMENT.md](../DEPLOYMENT.md) for the
+exact Render environment variables and the warning against copying
+`.env` wholesale.
 
 ## Investigation reopening (follow-up questions)
 
@@ -1048,29 +1071,95 @@ function that bumps an internal generation counter, recreating the polling
 controller without clearing the currently displayed snapshot, and
 `RunDashboardPage.tsx` passes it down as `onFollowUpSubmitted`.
 
-## Multi-user auth core (ADR-034 Phase 1) (Current/Implemented)
+## Multi-user auth and per-user credentials (ADR-034, all phases) (Current/Implemented)
 
 Per [ADR-034](decisions/ADR-034-multi-user-auth-and-per-user-credential-storage.md).
-A `users` table (`id`, `email`, `password_hash`, `created_at`) exists
-alongside the existing runtime tables, with no foreign key in either
-direction. `app/auth/` holds the domain model (`User`), Argon2id password
-hashing (`argon2-cffi`), stateless signed session tokens (`itsdangerous`),
-and the `UserRepository` protocol with an `InMemoryUserRepository` test
-double; `app/database/postgres_user_repository.py` is the only place an
-Argon2 hash is read or written. `app/api/v1/auth_router.py` exposes
-`POST /v1/auth/register`, `POST /v1/auth/login`, and
-`POST /v1/auth/logout`, each setting or clearing a signed,
-`httponly`/`secure`/`samesite=lax` cookie holding only `user_id`, plus a
-`get_current_user` dependency that reads and validates that cookie.
+All four phases named in that ADR are implemented.
 
-This phase is deliberately additive and coexists with, rather than
-replaces, the anonymous demo path described below:
-`get_github_connector`, `get_jira_connector`, `get_incident_source`, and
-every route that existed before this ADR are unmodified, and
-`get_current_user` is not a dependency of any of them. Per-user
-GitHub/Jira/Sentry credential storage and rewiring the connector
-dependencies to resolve per-user are named as future phases in ADR-034
-but are not implemented.
+**Phase 1 — identity core.** A `users` table (`id`, `email`,
+`password_hash`, `created_at`, plus `is_demo` from ADR-035 below) exists
+alongside the existing runtime tables, with no foreign key in either
+direction from any pre-existing table. `app/auth/` holds the domain model
+(`User`), Argon2id password hashing (`argon2-cffi`), stateless signed
+session tokens (`itsdangerous`), and the `UserRepository` protocol with
+an `InMemoryUserRepository` test double; `app/database/postgres_user_repository.py`
+is the only place an Argon2 hash is read or written.
+`app/api/v1/auth_router.py` exposes `POST /v1/auth/register`,
+`POST /v1/auth/login`, and `POST /v1/auth/logout`, each setting or
+clearing a signed, `httponly`/`secure`/`samesite=lax` cookie holding only
+`user_id`, plus `get_current_user` (required) and
+`get_current_user_optional` (used by connector dependencies below).
+
+**Phase 2 — encrypted per-user credential storage.** A `credentials`
+table holds one Fernet-encrypted GitHub, Jira, or Sentry token per
+user/provider pair (`app/auth/credentials.py`, `app/auth/token_cipher.py`,
+`app/database/postgres_credential_repository.py`). `app/api/v1/credentials_router.py`
+exposes `POST`/`GET`/`DELETE /v1/credentials`, all behind `get_current_user`;
+responses project only `{provider, connected, source}` — plaintext and
+ciphertext never leave the repository layer. `PROMPTQL_CREDENTIAL_ENCRYPTION_KEY`
+is resolved lazily, on first credential use, not at startup.
+
+**Phase 3 — per-request connector resolution.**
+`get_github_connector`, `get_github_code_evidence_source`,
+`get_jira_connector`, and `get_incident_source`
+(`app/api/v1/connector_router.py`) now resolve per request: an anonymous
+caller (`current_user is None`) still receives the original `app.state`
+singleton connector, byte-for-byte unchanged from before this phase; an
+authenticated caller with a stored credential gets a connector built from
+their own decrypted token (`GitHubSettings`/`JiraSettings`/`SentrySettings`
+`.from_stored_credential()`); an authenticated caller with no stored
+credential for that provider gets a `409` asking them to connect it. This
+is the only place anywhere in the backend that turns a stored credential
+into a live connector.
+
+**Phase 4 — ownership isolation.** `workflow_runs.user_id` (nullable,
+foreign key to `users`) records which authenticated user started a run;
+existing pre-Phase-4 rows keep `user_id = NULL` and remain visible under
+the prior anonymous-demo contract. `PostgresRunRepository.get()` scopes
+its lookup by `user_id` when a caller is authenticated, so one user
+cannot read another's investigation by guessing a run ID; an anonymous
+caller's visibility is unchanged.
+
+Frontend routes for this flow (`WorkspaceAuthPage.tsx` at `/login`/`/signup`,
+`ConnectToolsPage.tsx` at `/connect`) are described in the
+[Module map](#module-map) and below under
+[ADR-035](#demo-account-landing-page-bypass-adr-035-currentimplemented).
+
+## Demo-account landing-page bypass (ADR-035) (Current/Implemented)
+
+Per [ADR-035](decisions/ADR-035-demo-account-landing-page-bypass.md). A
+public landing page (`LandingPage.tsx`, now the `/` route) has a "Try the
+Demo" button that navigates to `/login` with one pre-provisioned demo
+account's email/password pre-filled but not auto-submitted — the visitor
+sees and submits a real login. After login, the visitor sees the real
+`ConnectToolsPage` (`/connect`) and can start a real investigation, all
+through the same authenticated UI a real user would use.
+
+The mechanism is a single additive `is_demo: bool` column on `users`,
+default `false`. Each of the four Phase 3 connector-resolution functions
+above treats `current_user.is_demo` identically to `current_user is None`
+— returning the same anonymous `app.state` fake singleton connector — and
+does so *before* any call to `get_credential_repository`, so a demo
+session structurally cannot decrypt or construct a connector from a real
+stored credential. `GET /v1/credentials` reports all three providers as
+`connected=true, source="demo"` for a demo user without querying the real
+`credentials` table; `POST`/`DELETE /v1/credentials` reject a demo user
+with `403 DEMO_ACCOUNT_CREDENTIALS_IMMUTABLE` before touching storage.
+The one demo account row is provisioned by `scripts/seed_demo_account.py`
+— a manual, idempotent script, never a public endpoint — using the same
+`PROMPTQL_DEMO_ACCOUNT_EMAIL`/`PROMPTQL_DEMO_ACCOUNT_PASSWORD` environment
+variables that the public, unauthenticated `GET /v1/demo-account`
+(`app/api/v1/demo_account_router.py`) serves to the frontend, so the
+password is a single source of truth rather than duplicated in frontend
+source. The demo password is intentionally not secret: safety rests
+entirely on the `is_demo` bypass, not on the password being hard to find.
+
+The original anonymous, no-login demo path (`InvestigationConsolePage.tsx`,
+[Public demo deployment](#public-demo-deployment-currentimplemented)
+below) is unmodified at the backend level and remains reachable in the
+frontend at `/console`, linked from the landing page as a secondary,
+de-emphasized action — this ADR adds a second, authenticated way to reach
+the same fake connectors; it does not remove or replace the first.
 
 ## Not implemented
 
@@ -1079,12 +1168,12 @@ As of this writing, the following are genuinely absent from the repository
 earlier description): a cancellation API or any code path that ever
 transitions a run to `cancelled`; crash recovery / checkpoint-resume for
 investigation execution (which is process-local and in-memory only); a
-distributed worker or queue; GitHub, Jira, or Sentry OAuth/app authentication
-or any multi-tenant connector credential model (a password-based
-multi-user *identity* core exists per [ADR-034 Phase 1](#multi-user-auth-core-adr-034-phase-1-currentimplemented),
-but no user's own connector credentials are stored or used anywhere, and
-`get_github_connector`/`get_jira_connector`/`get_incident_source` remain
-process-wide singletons); retention policies;
+distributed worker or queue; GitHub, Jira, or Sentry OAuth/app
+authentication (personal-access tokens only — per-user credential storage
+and per-request connector resolution are implemented, see
+[Multi-user auth and per-user credentials](#multi-user-auth-and-per-user-credentials-adr-034-all-phases-currentimplemented),
+but replacing stored tokens with an OAuth app flow was named in ADR-034 as
+a possible future phase and is not built); retention policies;
 persisted/versioned explanations; LLM SDK-level retries or provider fallback
 (`max_retries=0` everywhere, and runtime retries only the tool-execution
 path); hosted eval services, LLM-as-a-judge grading, or production-traffic
@@ -1096,21 +1185,27 @@ its read path now surfaces promoted counts to the planner, but ADR-031's
 Option C, richer LLM-proposed memory candidates, remains deferred); and
 cross-source conflict resolution (the connector graph is
 single-source-per-kind by construction, so no same-question conflict between
-sources can occur today). `packages/`, `infra/`, and `scripts/` remain empty.
-Neon and Grafana Cloud resources themselves, and provisioning the actual
-Render/Vercel services, remain configuration concerns outside this
-repository; the code-level deployment topology (the Vercel rewrite, the
-demo-scoped rate limiter) is now in-repo — see
-[Public demo deployment](#public-demo-deployment-currentimplemented) above
-and [DEPLOYMENT.md](../DEPLOYMENT.md).
+sources can occur today). The top-level `packages/`, `infra/`, and
+`scripts/` directories named in CLAUDE.md's repository map remain empty; a
+separate, service-scoped `services/api/scripts/` directory now holds one
+manual operational script, `seed_demo_account.py` (ADR-035), distinct from
+that reserved top-level directory. Neon and Grafana Cloud resources
+themselves, and provisioning the actual Render/Vercel services, remain
+configuration concerns outside this repository; the code-level deployment
+topology (the Vercel rewrite, the demo-scoped rate limiter) is now in-repo
+— see [Public demo deployment](#public-demo-deployment-currentimplemented)
+above and [DEPLOYMENT.md](../DEPLOYMENT.md).
 
 A UI gap rather than a missing backend capability: there is currently no
 reachable way to *start* a merge-readiness run from the browser.
 `MergeReadinessPage.tsx` and `RequestForm.tsx` implement that submission
-flow, but `App.tsx`'s routing never renders them — only `/runs/:runId` (view
-an existing run) and the investigation console at `/` are reachable. The
-backend routes and the merge-readiness *dashboard* rendering both still
-work; only the "start a new merge-readiness run" entry point is orphaned.
+flow, but `App.tsx`'s routing never renders them. Reachable routes are:
+`/` (the landing page, ADR-035), `/console` (the preserved anonymous
+investigation console, formerly at `/`), `/login`/`/signup`/`/connect`
+(the authenticated auth/credential flow, ADR-034), and `/runs/:runId`
+(view an existing run). The backend routes and the merge-readiness
+*dashboard* rendering both still work; only the "start a new
+merge-readiness run" entry point is orphaned.
 
 ---
 

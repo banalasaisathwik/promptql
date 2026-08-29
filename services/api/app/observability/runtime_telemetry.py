@@ -451,6 +451,8 @@ class RuntimeTelemetry:
         run_id: UUID,
         tool_id: str,
         outcome: str,
+        *,
+        failure_code: str | None = None,
     ) -> None:
         try:
             labels = {"tool.id": tool_id, "tool.outcome": outcome}
@@ -464,6 +466,7 @@ class RuntimeTelemetry:
             run_id=run_id,
             tool_id=tool_id,
             tool_outcome=outcome,
+            failure_code=failure_code,
         )
 
     def record_investigation_termination(
@@ -687,8 +690,12 @@ class RuntimeTelemetry:
                 workflow_name=run.workflow_name,
                 workflow_version=run.workflow_version,
                 run_status=run.status,
+
+
                 policy_decision=(
-                    run.result.decision if run.result is not None else None
+                    result.decision
+                    if (result := getattr(run, "result", None)) is not None
+                    else None
                 ),
                 failure_category=(
                     failure_category_for_runtime_code(run.error.code.value)

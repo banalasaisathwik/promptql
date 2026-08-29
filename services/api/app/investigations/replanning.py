@@ -248,6 +248,10 @@ class AdaptiveInvestigationRuntime:
                                 sort_keys=True,
                             )
                         )
+                        self._record_planner_failure(
+                            planner_input,
+                            error,
+                        )
                         return self._state(
                             rounds,
                             evidence,
@@ -469,6 +473,46 @@ class AdaptiveInvestigationRuntime:
             return
         for failure_code in failure_codes:
             self._telemetry.record_plan_validation_rejected(self._run_id, failure_code)
+
+    def _record_planner_failure(
+        self,
+        planner_input: PlannerInput,
+        error: InvestigationPlannerError,
+    ) -> None:
+        if self._telemetry is None or self._run_id is None:
+            return
+        client = getattr(self._planner, "_client", None)
+        details = error.provider_details
+        self._telemetry.record_investigation_diagnostic_failure(
+            self._run_id,
+            "investigation.planner.failed",
+            llm_provider=getattr(getattr(client, "provider", None), "value", None),
+            requested_model=getattr(client, "model", None),
+            prompt_version=PLANNER_PROMPT_VERSION,
+            round_number=planner_input.planning_round,
+            facts_count=len(planner_input.facts),
+            missing_information_count=len(planner_input.missing_information),
+            exception_class=type(error).__name__,
+            failure_code=error.code.value,
+            failure_category=error.provider_failure_category,
+            http_status=details.http_status if details is not None else None,
+            provider_type=details.provider_type if details is not None else None,
+            provider_code=details.provider_code if details is not None else None,
+            provider_message=(
+                details.provider_message if details is not None else str(error)
+            ),
+            failed_generation_present=(
+                details.failed_generation_present if details is not None else False
+            ),
+            failed_generation_length=(
+                details.failed_generation_length if details is not None else None
+            ),
+            local_schema_error=(
+                error.code.value
+                if error.code.value in {"invalid_response", "plan_schema_invalid"}
+                else None
+            ),
+        )
 
     def _log_token_usage(
         self,

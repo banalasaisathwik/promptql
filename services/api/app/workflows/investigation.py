@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import traceback
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -73,6 +75,8 @@ from app.tools import InvestigationToolId, build_tool_adapters, build_tool_regis
 INVESTIGATION_WORKFLOW_NAME = "investigation"
 INVESTIGATION_WORKFLOW_VERSION = "2.19.2"
 DEFAULT_TOOL_CALL_BUDGET = 10
+
+_RUNTIME_FAILURE_LOGGER = logging.getLogger("promptql.investigation")
 
 
 ADAPTIVE_INVESTIGATION_ALLOWED_TOOL_IDS: tuple[InvestigationToolId, ...] = (
@@ -277,6 +281,9 @@ class InvestigationWorkflowService:
                     InvestigationStageResult.FAILED
                 )
                 investigation_observation.mark_error(FailureCategory.SYSTEM_FAILURE)
+
+
+            self._telemetry.record_terminal_workflow(terminal)
             return terminal
 
     async def _continue_persisted_run(
@@ -446,7 +453,8 @@ class InvestigationWorkflowService:
         except asyncio.CancelledError:
             self._cancel(running)
             raise
-        except Exception:
+        except Exception as error:
+            self._record_unexpected_runtime_failure(running.run_id, error)
             return self._fail(
                 running,
                 started_at,
@@ -463,7 +471,8 @@ class InvestigationWorkflowService:
         except asyncio.CancelledError:
             self._cancel(running)
             raise
-        except Exception:
+        except Exception as error:
+            self._record_unexpected_runtime_failure(running.run_id, error)
             return self._fail(
                 running,
                 started_at,
@@ -770,6 +779,25 @@ class InvestigationWorkflowService:
         )
         self._repository.save(cancelled)
         return cancelled
+
+    def _record_unexpected_runtime_failure(
+        self,
+        run_id: UUID,
+        error: Exception,
+    ) -> None:
+        _RUNTIME_FAILURE_LOGGER.error(
+            "Unexpected investigation runtime failure run_id=%s exception_class=%s\n%s",
+            run_id,
+            type(error).__name__,
+            "".join(traceback.format_tb(error.__traceback__)),
+        )
+        self._telemetry.record_investigation_diagnostic_failure(
+            run_id,
+            "investigation.runtime.failed",
+            exception_class=type(error).__name__,
+            failure_code="unexpected_runtime_exception",
+            failure_category=FailureCategory.SYSTEM_FAILURE,
+        )
 
     @staticmethod
     def _empty_state() -> InvestigationRuntimeSnapshot:

@@ -38,6 +38,7 @@ from app.connectors.sentry_http_models import (
     SentryIssueResponse,
     SentryReleaseResponse,
     SentryResponseModel,
+    SentryShortIdResponse,
 )
 from app.investigations import (
     DeploymentEvidenceContent,
@@ -167,11 +168,7 @@ class HttpSentrySource:
         self,
         request: IncidentEvidenceRequest,
     ) -> Evidence:
-        issue_id = quote(request.incident_reference, safe="")
-        raw_issue = await self._get_model(
-            f"/organizations/{self._organization_path}/issues/{issue_id}/",
-            SentryIssueResponse,
-        )
+        raw_issue, _issue_id = await self._resolve_issue(request.incident_reference)
         started_at = self._parse_datetime(raw_issue.firstSeen)
         try:
             return Evidence(
@@ -270,7 +267,7 @@ class HttpSentrySource:
         self,
         request: FailureLocationEvidenceRequest,
     ) -> Evidence:
-        issue_id = quote(request.incident_reference, safe="")
+        _raw_issue, issue_id = await self._resolve_issue(request.incident_reference)
         raw_event = await self._get_model(
             f"/organizations/{self._organization_path}/issues/{issue_id}"
             f"/events/latest/",
@@ -308,6 +305,25 @@ class HttpSentrySource:
             )
         except ValidationError:
             raise SentryInvalidResponseError() from None
+
+    async def _resolve_issue(
+        self,
+        incident_reference: str,
+    ) -> tuple[SentryIssueResponse, str]:
+        encoded_reference = quote(incident_reference, safe="")
+        try:
+            issue = await self._get_model(
+                f"/organizations/{self._organization_path}/issues/{encoded_reference}/",
+                SentryIssueResponse,
+            )
+            return issue, issue.id
+        except SentryNotFoundError:
+            resolved = await self._get_model(
+                f"/organizations/{self._organization_path}/shortids/"
+                f"{encoded_reference}/",
+                SentryShortIdResponse,
+            )
+            return resolved.group, resolved.groupId
 
     async def _load_telemetry_window_evidence(
         self,

@@ -24,6 +24,12 @@ class SentryIssueResponse(SentryResponseModel):
     project: SentryProjectResponse
 
 
+class SentryShortIdResponse(SentryResponseModel):
+    group: SentryIssueResponse
+    groupId: RequiredString
+    shortId: RequiredString
+
+
 class SentryStackFrameResponse(SentryResponseModel):
     filename: RequiredString | None = None
     function: RequiredString | None = None

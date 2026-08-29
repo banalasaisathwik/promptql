@@ -271,6 +271,11 @@ class AgentExecutor:
                     self._run_id,
                     str(tool_id),
                     result.outcome.value,
+                    failure_code=(
+                        result.failure.code.value
+                        if result.failure is not None
+                        else None
+                    ),
                 )
             failure = result.failure
             can_retry = (

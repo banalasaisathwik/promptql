@@ -115,6 +115,18 @@ def stats_payload() -> dict:
     }
 
 
+def short_id_payload(**updates) -> dict:
+    payload = {
+        "group": issue_payload(id="6507332222"),
+        "groupId": "6507332222",
+        "organizationSlug": ORGANIZATION_SLUG,
+        "projectSlug": "checkout-api",
+        "shortId": "PYTHON-FASTAPI-1",
+    }
+    payload.update(updates)
+    return payload
+
+
 class SentryResponses:
     def __init__(self) -> None:
         self.issue = issue_payload()
@@ -202,6 +214,46 @@ class HttpSentrySourceSuccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence.content.function_name, "create_order")
         self.assertEqual(evidence.content.line_number, 87)
         self.assertEqual(evidence.content.error_category, "ValueError")
+
+    async def test_short_id_resolves_before_issue_and_event_requests(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            path = request.url.path
+            if path.endswith("/issues/PYTHON-FASTAPI-1/"):
+                return httpx.Response(404)
+            if path.endswith("/shortids/PYTHON-FASTAPI-1/"):
+                return httpx.Response(200, json=short_id_payload())
+            if path.endswith("/issues/6507332222/events/latest/"):
+                return httpx.Response(200, json=event_payload())
+            raise AssertionError(f"unexpected path {path}")
+
+        source, client = create_source(handler)
+        try:
+            incident = await source.get_incident_evidence(
+                IncidentEvidenceRequest(incident_reference="PYTHON-FASTAPI-1")
+            )
+            location = await source.get_failure_location_evidence(
+                FailureLocationEvidenceRequest(
+                    incident_reference="PYTHON-FASTAPI-1"
+                )
+            )
+        finally:
+            await client.aclose()
+
+        self.assertEqual(incident.content.service, "checkout-api")
+        self.assertEqual(location.content.file_path, "services/checkout.py")
+        self.assertEqual(
+            [request.url.path for request in requests],
+            [
+                "/api/0/organizations/acme/issues/PYTHON-FASTAPI-1/",
+                "/api/0/organizations/acme/shortids/PYTHON-FASTAPI-1/",
+                "/api/0/organizations/acme/issues/PYTHON-FASTAPI-1/",
+                "/api/0/organizations/acme/shortids/PYTHON-FASTAPI-1/",
+                "/api/0/organizations/acme/issues/6507332222/events/latest/",
+            ],
+        )
 
     async def test_frame_line_number_uses_sentrys_actual_camelcase_field(self) -> None:
         responses = SentryResponses()
