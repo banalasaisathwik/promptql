@@ -3834,3 +3834,74 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   above (round/action-history merging, and choosing the field-based
   fact-recurrence mechanism the plan already offered as an option) are
   both within what Steps 1–5 asked for, not scope changes.
+
+### 2026-09-08 - Derive code-change facts from a commit with no pull request
+
+- **V2 milestone:** V2.4 code-diagnosis evidence — closing a stall class
+  discovered live rather than in a test.
+- **Engineering concept and syntax:** `DeterministicBaseline.investigate`
+  (`investigations/baseline.py`) called `GET_COMMIT` for every
+  deployment-sourced commit unconditionally, but only called `GET_DIFF`
+  (changed-file/diff-hunk evidence) when `request.pull_request_number` was
+  present. A deployment's commit and a request's referenced PR are
+  independent facts, so a commit pushed straight to `main` had commit
+  metadata but no changed-file evidence at all, and
+  `derive_code_failure_facts` (`fact_derivation/code_change.py`) had
+  nothing to derive from — the investigation stalled with `no_progress`.
+  [ADR-036](decisions/ADR-036-commit-scoped-code-change-evidence.md)
+  chose Option B: new, parallel `CommitChangedFileEvidenceContent`/
+  `CommitDiffHunkEvidenceContent` types correlated by `commit_sha` (never
+  `pull_request_number`), not a shared/optional key on the existing
+  PR-scoped types — the domain's typed-contract discipline says a
+  consumer should never have to branch on "which correlation key is
+  populated," and extending the existing types would have forced exactly
+  that on every current and future consumer.
+- **Implementation locations, in commit order:** (1)
+  `connectors/github_code_http.py`'s new
+  `get_commit_changed_file_evidence`, reusing `parse_github_patch` via
+  sibling `_normalize_commit_changed_file`/`_normalize_commit_hunk`
+  methods, plus `EvidenceKind.COMMIT_CHANGED_FILE`/`COMMIT_DIFF_HUNK` and
+  the two new content types in `investigations/models.py`; (2) a second,
+  fully parallel branch in `derive_code_failure_facts` correlating by
+  `commit_sha` instead of `pull_request_number`, producing the same
+  `ChangedFileFact`/`ChangedFileMatchesFailureFileFact`/
+  `ChangedHunkOverlapsFailureLineFact` types with `pull_request_number=
+  None`; (3) a new `GET_COMMIT_DIFF` tool (`GetCommitDiffTool`,
+  `tools/adapters.py`) registered alongside — not replacing — `GET_DIFF`;
+  (4) the actual fix: `DeterministicBaseline` now calls `GET_COMMIT_DIFF`
+  unconditionally in the same loop that already calls `GET_COMMIT`,
+  independent of `request.pull_request_number`.
+- **The live-verification catch (or rather, the absence of one):** the
+  task required verifying `GET /repos/{owner}/{repo}/commits/{sha}`'s
+  `files[]` shape against the real GitHub API before writing the parser,
+  same discipline as the Sentry `lineNo` casing bug above. The
+  `.env` `GITHUB_TOKEN` turned out to be revoked (`401 Bad credentials`),
+  but the target repository is public, so an unauthenticated call to the
+  repo's own latest commit worked and confirmed the ADR's claimed shape
+  exactly — `filename`/`status`/`additions`/`deletions`/`changes`/`patch`,
+  the same fields `GitHubChangedFileResponse` already parses for PR files.
+  Unlike the Sentry case, this one had no surprise: the ADR's own live
+  check (done before it was written) was correct. Also surfaced but out
+  of scope: this endpoint isn't paginated like `/pulls/{n}/files` — GitHub
+  silently caps it around 300 files with no truncation signal in the
+  response body.
+- **A pre-existing test caught a wiring gap for free:**
+  `test_evidence_models.py`'s `test_each_initial_source_kind_content_pair_is_valid`
+  asserts every `EvidenceKind` member has a constructible, valid
+  content/source pair — adding the two new kinds without extending that
+  test's case list failed the assertion immediately, which is exactly the
+  "every consumer must handle every kind" property Option B was chosen to
+  preserve.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  from `services/api` after each of the four commits — 639, 639, 642, then
+  643 tests, 0 failures, 14 skipped (unrelated opt-in PostgreSQL/live-model
+  tests) each time. New tests: commit-diff connector normalization/error
+  cases in `test_github_code_http.py`; the two new content types in
+  `test_evidence_models.py`'s exhaustiveness case; a commit-sha-correlated
+  fact-derivation test in `test_deterministic_baseline.py` proving a
+  hunk from a *different* commit_sha does not overlap; the new tool's
+  definition/adapter/failure-path coverage in `test_tool_registry.py`;
+  and, most directly, `test_direct_to_main_commit_without_pull_request_still_derives_code_facts`,
+  which reproduces the exact motivating scenario (a deployment with no
+  `pull_request_number`) and asserts `changed_file` facts with
+  `pull_request_number=None` are now produced where none were before.

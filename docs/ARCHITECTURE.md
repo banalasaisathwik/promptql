@@ -285,10 +285,11 @@ contract a planner may reference from another step), and a `read_only` flag.
 never invokes a handler itself; `adapters.py` holds the actual call-through to
 each connector/source.
 
-`TOOL_DEFINITIONS` currently registers **eight** tools:
+`TOOL_DEFINITIONS` currently registers **nine** tools:
 
 ```text
 get_commit            -> GitHubCodeEvidenceSource.get_commit_evidence
+get_commit_diff         -> GitHubCodeEvidenceSource.get_commit_changed_file_evidence
 get_pull_request       -> GitHubCodeEvidenceSource.get_pull_request_evidence
 get_diff                -> GitHubCodeEvidenceSource.get_changed_file_evidence
 get_incident              -> IncidentSource.get_incident_evidence
@@ -297,6 +298,21 @@ get_failure_location          -> IncidentSource.get_failure_location_evidence
 query_telemetry                  -> IncidentSource.get_telemetry_window_evidence
 get_jira_issue                      -> JiraConnector.get_issue + Jira Evidence normalization
 ```
+
+`get_commit_diff` (CURRENT, [ADR-036](decisions/ADR-036-commit-scoped-code-change-evidence.md))
+retrieves changed-file/diff-hunk evidence for one commit directly from
+`GET /repos/{owner}/{repo}/commits/{sha}`'s `files[]` array, independent of
+any pull request. It is additive and parallel to `get_diff`: separate
+`EvidenceKind.COMMIT_CHANGED_FILE`/`COMMIT_DIFF_HUNK` content types
+correlated by `commit_sha` (never `pull_request_number`), a second
+fact-derivation branch in `fact_derivation/code_change.py` that never mixes
+commit-sourced and PR-sourced evidence when matching a changed file to its
+hunks, and an unconditional call from `DeterministicBaseline` for every
+deployment-sourced commit. This exists because a deployment's commit and a
+request's referenced pull request are independent facts — a commit pushed
+directly to `main` has no pull request at all, and `get_commit` alone
+returns metadata with no changed-file evidence, which previously left
+`derive_code_failure_facts` with nothing to derive from.
 
 A call flows: `ToolDefinition.validate_arguments` (invalid arguments raise
 before any source call) → the adapter → the underlying
