@@ -25,10 +25,23 @@ class GitHubCommitParentResponse(GitHubCodeResponseModel):
     sha: CommitSha
 
 
+class GitHubChangedFileResponse(GitHubCodeResponseModel):
+    filename: RequiredString
+    previous_filename: RequiredString | None = None
+    status: RequiredString
+    additions: Annotated[int, Field(ge=0)]
+    deletions: Annotated[int, Field(ge=0)]
+    changes: Annotated[int, Field(ge=0)]
+    patch: str | None = None
+
+
 class GitHubCommitEvidenceResponse(GitHubCodeResponseModel):
     sha: CommitSha
     commit: GitHubCommitDetailsResponse
     parents: list[GitHubCommitParentResponse]
+
+
+    files: list[GitHubChangedFileResponse] = []
 
 
 class GitHubCodeBranchResponse(GitHubCodeResponseModel):
@@ -45,13 +58,3 @@ class GitHubCodePullRequestResponse(GitHubCodeResponseModel):
     merge_commit_sha: CommitSha | None = None
     head: GitHubCodeBranchResponse
     base: GitHubCodeBranchResponse
-
-
-class GitHubChangedFileResponse(GitHubCodeResponseModel):
-    filename: RequiredString
-    previous_filename: RequiredString | None = None
-    status: RequiredString
-    additions: Annotated[int, Field(ge=0)]
-    deletions: Annotated[int, Field(ge=0)]
-    changes: Annotated[int, Field(ge=0)]
-    patch: str | None = None

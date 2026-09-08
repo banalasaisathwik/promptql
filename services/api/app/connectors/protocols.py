@@ -47,6 +47,11 @@ class GitHubCodeEvidenceSource(Protocol):
         request: GitHubPullRequestEvidenceRequest,
     ) -> tuple[Evidence, ...]: ...
 
+    async def get_commit_changed_file_evidence(
+        self,
+        request: GitHubCommitEvidenceRequest,
+    ) -> tuple[Evidence, ...]: ...
+
 
 class IncidentSource(Protocol):
     source: ConnectorSource

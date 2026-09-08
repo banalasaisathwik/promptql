@@ -30,6 +30,8 @@ from app.connectors.models import (
 )
 from app.investigations import (
     ChangedFileEvidenceContent,
+    CommitChangedFileEvidenceContent,
+    CommitDiffHunkEvidenceContent,
     CommitEvidenceContent,
     DiffHunkEvidenceContent,
     Evidence,
@@ -111,6 +113,27 @@ class HttpGitHubCodeEvidenceSource(BaseHttpGitHubConnector):
         ) as span:
             try:
                 evidence = await self._load_changed_file_evidence(
+                    request,
+                    observation,
+                )
+            except GitHubConnectorError as error:
+                self._record_failure(span, observation, error)
+                raise
+            self._record_success(span, observation)
+            return evidence
+
+    async def get_commit_changed_file_evidence(
+        self,
+        request: GitHubCommitEvidenceRequest,
+    ) -> tuple[Evidence, ...]:
+        observation = GitHubRequestObservation()
+        with self._telemetry.observe_connector(
+            "github",
+            self.source.value,
+            "get_commit_changed_file_evidence",
+        ) as span:
+            try:
+                evidence = await self._load_commit_changed_file_evidence(
                     request,
                     observation,
                 )
@@ -269,6 +292,49 @@ class HttpGitHubCodeEvidenceSource(BaseHttpGitHubConnector):
                 raise GitHubInvalidResponseError() from None
         return tuple(normalized)
 
+    async def _load_commit_changed_file_evidence(
+        self,
+        request: GitHubCommitEvidenceRequest,
+        observation: GitHubRequestObservation,
+    ) -> tuple[Evidence, ...]:
+        repository_path = self._repository_path(
+            request.repository_owner,
+            request.repository_name,
+        )
+        raw_commit = await self._get_model(
+            f"{repository_path}/commits/{quote(request.commit_sha, safe='')}",
+            GitHubCommitEvidenceResponse,
+            observation,
+        )
+        if raw_commit.sha.lower() != request.commit_sha.lower():
+            raise GitHubInvalidResponseError()
+
+        retrieved_at = self._clock()
+        normalized: list[Evidence] = []
+        for raw_file in raw_commit.files:
+            try:
+                file_evidence = self._normalize_commit_changed_file(
+                    request,
+                    raw_file,
+                    retrieved_at,
+                )
+                normalized.append(file_evidence)
+                if raw_file.patch is not None:
+                    hunks = parse_github_patch(raw_file.patch)
+                    normalized.extend(
+                        self._normalize_commit_hunk(
+                            request,
+                            raw_file.filename,
+                            hunk,
+                            hunk_index,
+                            retrieved_at,
+                        )
+                        for hunk_index, hunk in enumerate(hunks, start=1)
+                    )
+            except ValidationError:
+                raise GitHubInvalidResponseError() from None
+        return tuple(normalized)
+
     def _normalize_changed_file(
         self,
         request: GitHubPullRequestEvidenceRequest,
@@ -337,6 +403,83 @@ class HttpGitHubCodeEvidenceSource(BaseHttpGitHubConnector):
                 repository_owner=request.repository_owner,
                 repository_name=request.repository_name,
                 pull_request_number=request.pr_number,
+                file_path=file_path,
+                old_start=hunk.old_start,
+                old_count=hunk.old_count,
+                new_start=hunk.new_start,
+                new_count=hunk.new_count,
+                lines=hunk.lines,
+            ),
+        )
+
+    def _normalize_commit_changed_file(
+        self,
+        request: GitHubCommitEvidenceRequest,
+        raw_file: GitHubChangedFileResponse,
+        retrieved_at: datetime,
+    ) -> Evidence:
+        repository_digest = self._digest(
+            f"{request.repository_owner}/{request.repository_name}"
+        )
+        path_digest = self._digest(raw_file.filename)
+        return Evidence(
+            evidence_id=(
+                f"github:{repository_digest}:commit:{request.commit_sha.lower()}"
+                f":file:{path_digest}"
+            ),
+            source=EvidenceSource.GITHUB,
+            kind=EvidenceKind.COMMIT_CHANGED_FILE,
+            provenance=EvidenceProvenance(
+                source_reference=(
+                    f"github:{request.repository_owner}/{request.repository_name}"
+                    f":commit:{request.commit_sha.lower()}:file-sha256:{path_digest}"
+                ),
+                observed_at=None,
+                retrieved_at=retrieved_at,
+            ),
+            content=CommitChangedFileEvidenceContent(
+                repository_owner=request.repository_owner,
+                repository_name=request.repository_name,
+                commit_sha=request.commit_sha.lower(),
+                path=raw_file.filename,
+                change_type=self._file_change_type(raw_file.status),
+                previous_path=raw_file.previous_filename,
+                additions=raw_file.additions,
+                deletions=raw_file.deletions,
+                changes=raw_file.changes,
+                patch_available=raw_file.patch is not None,
+            ),
+        )
+
+    def _normalize_commit_hunk(
+        self,
+        request: GitHubCommitEvidenceRequest,
+        file_path: str,
+        hunk: ParsedDiffHunk,
+        hunk_index: int,
+        retrieved_at: datetime,
+    ) -> Evidence:
+        repository_digest = self._digest(
+            f"{request.repository_owner}/{request.repository_name}"
+        )
+        path_digest = self._digest(file_path)
+        identity_prefix = (
+            f"github:{repository_digest}:commit:{request.commit_sha.lower()}"
+            f":hunk:{path_digest}:{hunk_index}"
+        )
+        return Evidence(
+            evidence_id=identity_prefix,
+            source=EvidenceSource.GITHUB,
+            kind=EvidenceKind.COMMIT_DIFF_HUNK,
+            provenance=EvidenceProvenance(
+                source_reference=identity_prefix,
+                observed_at=None,
+                retrieved_at=retrieved_at,
+            ),
+            content=CommitDiffHunkEvidenceContent(
+                repository_owner=request.repository_owner,
+                repository_name=request.repository_name,
+                commit_sha=request.commit_sha.lower(),
                 file_path=file_path,
                 old_start=hunk.old_start,
                 old_count=hunk.old_count,

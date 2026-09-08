@@ -116,6 +116,8 @@ class EvidenceKind(StrEnum):
     COMMIT = "commit"
     PULL_REQUEST = "pull_request"
     DIFF_HUNK = "diff_hunk"
+    COMMIT_CHANGED_FILE = "commit_changed_file"
+    COMMIT_DIFF_HUNK = "commit_diff_hunk"
     JIRA_ISSUE = "jira_issue"
     STACK_FRAME = "stack_frame"
     DEPLOYMENT = "deployment"
@@ -222,6 +224,58 @@ class DiffHunkEvidenceContent(ContractModel):
         return self
 
 
+class CommitChangedFileEvidenceContent(ContractModel):
+    content_type: Literal["commit_changed_file"] = "commit_changed_file"
+    repository_owner: NonEmptyString
+    repository_name: NonEmptyString
+    commit_sha: CommitSha
+    path: EvidenceFilePath
+    change_type: FileChangeType
+    previous_path: NonEmptyString | None = None
+    additions: Annotated[int, Field(strict=True, ge=0)]
+    deletions: Annotated[int, Field(strict=True, ge=0)]
+    changes: Annotated[int, Field(strict=True, ge=0)]
+    patch_available: bool
+
+    @model_validator(mode="after")
+    def validate_change_metadata(self) -> Self:
+        if self.changes != self.additions + self.deletions:
+            raise ValueError("file changes must equal additions plus deletions")
+        if self.change_type is FileChangeType.RENAMED:
+            if self.previous_path is None or self.previous_path == self.path:
+                raise ValueError("a renamed file needs a distinct previous path")
+        elif self.previous_path is not None:
+            raise ValueError("only renamed files may carry a previous path")
+        return self
+
+
+class CommitDiffHunkEvidenceContent(ContractModel):
+    content_type: Literal["commit_diff_hunk"] = "commit_diff_hunk"
+    repository_owner: NonEmptyString
+    repository_name: NonEmptyString
+    commit_sha: CommitSha
+    file_path: EvidenceFilePath
+    old_start: Annotated[int, Field(strict=True, ge=0)]
+    old_count: Annotated[int, Field(strict=True, ge=0)]
+    new_start: Annotated[int, Field(strict=True, ge=0)]
+    new_count: Annotated[int, Field(strict=True, ge=0)]
+    lines: Annotated[tuple[DiffLine, ...], Field(min_length=1, max_length=500)]
+
+    @model_validator(mode="after")
+    def validate_line_ranges(self) -> Self:
+        old_line_count = sum(
+            line.kind in {DiffLineKind.CONTEXT, DiffLineKind.DELETION}
+            for line in self.lines
+        )
+        new_line_count = sum(
+            line.kind in {DiffLineKind.CONTEXT, DiffLineKind.ADDITION}
+            for line in self.lines
+        )
+        if old_line_count != self.old_count or new_line_count != self.new_count:
+            raise ValueError("diff lines must agree with the declared old/new ranges")
+        return self
+
+
 class JiraIssueEvidenceContent(ContractModel):
     content_type: Literal["jira_issue"] = "jira_issue"
     issue_key: JiraIssueKey
@@ -294,6 +348,8 @@ EvidenceContent = Annotated[
     | CommitEvidenceContent
     | PullRequestEvidenceContent
     | DiffHunkEvidenceContent
+    | CommitChangedFileEvidenceContent
+    | CommitDiffHunkEvidenceContent
     | JiraIssueEvidenceContent
     | IncidentEvidenceContent
     | StackFrameEvidenceContent
@@ -308,6 +364,8 @@ _EXPECTED_SOURCE_BY_KIND = {
     EvidenceKind.COMMIT: EvidenceSource.GITHUB,
     EvidenceKind.PULL_REQUEST: EvidenceSource.GITHUB,
     EvidenceKind.DIFF_HUNK: EvidenceSource.GITHUB,
+    EvidenceKind.COMMIT_CHANGED_FILE: EvidenceSource.GITHUB,
+    EvidenceKind.COMMIT_DIFF_HUNK: EvidenceSource.GITHUB,
     EvidenceKind.JIRA_ISSUE: EvidenceSource.JIRA,
     EvidenceKind.INCIDENT: EvidenceSource.INCIDENT,
     EvidenceKind.STACK_FRAME: EvidenceSource.INCIDENT,

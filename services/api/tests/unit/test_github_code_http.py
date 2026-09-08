@@ -20,6 +20,8 @@ from app.connectors.models import (
 )
 from app.investigations import (
     ChangedFileEvidenceContent,
+    CommitChangedFileEvidenceContent,
+    CommitDiffHunkEvidenceContent,
     CommitEvidenceContent,
     DiffHunkEvidenceContent,
     EvidenceKind,
@@ -235,6 +237,60 @@ class HttpGitHubCodeEvidenceTests(unittest.IsolatedAsyncioTestCase):
                         await source.get_commit_evidence(COMMIT_REQUEST)
                 finally:
                     await source.aclose()
+
+    async def test_commit_diff_normalizes_file_then_hunk_correlated_by_commit_sha(self) -> None:
+        responses = GitHubCodeResponses()
+        responses.commit = commit_response(files=[file_response()])
+        source = create_source(responses)
+        try:
+            evidence = await source.get_commit_changed_file_evidence(COMMIT_REQUEST)
+        finally:
+            await source.aclose()
+
+        self.assertEqual(
+            tuple(item.kind for item in evidence),
+            (EvidenceKind.COMMIT_CHANGED_FILE, EvidenceKind.COMMIT_DIFF_HUNK),
+        )
+        file_content = evidence[0].content
+        hunk_content = evidence[1].content
+        self.assertIsInstance(file_content, CommitChangedFileEvidenceContent)
+        self.assertIsInstance(hunk_content, CommitDiffHunkEvidenceContent)
+        self.assertEqual(file_content.commit_sha, SHA)
+        self.assertEqual(hunk_content.commit_sha, SHA)
+        self.assertEqual(hunk_content.file_path, file_content.path)
+        self.assertEqual((hunk_content.old_count, hunk_content.new_count), (2, 3))
+
+    async def test_commit_diff_missing_files_field_yields_no_evidence(self) -> None:
+        source = create_source(GitHubCodeResponses())
+        try:
+            evidence = await source.get_commit_changed_file_evidence(COMMIT_REQUEST)
+        finally:
+            await source.aclose()
+
+        self.assertEqual(evidence, ())
+
+    async def test_commit_diff_sha_mismatch_fails_safely(self) -> None:
+        responses = GitHubCodeResponses()
+        responses.commit = commit_response(sha="e" * 40, files=[file_response()])
+        source = create_source(responses)
+        try:
+            with self.assertRaises(GitHubInvalidResponseError):
+                await source.get_commit_changed_file_evidence(COMMIT_REQUEST)
+        finally:
+            await source.aclose()
+
+    async def test_commit_diff_output_excludes_shas_urls_and_raw_payload(self) -> None:
+        responses = GitHubCodeResponses()
+        responses.commit = commit_response(files=[file_response()])
+        source = create_source(responses)
+        try:
+            evidence = await source.get_commit_changed_file_evidence(COMMIT_REQUEST)
+        finally:
+            await source.aclose()
+
+        serialized = "".join(item.model_dump_json() for item in evidence)
+        for forbidden in ("raw_url", "test-secret"):
+            self.assertNotIn(forbidden, serialized)
 
     async def test_pull_request_normalizes_base_head_state_and_merge_commit(self) -> None:
         source = create_source(GitHubCodeResponses())
