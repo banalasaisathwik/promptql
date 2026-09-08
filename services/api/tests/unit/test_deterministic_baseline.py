@@ -18,8 +18,15 @@ from app.connectors.incident_fakes import (
     FakeIncidentSource,
 )
 from app.investigations import (
+    CommitChangedFileEvidenceContent,
+    CommitDiffHunkEvidenceContent,
     DeterministicBaseline,
     DiffHunkEvidenceContent,
+    Evidence,
+    EvidenceKind,
+    EvidenceProvenance,
+    EvidenceSource,
+    FileChangeType,
     InvestigationRequest,
     MissingInformationKind,
     ToolInvoker,
@@ -167,6 +174,86 @@ class FactDerivationTests(unittest.TestCase):
         accumulator.add((self.incident,))
         with self.assertRaises(DuplicateEvidenceIdError):
             accumulator.add((self.incident,))
+
+    def test_commit_sourced_code_facts_correlate_by_commit_sha_independent_of_pr_branch(self) -> None:
+        commit_sha = self.commit.content.commit_sha
+        commit_changed_file = Evidence(
+            evidence_id="github:test:commit:file",
+            source=EvidenceSource.GITHUB,
+            kind=EvidenceKind.COMMIT_CHANGED_FILE,
+            provenance=EvidenceProvenance(
+                source_reference="github:octo-org/analytics:commit:file",
+                retrieved_at=self.changed_file.provenance.retrieved_at,
+            ),
+            content=CommitChangedFileEvidenceContent(
+                repository_owner="octo-org",
+                repository_name="analytics",
+                commit_sha=commit_sha,
+                path="services/checkout.py",
+                change_type=FileChangeType.MODIFIED,
+                additions=1,
+                deletions=1,
+                changes=2,
+                patch_available=True,
+            ),
+        )
+        commit_hunk = Evidence(
+            evidence_id="github:test:commit:hunk",
+            source=EvidenceSource.GITHUB,
+            kind=EvidenceKind.COMMIT_DIFF_HUNK,
+            provenance=EvidenceProvenance(
+                source_reference="github:octo-org/analytics:commit:hunk",
+                retrieved_at=self.hunk.provenance.retrieved_at,
+            ),
+            content=CommitDiffHunkEvidenceContent(
+                repository_owner="octo-org",
+                repository_name="analytics",
+                commit_sha=commit_sha,
+                file_path="services/checkout.py",
+                old_start=87,
+                old_count=1,
+                new_start=87,
+                new_count=1,
+                lines=self.hunk.content.lines,
+            ),
+        )
+        other_commit_hunk = commit_hunk.model_copy(
+            update={
+                "evidence_id": "github:test:commit:other-hunk",
+                "content": commit_hunk.content.model_copy(update={"commit_sha": "f" * 40}),
+            }
+        )
+
+        facts = derive_facts((commit_changed_file, commit_hunk, self.frame))
+        self.assertEqual(
+            [fact.fact_type for fact in facts],
+            ["changed_file", "changed_file_matches_failure_file", "changed_hunk_overlaps_failure_line"],
+        )
+        self.assertIsNone(facts[0].pull_request_number)
+
+
+        no_match_facts = derive_facts((commit_changed_file, other_commit_hunk, self.frame))
+        self.assertEqual(
+            [fact.fact_type for fact in no_match_facts],
+            ["changed_file", "changed_file_matches_failure_file"],
+        )
+
+
+        overlapping_pr_hunk = self.hunk.model_copy(
+            update={"content": self.hunk.content.model_copy(update={"old_start": 87, "new_start": 87})}
+        )
+        combined_facts = derive_facts(
+            (commit_changed_file, commit_hunk, self.changed_file, overlapping_pr_hunk, self.frame)
+        )
+        self.assertEqual(len({fact.fact_id for fact in combined_facts}), len(combined_facts))
+        self.assertEqual(
+            sorted(fact.fact_type for fact in combined_facts),
+            sorted(
+                ["changed_file", "changed_file"]
+                + ["changed_file_matches_failure_file"] * 2
+                + ["changed_hunk_overlaps_failure_line"] * 2
+            ),
+        )
 
 
 if __name__ == "__main__":
