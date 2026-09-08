@@ -87,6 +87,10 @@ class DeterministicBaselineTests(unittest.IsolatedAsyncioTestCase):
                 "commit_associated_with_pull_request", "changed_file",
                 "changed_file_matches_failure_file",
                 "changed_hunk_overlaps_failure_line",
+
+
+                "changed_file",
+                "changed_file_matches_failure_file",
             ],
         )
         self.assertEqual(result.hypotheses, ())
@@ -94,6 +98,21 @@ class DeterministicBaselineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, await baseline(FakeIncidentSource(), github).investigate(
             InvestigationRequest(repository_owner="octo-org", repository_name="analytics", question="Why are checkout requests failing?", incident_reference=INCIDENT_REQUEST.incident_reference, deployment_reference=DEPLOYMENT_REQUEST.deployment_reference, pull_request_number=42, telemetry_window=TELEMETRY_REQUEST)
         ))
+
+    async def test_direct_to_main_commit_without_pull_request_still_derives_code_facts(self) -> None:
+        result = await baseline(FakeIncidentSource()).investigate(
+            InvestigationRequest(
+                repository_owner="octo-org", repository_name="analytics",
+                question="Why are checkout requests failing?",
+                incident_reference=INCIDENT_REQUEST.incident_reference,
+                deployment_reference=DEPLOYMENT_REQUEST.deployment_reference,
+            )
+        )
+
+        self.assertIn("commit_changed_file", [item.kind.value for item in result.evidence])
+        changed_file_facts = [fact for fact in result.facts if fact.fact_type == "changed_file"]
+        self.assertTrue(changed_file_facts)
+        self.assertTrue(all(fact.pull_request_number is None for fact in changed_file_facts))
 
     async def test_missing_deployment_keeps_incident_evidence_and_does_not_crash(self) -> None:
         result = await baseline(FakeIncidentSource()).investigate(
@@ -120,7 +139,7 @@ class DeterministicBaselineTests(unittest.IsolatedAsyncioTestCase):
             pull_request_number=42, telemetry_window=TELEMETRY_REQUEST,
         )
         await self._recording_baseline(calls).investigate(request)
-        self.assertEqual(calls, ["get_incident", "get_deployments", "query_telemetry", "get_commit", "get_pull_request", "get_diff"])
+        self.assertEqual(calls, ["get_incident", "get_deployments", "query_telemetry", "get_commit", "get_commit_diff", "get_pull_request", "get_diff"])
 
         calls.clear()
         await self._recording_baseline(calls).investigate(request.model_copy(update={"deployment_reference": None, "pull_request_number": None}))
