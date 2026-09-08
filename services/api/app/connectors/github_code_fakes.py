@@ -9,6 +9,8 @@ from app.connectors.models import (
 )
 from app.investigations import (
     ChangedFileEvidenceContent,
+    CommitChangedFileEvidenceContent,
+    CommitDiffHunkEvidenceContent,
     CommitEvidenceContent,
     DiffHunkEvidenceContent,
     DiffLine,
@@ -154,6 +156,72 @@ CHANGED_FILE_EVIDENCE_FIXTURES: Mapping[
 }
 
 
+COMMIT_CHANGED_FILE_EVIDENCE_FIXTURES: Mapping[
+    GitHubCommitEvidenceRequest,
+    tuple[Evidence, ...],
+] = {
+    FIXTURE_COMMIT_REQUEST: (
+        Evidence(
+            evidence_id=(
+                f"github:{FIXTURE_REPOSITORY_DIGEST}:commit:{FIXTURE_SHA}"
+                f":file:{FIXTURE_FILE_DIGEST}"
+            ),
+            source=EvidenceSource.GITHUB,
+            kind=EvidenceKind.COMMIT_CHANGED_FILE,
+            provenance=EvidenceProvenance(
+                source_reference=(
+                    "github:octo-org/analytics:commit:"
+                    f"{FIXTURE_SHA}:file-sha256:{FIXTURE_FILE_DIGEST}"
+                ),
+                observed_at=None,
+                retrieved_at=FIXTURE_TIME,
+            ),
+            content=CommitChangedFileEvidenceContent(
+                repository_owner="octo-org",
+                repository_name="analytics",
+                commit_sha=FIXTURE_SHA,
+                path="services/checkout.py",
+                change_type=FileChangeType.MODIFIED,
+                additions=1,
+                deletions=1,
+                changes=2,
+                patch_available=True,
+            ),
+        ),
+        Evidence(
+            evidence_id=(
+                f"github:{FIXTURE_REPOSITORY_DIGEST}:commit:{FIXTURE_SHA}"
+                f":hunk:{FIXTURE_FILE_DIGEST}:1"
+            ),
+            source=EvidenceSource.GITHUB,
+            kind=EvidenceKind.COMMIT_DIFF_HUNK,
+            provenance=EvidenceProvenance(
+                source_reference=(
+                    f"github:{FIXTURE_REPOSITORY_DIGEST}:commit:{FIXTURE_SHA}"
+                    f":hunk:{FIXTURE_FILE_DIGEST}:1"
+                ),
+                observed_at=None,
+                retrieved_at=FIXTURE_TIME,
+            ),
+            content=CommitDiffHunkEvidenceContent(
+                repository_owner="octo-org",
+                repository_name="analytics",
+                commit_sha=FIXTURE_SHA,
+                file_path="services/checkout.py",
+                old_start=10,
+                old_count=1,
+                new_start=10,
+                new_count=1,
+                lines=(
+                    DiffLine(kind=DiffLineKind.DELETION, text="return total"),
+                    DiffLine(kind=DiffLineKind.ADDITION, text="return total or 0"),
+                ),
+            ),
+        ),
+    )
+}
+
+
 class FakeGitHubCodeEvidenceSource:
     source = ConnectorSource.FAKE
 
@@ -171,10 +239,15 @@ class FakeGitHubCodeEvidenceSource:
             GitHubPullRequestEvidenceRequest,
             tuple[Evidence, ...],
         ] = CHANGED_FILE_EVIDENCE_FIXTURES,
+        commit_changed_file_fixtures: Mapping[
+            GitHubCommitEvidenceRequest,
+            tuple[Evidence, ...],
+        ] = COMMIT_CHANGED_FILE_EVIDENCE_FIXTURES,
     ) -> None:
         self._commit_fixtures = commit_fixtures
         self._pull_request_fixtures = pull_request_fixtures
         self._changed_file_fixtures = changed_file_fixtures
+        self._commit_changed_file_fixtures = commit_changed_file_fixtures
 
     async def get_commit_evidence(
         self,
@@ -200,5 +273,14 @@ class FakeGitHubCodeEvidenceSource:
     ) -> tuple[Evidence, ...]:
         try:
             return self._changed_file_fixtures[request]
+        except KeyError:
+            raise FixtureNotFoundError("github_code") from None
+
+    async def get_commit_changed_file_evidence(
+        self,
+        request: GitHubCommitEvidenceRequest,
+    ) -> tuple[Evidence, ...]:
+        try:
+            return self._commit_changed_file_fixtures[request]
         except KeyError:
             raise FixtureNotFoundError("github_code") from None

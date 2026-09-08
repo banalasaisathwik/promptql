@@ -95,6 +95,7 @@ class GitHubCodeEvidenceContractTests(unittest.IsolatedAsyncioTestCase):
         second = await source.get_commit_evidence(FIXTURE_COMMIT_REQUEST)
         pull = await source.get_pull_request_evidence(FIXTURE_PULL_REQUEST)
         files = await source.get_changed_file_evidence(FIXTURE_PULL_REQUEST)
+        commit_files = await source.get_commit_changed_file_evidence(FIXTURE_COMMIT_REQUEST)
 
         self.assertEqual(first, second)
         self.assertIs(first.kind, EvidenceKind.COMMIT)
@@ -103,7 +104,11 @@ class GitHubCodeEvidenceContractTests(unittest.IsolatedAsyncioTestCase):
             tuple(evidence.kind for evidence in files),
             (EvidenceKind.CHANGED_FILE, EvidenceKind.DIFF_HUNK),
         )
-        for evidence in (first, pull, *files):
+        self.assertEqual(
+            tuple(evidence.kind for evidence in commit_files),
+            (EvidenceKind.COMMIT_CHANGED_FILE, EvidenceKind.COMMIT_DIFF_HUNK),
+        )
+        for evidence in (first, pull, *files, *commit_files):
             self.assertIsInstance(evidence, Evidence)
             self.assertEqual(evidence.provenance.retrieved_at, RETRIEVED_AT)
 

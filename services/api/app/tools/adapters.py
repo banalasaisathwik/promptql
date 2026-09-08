@@ -138,6 +138,21 @@ class GetDiffTool(_EvidenceTool):
             return self._failed(error)
 
 
+class GetCommitDiffTool(_EvidenceTool):
+    definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.GET_COMMIT_DIFF)
+
+    def __init__(self, source: GitHubCodeEvidenceSource, store: EvidenceStore) -> None:
+        super().__init__(store)
+        self._source = source
+
+    async def execute(self, arguments: Mapping[str, object]) -> ToolResult:
+        request = self._arguments(arguments)
+        try:
+            return self._observed(await self._source.get_commit_changed_file_evidence(request))
+        except (ConnectorUnavailableError, FixtureNotFoundError, GitHubConnectorError) as error:
+            return self._failed(error)
+
+
 class GetIncidentTool(_EvidenceTool):
     definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.GET_INCIDENT)
 
@@ -272,6 +287,7 @@ def build_tool_adapters(
         GetCommitTool(github_source, store),
         GetPullRequestTool(github_source, store),
         GetDiffTool(github_source, store),
+        GetCommitDiffTool(github_source, store),
         GetFailureLocationTool(incident_source, store),
         GetIncidentTool(incident_source, store),
         GetDeploymentsTool(incident_source, store),

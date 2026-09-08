@@ -26,6 +26,7 @@ from app.connectors.jira_fixtures import JIRA_FIXTURES
 from app.investigations.evidence_store import EvidenceStore
 from app.tools import (
     DuplicateToolError,
+    GetCommitDiffTool,
     GetCommitTool,
     GetDiffTool,
     GetFailureLocationTool,
@@ -56,6 +57,16 @@ class ToolDefinitionTests(unittest.TestCase):
         self.assertTrue(definition.read_only)
         self.assertIn("commit_sha", definition.input_schema["properties"])
         self.assertNotIn("openai", str(definition.input_schema).lower())
+
+    def test_commit_diff_definition_is_read_only_and_scoped_by_commit_sha(self) -> None:
+        definition = next(
+            item for item in TOOL_DEFINITIONS
+            if item.tool_id == InvestigationToolId.GET_COMMIT_DIFF
+        )
+
+        self.assertTrue(definition.read_only)
+        self.assertIn("commit_sha", definition.input_schema["properties"])
+        self.assertNotIn("pull_request_number", definition.input_schema["properties"])
 
     def test_input_contract_is_strict_and_constrained(self) -> None:
         definition = next(
@@ -133,11 +144,23 @@ class ToolAdapterTests(unittest.IsolatedAsyncioTestCase):
         diff_result = await GetDiffTool(source, store).execute(
             FIXTURE_PULL_REQUEST.model_dump()
         )
+        commit_diff_result = await GetCommitDiffTool(source, store).execute(
+            FIXTURE_COMMIT_REQUEST.model_dump()
+        )
 
         self.assertEqual(commit_result.outcome, ToolOutcome.OBSERVED)
         self.assertEqual(store.get(commit_result.evidence_ids[0]).kind.value, "commit")
         self.assertEqual(store.get(pull_request_result.evidence_ids[0]).kind.value, "pull_request")
         self.assertEqual(len(diff_result.evidence_ids), 2)
+        self.assertEqual(commit_diff_result.outcome, ToolOutcome.OBSERVED)
+        self.assertEqual(
+            tuple(store.get(evidence_id).kind.value for evidence_id in commit_diff_result.evidence_ids),
+            ("commit_changed_file", "commit_diff_hunk"),
+        )
+        self.assertEqual(
+            store.get(commit_diff_result.evidence_ids[0]).content.commit_sha,
+            FIXTURE_COMMIT_REQUEST.commit_sha,
+        )
 
     async def test_incident_adapters_use_existing_bounded_requests(self) -> None:
         source = FakeIncidentSource()
@@ -196,6 +219,16 @@ class ToolAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.failure.code, ToolFailureCode.NOT_FOUND)
         self.assertFalse(result.failure.retryable)
         self.assertNotIn("incident:test", result.failure.message)
+
+    async def test_commit_diff_source_failure_is_typed_and_sanitized(self) -> None:
+        source = FakeGitHubCodeEvidenceSource(commit_changed_file_fixtures={})
+
+        result = await GetCommitDiffTool(source, EvidenceStore()).execute(
+            FIXTURE_COMMIT_REQUEST.model_dump()
+        )
+
+        self.assertEqual(result.outcome, ToolOutcome.FAILED)
+        self.assertEqual(result.failure.code, ToolFailureCode.NOT_FOUND)
 
     async def test_transient_connector_failure_is_retryable(self) -> None:
         class RateLimitedGitHubSource:
