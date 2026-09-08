@@ -12,6 +12,7 @@ from app.connectors.errors import (
     SentryConnectorError,
     SentryDeployNotFoundError,
     SentryForbiddenError,
+    SentryIncompleteResultError,
     SentryInvalidDeploymentReferenceError,
     SentryInvalidResponseError,
     SentryNotFoundError,
@@ -27,6 +28,8 @@ from app.connectors.models import (
     DeploymentEvidenceRequest,
     FailureLocationEvidenceRequest,
     IncidentEvidenceRequest,
+    SentryOpenIssue,
+    SentryOpenIssuesRequest,
     TelemetrySignal,
     TelemetryWindowEvidenceRequest,
 )
@@ -56,6 +59,29 @@ from app.observability import FailureCategory, NoOpRuntimeTelemetry, RuntimeTele
 
 AwareDatetimeAdapter = TypeAdapter(AwareDatetime)
 Clock = Callable[[], datetime]
+
+
+MAX_ISSUE_PAGES = 10
+
+
+def _parse_link_header(value: str | None) -> dict[str, dict[str, str]]:
+    links: dict[str, dict[str, str]] = {}
+    if not value:
+        return links
+    for entry in value.split(","):
+        segments = [segment.strip() for segment in entry.split(";")]
+        if not segments or not segments[0].startswith("<"):
+            continue
+        attributes = {"url": segments[0].strip("<>")}
+        for segment in segments[1:]:
+            key, separator, raw_value = segment.partition("=")
+            if not separator:
+                continue
+            attributes[key.strip()] = raw_value.strip().strip('"')
+        rel = attributes.get("rel")
+        if rel:
+            links[rel] = attributes
+    return links
 
 
 _SIGNAL_QUERY_FRAGMENTS: dict[TelemetrySignal, str] = {
@@ -163,6 +189,65 @@ class HttpSentrySource:
                 raise
             self._record_success(span)
             return evidence
+
+    async def list_open_issues(
+        self,
+        request: SentryOpenIssuesRequest,
+    ) -> tuple[SentryOpenIssue, ...]:
+        with self._telemetry.observe_connector(
+            "sentry",
+            self.source.value,
+            "list_open_issues",
+        ) as span:
+            try:
+                issues = await self._load_open_issues(request)
+            except SentryConnectorError as error:
+                self._record_failure(span, error)
+                raise
+            self._record_success(span)
+            return issues
+
+    async def _load_open_issues(
+        self,
+        request: SentryOpenIssuesRequest,
+    ) -> tuple[SentryOpenIssue, ...]:
+        project_path = quote(request.project_slug, safe="")
+        query = "is:unresolved"
+        if request.release is not None:
+            query = f"{query} release:{request.release}"
+        path = f"/projects/{self._organization_path}/{project_path}/issues/"
+        params: dict[str, str] = {"query": query}
+
+        issues: list[SentryOpenIssue] = []
+        for _page in range(MAX_ISSUE_PAGES):
+            payload, response = await self._get_json_page(path, params)
+            if not isinstance(payload, list):
+                raise SentryInvalidResponseError()
+            try:
+                raw_issues = [
+                    SentryIssueResponse.model_validate(item) for item in payload
+                ]
+            except ValidationError:
+                raise SentryInvalidResponseError() from None
+            issues.extend(self._normalize_open_issue(raw_issue) for raw_issue in raw_issues)
+
+            next_link = _parse_link_header(response.headers.get("link")).get("next")
+            if next_link is None or next_link.get("results") != "true":
+                return tuple(issues)
+            params = {"query": query, "cursor": next_link["cursor"]}
+        raise SentryIncompleteResultError()
+
+    def _normalize_open_issue(self, raw_issue: SentryIssueResponse) -> SentryOpenIssue:
+        try:
+            return SentryOpenIssue(
+                issue_id=raw_issue.id,
+                short_id=raw_issue.shortId,
+                project_slug=raw_issue.project.slug,
+                first_seen=self._parse_datetime(raw_issue.firstSeen),
+                last_seen=self._parse_datetime(raw_issue.lastSeen),
+            )
+        except ValidationError:
+            raise SentryInvalidResponseError() from None
 
     async def _load_incident_evidence(
         self,
@@ -442,6 +527,14 @@ class HttpSentrySource:
         path: str,
         params: dict[str, str] | None = None,
     ) -> Any:
+        payload, _response = await self._get_json_page(path, params)
+        return payload
+
+    async def _get_json_page(
+        self,
+        path: str,
+        params: dict[str, str] | None = None,
+    ) -> tuple[Any, httpx.Response]:
         try:
             response = await self._client.get(path, params=params)
         except httpx.TimeoutException:
@@ -450,7 +543,7 @@ class HttpSentrySource:
             raise SentryUpstreamUnavailableError() from None
         self._raise_for_status(response)
         try:
-            return response.json()
+            return response.json(), response
         except ValueError:
             raise SentryInvalidResponseError() from None
 

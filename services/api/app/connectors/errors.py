@@ -252,6 +252,14 @@ class SentryInvalidResponseError(SentryConnectorError):
         )
 
 
+class SentryIncompleteResultError(SentryConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            ConnectorErrorCategory.INCOMPLETE_RESULT,
+            "The Sentry result was truncated at the page bound.",
+        )
+
+
 class SentryInvalidDeploymentReferenceError(SentryConnectorError):
     def __init__(self) -> None:
         super().__init__(

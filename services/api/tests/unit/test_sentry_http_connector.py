@@ -7,6 +7,7 @@ import httpx
 from app.connectors.errors import (
     SentryDeployNotFoundError,
     SentryForbiddenError,
+    SentryIncompleteResultError,
     SentryInvalidDeploymentReferenceError,
     SentryInvalidResponseError,
     SentryNotFoundError,
@@ -21,6 +22,7 @@ from app.connectors.models import (
     DeploymentEvidenceRequest,
     FailureLocationEvidenceRequest,
     IncidentEvidenceRequest,
+    SentryOpenIssuesRequest,
     TelemetryFilter,
     TelemetrySignal,
     TelemetryWindowEvidenceRequest,
@@ -125,6 +127,32 @@ def short_id_payload(**updates) -> dict:
     }
     payload.update(updates)
     return payload
+
+
+def open_issue_list_item(**updates) -> dict:
+    payload = {
+        "id": "7699024952",
+        "shortId": "PYTHON-FASTAPI-1",
+        "status": "unresolved",
+        "firstSeen": "2026-08-29T05:54:44.826751Z",
+        "lastSeen": "2026-08-29T05:59:31.353765Z",
+        "project": {"id": "4511988894531584", "slug": "python-fastapi"},
+    }
+    payload.update(updates)
+    return payload
+
+
+def link_header(*, next_cursor: str | None, next_results: bool) -> str:
+    previous = (
+        '<https://sentry.io/api/0/x/?cursor=1:0:1>; rel="previous"; '
+        'results="false"; cursor="1:0:1"'
+    )
+    cursor = next_cursor or "1:100:0"
+    next_ = (
+        f'<https://sentry.io/api/0/x/?cursor={cursor}>; rel="next"; '
+        f'results="{"true" if next_results else "false"}"; cursor="{cursor}"'
+    )
+    return f"{previous}, {next_}"
 
 
 class SentryResponses:
@@ -358,6 +386,132 @@ class HttpSentrySourceSuccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("event.type:error", params["query"])
         self.assertIn("environment:production", params["query"])
         self.assertEqual(params["yAxis"], "count()")
+
+
+class HttpSentrySourceOpenIssuesTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lists_open_issues_and_normalizes_the_verified_fields(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[open_issue_list_item()],
+                headers={"link": link_header(next_cursor=None, next_results=False)},
+            )
+
+        source, client = create_source(handler)
+        try:
+            issues = await source.list_open_issues(
+                SentryOpenIssuesRequest(project_slug="python-fastapi")
+            )
+        finally:
+            await client.aclose()
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].issue_id, "7699024952")
+        self.assertEqual(issues[0].short_id, "PYTHON-FASTAPI-1")
+        self.assertEqual(issues[0].project_slug, "python-fastapi")
+        self.assertEqual(
+            issues[0].first_seen,
+            datetime(2026, 8, 29, 5, 54, 44, 826751, tzinfo=UTC),
+        )
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(
+            requests[0].url.path,
+            "/api/0/projects/acme/python-fastapi/issues/",
+        )
+        self.assertEqual(requests[0].url.params["query"], "is:unresolved")
+
+    async def test_release_filter_is_appended_to_the_query_parameter(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[],
+                headers={"link": link_header(next_cursor=None, next_results=False)},
+            )
+
+        source, client = create_source(handler)
+        try:
+            issues = await source.list_open_issues(
+                SentryOpenIssuesRequest(
+                    project_slug="python-fastapi",
+                    release="e1448f6171fd009aca9f8136f7e6ec8120a9e515",
+                )
+            )
+        finally:
+            await client.aclose()
+
+        self.assertEqual(issues, ())
+        self.assertEqual(
+            requests[0].url.params["query"],
+            "is:unresolved release:e1448f6171fd009aca9f8136f7e6ec8120a9e515",
+        )
+
+    async def test_follows_the_next_cursor_until_results_is_false(self) -> None:
+        pages = [
+            httpx.Response(
+                200,
+                json=[open_issue_list_item(id="1", shortId="PYTHON-FASTAPI-1")],
+                headers={"link": link_header(next_cursor="page-2", next_results=True)},
+            ),
+            httpx.Response(
+                200,
+                json=[open_issue_list_item(id="2", shortId="PYTHON-FASTAPI-2")],
+                headers={"link": link_header(next_cursor=None, next_results=False)},
+            ),
+        ]
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return pages[len(requests) - 1]
+
+        source, client = create_source(handler)
+        try:
+            issues = await source.list_open_issues(
+                SentryOpenIssuesRequest(project_slug="python-fastapi")
+            )
+        finally:
+            await client.aclose()
+
+        self.assertEqual([issue.issue_id for issue in issues], ["1", "2"])
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[1].url.params["cursor"], "page-2")
+
+    async def test_pagination_bound_is_a_typed_incomplete_result_not_a_silent_truncation(
+        self,
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=[open_issue_list_item()],
+                headers={"link": link_header(next_cursor="always-more", next_results=True)},
+            )
+
+        source, client = create_source(handler)
+        try:
+            with self.assertRaises(SentryIncompleteResultError):
+                await source.list_open_issues(
+                    SentryOpenIssuesRequest(project_slug="python-fastapi")
+                )
+        finally:
+            await client.aclose()
+
+    async def test_non_list_payload_is_rejected(self) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(200, json={"not": "a-list"})
+        )
+        try:
+            with self.assertRaises(SentryInvalidResponseError):
+                await source.list_open_issues(
+                    SentryOpenIssuesRequest(project_slug="python-fastapi")
+                )
+        finally:
+            await client.aclose()
 
 
 class HttpSentrySourceValidationTests(unittest.IsolatedAsyncioTestCase):
