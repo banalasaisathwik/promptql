@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import json
-import re
 from types import SimpleNamespace
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
@@ -43,6 +42,7 @@ from app.investigations.planning import (
     build_planner_input,
 )
 from app.investigations.planning.instructions import PLANNER_SYSTEM_INSTRUCTIONS
+from app.observability.redaction import sanitize_message
 from app.runtime import InMemoryRunRepository, RunStatus
 from app.tools.models import TOOL_DEFINITIONS
 from app.workflows import InvestigationWorkflowService
@@ -130,19 +130,6 @@ def resolved_configuration(settings: LLMSettings) -> dict[str, object]:
     }
 
 
-def _sanitize_message(message: str, api_key: str | None) -> str:
-    sanitized = message
-    if api_key:
-        sanitized = sanitized.replace(api_key, "[REDACTED]")
-    sanitized = re.sub(
-        r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+",
-        "Bearer [REDACTED]",
-        sanitized,
-    )
-    sanitized = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "[REDACTED]", sanitized)
-    return sanitized[:500]
-
-
 def _provider_error_payload(error: Exception) -> dict[str, object]:
     body = getattr(error, "body", None)
     if not isinstance(body, dict):
@@ -204,7 +191,7 @@ def _failure_result(
         "http_status": getattr(error, "status_code", None),
         "provider_error_code": payload.get("code"),
         "provider_error_type": payload.get("type"),
-        "provider_message": _sanitize_message(
+        "provider_message": sanitize_message(
             provider_message,
             settings.api_key,
         ),
@@ -215,7 +202,7 @@ def _failure_result(
     }
     upstream_message = upstream_fields.get("upstream_message")
     if isinstance(upstream_message, str):
-        upstream_fields["upstream_message"] = _sanitize_message(
+        upstream_fields["upstream_message"] = sanitize_message(
             upstream_message,
             settings.api_key,
         )
@@ -663,7 +650,7 @@ async def run_workflow_call(settings: LLMSettings) -> dict[str, object]:
             "requested_models": models,
             "maximum_provider_calls": 5,
             "exception_class": error.__class__.__name__,
-            "exception_message": _sanitize_message(str(error), settings.api_key),
+            "exception_message": sanitize_message(str(error), settings.api_key),
         }
     finally:
         for client in clients:

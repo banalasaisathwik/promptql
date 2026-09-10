@@ -1,5 +1,189 @@
 # Learning log
 
+## 2026-08-30 — a rejected hypothesis's own reason was computed and then thrown away; making it visible found a real, closed answer
+
+- **Concept:** `DeterministicHypothesisValidator.validate()`
+  (`app/investigations/hypotheses/validator.py`) already computes a full
+  `RejectedHypothesis(candidate, reason)` per rejected LLM candidate —
+  the candidate's `subject`, `kind`, `supporting_fact_ids`, and the exact
+  `HypothesisValidationFailureCode` it failed on. `investigation.py`'s
+  `_complete_adaptive_run` reduced that to `len(validation_result.
+  rejected_candidates)` and discarded everything else — the same shape of
+  gap as the unexpected-runtime-failure entry below (a real, already-
+  computed reason existing only in memory for one stack frame), but for
+  *expected*, correctly-functioning rejections rather than crashes.
+- **Where:** mirrored the existing `plan.validation_rejected` funnel
+  exactly. Added `SUPPORTED_HYPOTHESIS_VALIDATION_FAILURE_CODES` (hardcoded
+  strings, same reasoning as the existing plan-code frozenset: observability
+  stays free of a dependency on the investigations domain) and
+  `RuntimeTelemetry.record_hypothesis_validation_rejected()`
+  (`app/observability/runtime_telemetry.py`), which emits a new
+  `hypothesis.validation_rejected` event (WARNING level, matching
+  `plan.validation_rejected`) through the same `StructuredEventLogger` /
+  `LiveEventBroker` funnel every other runtime event already uses. Added
+  three new fields to `ALLOWED_EVENT_FIELDS`
+  (`app/observability/structured_logging.py`): `hypothesis_subject`,
+  `hypothesis_kind`, `hypothesis_supporting_fact_ids` (the fact-id tuple
+  joined with `,` — the allowlist's `_json_value` only accepts scalars, and
+  no existing field carries a list). `investigation.py`'s validation block
+  now loops `validation_result.rejected_candidates` and calls the new
+  method once per rejection, alongside the unchanged `len(...)` count.
+  `DeterministicHypothesisValidator`'s own accept/reject logic was not
+  touched — this only exposes a reason it already decided.
+- **Frontend:** `InvestigationTraceView.tsx`'s `eventTone()` classified
+  any event name containing `"reject"` as the red `error` tone before
+  checking for `"hypothesis"` — so the new event would have rendered in
+  the same lane as a real crash. Reordered the check so `"hypothesis"`
+  is tested first: `hypothesis.validation_rejected` now renders in the
+  existing amber `hypothesis` tone (a deterministic, expected rejection,
+  not a runtime failure), while `plan.validation_rejected` is unaffected
+  and still renders red.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  — 635 tests, 0 failures, 0 errors, 14 skipped (634 before this change,
+  plus one new test,
+  `test_rejected_hypothesis_candidate_emits_validation_rejected_event` in
+  `tests/unit/test_investigation_workflow.py`, which feeds the validator a
+  candidate whose `subject` doesn't match its cited facts' file path and
+  asserts the emitted event's `failure_code`, `hypothesis_subject`, and
+  `hypothesis_supporting_fact_ids` land correctly using the existing
+  `tests/telemetry_support.py` harness). `bun run test:web` — 63 pass, 0
+  fail. `bunx tsc -b --noEmit` — no errors.
+- **Closing the real open question:** re-ran the exact
+  `request_payload` from run `1fc0d643-ad3f-40b5-a483-73e1345d8839`
+  (checkout-api / PR #42 / deployment 1042 / incident checkout-500) as a
+  live, paid OpenRouter call (`openai/gpt-oss-120b`, same models/provider
+  as the original run) with the new telemetry wired to a capturing logger
+  instead of guessing. This time 1 of 3 candidates was accepted and 2 were
+  rejected, both with real, captured events:
+  `{"failure_code": "entity_mismatch", "hypothesis_subject": "commit
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ...}` and
+  `{"failure_code": "entity_mismatch", "hypothesis_subject":
+  "deployment:1042", ...}`. Both rejected candidates asked for a
+  `CODE_CHANGE_MAY_HAVE_CONTRIBUTED` hypothesis but named a commit SHA or
+  a deployment reference as the `subject` instead of the changed file
+  path the validator requires for that hypothesis kind — the validator
+  rejected them correctly; nothing in `DeterministicHypothesisValidator`
+  is a bug. This is model output variance in what the LLM treats as the
+  hypothesis's "subject" across calls, not a validator defect — the
+  original run's 3-for-3 rejection was very likely the same
+  `entity_mismatch` pattern happening on all three candidates that time
+  instead of one out of three.
+- **Unresolved:** whether the hypothesis-generation prompt should more
+  strongly constrain `subject` to "must be one of the file paths named in
+  the supplied Facts" is a prompt-quality question or an
+  `investigations/CLAUDE.md` "LLM proposes, deterministic code decides"
+  question — real, but explicitly out of scope for this observability fix
+  and left for a separate decision.
+
+## 2026-08-30 — a "silently failed" investigation was actually a completed run with nowhere on the Live Trace page to see the result
+
+- **Concept:** distinguishing a genuine backend failure from a missing
+  frontend affordance requires checking the persisted source of truth
+  (`workflow_runs`) before trusting a UI symptom ("nothing appeared to
+  happen"). Queried `workflow_runs` directly for run
+  `1fc0d643-ad3f-40b5-a483-73e1345d8839`: `status='completed'`,
+  `investigation_results` held one real, non-empty
+  `GroundedInvestigationResult` (`termination_reason:
+  "planning_limit_reached"`, empty `supported_hypotheses`/`recommendations`
+  because the investigation ran out of planning rounds before grounding a
+  hypothesis — a legitimate answer, not an error). `services/api/logs/
+  investigation-runtime.log` (the new rotating file handler from the prior
+  entry) had zero lines for this `run_id`, consistent with a clean
+  completion and no unhandled exception. This confirmed the run genuinely
+  succeeded — the gap was entirely in
+  `InvestigationTraceView.tsx` (`app/features/inspection`), which streams
+  live SSE events and persisted planning rounds but had no link, button, or
+  section pointing at the final result once the run reached a terminal
+  state; the only place that ever rendered `investigation_results` was
+  `RunDashboardPage`/`InvestigationDashboard` at `/runs/{id}`, a different
+  route the trace view never referenced.
+- **Where:** added `TraceResultBanner` to `InvestigationTraceView.tsx` — a
+  link (`runPathFor(runId)` from `apps/web/src/routing.ts`, already used
+  elsewhere) rendered only when `isTerminal(status)`, labelled per status
+  (`completed`/`failed`/`cancelled`), styled in
+  `investigationDesign.css` to match the existing `trace-*` class
+  conventions.
+- **Design decision:** kept the fix presentation-only. The backend already
+  had a complete, correct answer sitting in Postgres; nothing about
+  persistence, the runtime state machine, or the terminal-event contract
+  needed to change. Reused the existing `/runs/{id}` route and its
+  `InvestigationDashboard` rendering (ADR-033) instead of duplicating
+  result rendering inside the trace view.
+- **Validation evidence:** `bun run test:web` — 63 pass, 0 fail (added two
+  tests to `InvestigationTraceView.test.tsx`: the banner links to
+  `/runs/{id}` and shows the right label when terminal, and renders nothing
+  while still running). `bunx tsc -b --noEmit` — no errors. `bun run
+  build:web` — succeeded. No backend change was needed, so no backend test
+  run was required for this fix.
+- **Unresolved:** the underlying investigation logic hitting
+  `planning_limit_reached` with zero supported hypotheses on this
+  particular run is a separate, pre-existing question (is the planning
+  round budget too low, or was this fixture genuinely under-evidenced?) —
+  out of scope for this frontend-navigation fix.
+
+## 2026-08-30 — unexpected runtime failures were logging a class name with no message and no durable destination
+
+- **Concept:** `_record_unexpected_runtime_failure` (`app/workflows/investigation.py`)
+  is the catch-all for any exception `AdaptiveInvestigationRuntime.investigate()`
+  or `_complete_adaptive_run()` doesn't handle explicitly. It existed
+  specifically so an operator could debug a crash after the fact, but it only
+  ever logged `exception_class` and `traceback.format_tb()` frames —
+  `traceback.format_tb()` returns stack *frames*, never `str(error)`, so the
+  actual reason for the failure was never captured anywhere. Confirmed this
+  gap live while diagnosing run `bb997d26-2611-401c-92fe-d55efa186e2a`: the
+  class name and frame locations were the only things that could ever have
+  been recovered, and even that only existed in whatever terminal's stdout
+  happened to have the uvicorn process attached — no file handler existed, so
+  closing that terminal destroyed the only copy.
+- **Where:** `app/observability/redaction.py` now holds `sanitize_message()`,
+  extracted verbatim from `app/diagnostics/openrouter.py`'s private
+  `_sanitize_message()` (redacts a known API key, `Bearer <token>`, and
+  `sk-...` shapes, then truncates to 500 chars) so both the OpenRouter
+  diagnostic script and the investigation workflow reuse one proven-safe
+  redaction path instead of two copies drifting apart. The runtime-failure
+  log line now includes `message=<sanitized>` alongside `exception_class`
+  and the stack frames. A new `configure_investigation_runtime_logger()`
+  attaches a `RotatingFileHandler` (5 MB × 3 backups) to the
+  `promptql.investigation` logger, writing to `services/api/logs/
+  investigation-runtime.log` (gitignored via the existing bare `logs`
+  pattern) — called once from `create_app()` in `main.py`, not at import
+  time, matching how `create_observability()` already wires up the
+  structured-event logger.
+- **Design decision:** the sanitized message goes on the backend log line
+  only — `record_investigation_diagnostic_failure`'s structured JSON event
+  (which the live SSE broker republishes toward the client) keeps its
+  existing `ALLOWED_EVENT_FIELDS` allowlist unchanged and still carries no
+  message. Redaction narrows what can leak; it is not a guarantee, so the
+  boundary that actually matters is which sink an untrusted string is
+  allowed to reach, not just whether it passed through `sanitize_message()`
+  first.
+- **Validation evidence:** full suite —
+  `uv run python -m unittest discover -s tests -v` — 634 tests, 0 failures,
+  0 errors, 14 skipped. Added three tests to
+  `tests/unit/test_investigation_workflow.py` covering the message now
+  reaching the log (`test_unexpected_post_processing_error_terminally_fails_run`,
+  extended), secret redaction on that same path
+  (`test_unexpected_runtime_failure_log_redacts_secrets`), and the rotating
+  file handler actually persisting a line to disk and being idempotent
+  across repeated `configure_investigation_runtime_logger()` calls
+  (`test_configure_investigation_runtime_logger_writes_a_persistent_file`).
+  Beyond the test suite, ran a standalone script (outside unittest) that
+  called `create_app()`'s real logger wiring, forced
+  `RuntimeError("connector call failed: Authorization: Bearer sk-live-...")`
+  through `continue_persisted_run`, and read back the real bytes appended to
+  `services/api/logs/investigation-runtime.log`. The persisted line reads
+  `exception_class=RuntimeError message=connector call failed: Authorization:
+  Bearer [REDACTED]` followed by real stack frames pointing at
+  `investigation.py:533` → `:756` (`_complete_adaptive_run` →
+  `render_grounded_result`); the raw secret string never appears in the
+  file, and the client-facing `failed.error.message` stayed the generic
+  sanitized text, unchanged from before this fix.
+- **Unresolved:** the log directory path is a fixed relative location next
+  to `services/api`, not configurable via settings — acceptable for a
+  single-instance local/dev deployment, but would need revisiting (env-var
+  path, or shipping to the same place the OTEL/Langfuse export already goes)
+  before this runs anywhere with an ephemeral or read-only filesystem.
+
 ## 2026-08-29 - extraction UI is a projection of the typed response
 
 - **Concept:** `InvestigationConsolePage.tsx` has two separate concerns:

@@ -7,6 +7,7 @@
 import { useRunLiveEvents } from './useRunLiveEvents'
 import type { LiveEventConnectionStatus } from './useRunLiveEvents'
 import { useRunSnapshot } from './useRunSnapshot'
+import { runPathFor } from '../../routing'
 import type {
   InvestigationPlanningRound,
   InvestigationRun,
@@ -15,6 +16,13 @@ import type {
   RuntimeRun,
   RuntimeStatus,
 } from './types'
+
+
+const TERMINAL_RESULT_LABELS: Record<'completed' | 'failed' | 'cancelled', string> = {
+  completed: 'Investigation complete',
+  failed: 'Investigation failed',
+  cancelled: 'Investigation cancelled',
+}
 
 
 const STATUS_LABELS: Record<LiveEventConnectionStatus, string> = {
@@ -43,8 +51,13 @@ function formatEventTime(timestamp: string): string {
 
 function eventTone(event: LiveRunEvent): EventTone {
   const name = event.event.toLowerCase()
-  if (name.includes('error') || name.includes('reject') || event.level === 'error') return 'error'
+  if (name.includes('error') || event.level === 'error') return 'error'
+  // A hypothesis's own validation-rejected event stays in the hypothesis
+  // (amber) lane rather than the generic error (red) one below: rejection
+  // by the deterministic validator is expected, evaluated behavior, not a
+  // runtime failure.
   if (name.includes('hypothesis')) return 'hypothesis'
+  if (name.includes('reject')) return 'error'
   if (name.includes('tool')) return 'tool'
   if (name.includes('fact')) return 'fact'
   return 'plan'
@@ -164,6 +177,20 @@ export function FactChainPanel({ chain }: { chain: string[] | null }) {
 }
 
 
+export function TraceResultBanner({ runId, status }: { runId: string, status: RuntimeStatus | undefined }) {
+  if (!isTerminal(status)) {
+    return null
+  }
+  const label = TERMINAL_RESULT_LABELS[status as 'completed' | 'failed' | 'cancelled']
+  return (
+    <a className={`trace-result-banner trace-result-banner--${status}`} href={runPathFor(runId)}>
+      <span>{label}</span>
+      <span className="trace-result-banner-cta">View full result →</span>
+    </a>
+  )
+}
+
+
 function traceFactChain(run: InvestigationRun | null): string[] | null {
   const latestResult = run?.results[run.results.length - 1]
   const hypothesisWithChain = latestResult?.supported_hypotheses.find(
@@ -189,6 +216,8 @@ export function InvestigationTraceView({ runId }: { runId: string }) {
         </a>
         <span className="environment-badge">Live trace</span>
       </header>
+
+      <TraceResultBanner runId={runId} status={investigation?.status} />
 
       <section className="trace-grid" aria-label={`Live trace for run ${runId}`}>
         <TraceRoundSidebar rounds={rounds} />

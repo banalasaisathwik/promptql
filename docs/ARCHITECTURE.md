@@ -885,6 +885,22 @@ the investigation runtime, and FastAPI request instrumentation
 - `structured_logging.py` emits safe, correlated JSON events (e.g.
   `runtime.connector_sources.selected`, `runtime.telemetry.export_failed`);
   `run_id` may correlate spans/logs but is never a metric label.
+- `redaction.py` holds `sanitize_message()`, the one shared secret-stripping
+  path (known API key, `Bearer <token>`, `sk-...` shapes; 500-char cap) used
+  both by the OpenRouter diagnostic script and by
+  `InvestigationWorkflowService._record_unexpected_runtime_failure`
+  (`workflows/investigation.py`). That handler is the catch-all for any
+  exception the investigation runtime doesn't handle explicitly: it logs
+  `exception_class`, the sanitized exception message, and stack frames (never
+  raw provider/exception text) to the `promptql.investigation` logger, kept
+  distinct from the client-facing SSE/DB failure payload, which still carries
+  only a bounded exception class and fixed failure code.
+  `configure_investigation_runtime_logger()`, called once from `create_app()`
+  (`main.py`), attaches a `RotatingFileHandler` writing to
+  `services/api/logs/investigation-runtime.log` (gitignored) so a crash
+  survives the terminal that started uvicorn being closed — CURRENT as of
+  2026-08-30; the log directory is a fixed relative path, not yet
+  configurable via settings.
 - `create_observability()` / `setup.py` builds the tracer/meter provider only
   when `PROMPTQL_TELEMETRY_ENABLED=true` (console and/or OTLP export) or
   `PROMPTQL_LANGFUSE_ENABLED=true`; otherwise it returns a no-op provider.
@@ -1124,9 +1140,20 @@ rounds of the same case. `InvestigationDashboard.tsx` renders the sequence
 as a growing thread — a `GroundedResultSection` per entry, labeled
 "Original investigation result" for index 0 and "Follow-up result N" for
 each entry after it, with nothing replaced or removed as more entries
-arrive. `InvestigationTraceView.tsx` was reviewed and makes no
-result-shape assumption at all (it only renders the live SSE event list),
-so it needed no change.
+arrive. `InvestigationTraceView.tsx` makes no result-shape assumption
+itself (it only renders the live SSE event list plus persisted planning
+rounds); it needed no change for the array-of-results shape.
+
+It did, however, have a separate, pre-existing gap confirmed and fixed
+2026-08-30: once a run reached a terminal state (`completed`/`failed`/
+`cancelled`), the trace view had no link to the final result at all —
+diagnosed live against a real run (`workflow_runs.status='completed'`,
+`investigation_results` holding a genuine, non-empty
+`GroundedInvestigationResult`) that looked like a silent failure only
+because the trace page never pointed anywhere. `TraceResultBanner`, gated
+on terminal status, now links to `/runs/{id}` (`InvestigationDashboard`,
+described above) so the growing-thread result view is always reachable
+once a run stops streaming.
 
 A `FollowUpForm` inside `InvestigationDashboard.tsx` calls
 `startInvestigationFollowUp` (`api.ts`), which posts to `POST
@@ -1420,6 +1447,12 @@ transition happen — see below.
 `GET /v1/runs/{run_id}/events` (`api/v1/live_events_router.py`) streams
 Server-Sent Events for one run: every event that already reaches
 `StructuredEventLogger.emit()` — `plan.validation_rejected`,
+`hypothesis.validation_rejected` (added 2026-08-30: mirrors
+`plan.validation_rejected` exactly — `DeterministicHypothesisValidator`
+already computed a `subject`/`kind`/`supporting_fact_ids`/
+`HypothesisValidationFailureCode` per rejected candidate in
+`investigation.py`, but only its count reached persisted state; the
+candidate detail now reaches this same funnel instead of being discarded),
 `runtime.workflow.completed`/`failed`, `llm.explanation.failed`,
 `runtime.persistence.failed`, `runtime.telemetry.export_failed`,
 `investigation.tool.call_completed`, `investigation.round.planned`/

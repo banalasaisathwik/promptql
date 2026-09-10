@@ -135,6 +135,17 @@ SUPPORTED_PLAN_VALIDATION_FAILURE_CODES = frozenset(
 )
 
 
+SUPPORTED_HYPOTHESIS_VALIDATION_FAILURE_CODES = frozenset(
+    {
+        "unknown_supporting_fact",
+        "unsupported_hypothesis_kind",
+        "entity_mismatch",
+        "missing_required_support",
+        "duplicate_fact_reference",
+    }
+)
+
+
 class SpanObservation:
     def __init__(self, span: Span) -> None:
         self._span = span
@@ -641,6 +652,31 @@ class RuntimeTelemetry:
                 logging.WARNING,
                 run_id=run_id,
                 failure_category=failure_code,
+            )
+        except Exception:
+            self._warn_telemetry_failure("logs")
+
+    def record_hypothesis_validation_rejected(
+        self,
+        run_id: UUID,
+        subject: str,
+        kind: str,
+        supporting_fact_ids: tuple[str, ...],
+        failure_code: str,
+    ) -> None:
+        try:
+            if failure_code not in SUPPORTED_HYPOTHESIS_VALIDATION_FAILURE_CODES:
+                raise ValueError(
+                    "hypothesis validation failure code is not approved for logs"
+                )
+            self._event_logger.emit(
+                "hypothesis.validation_rejected",
+                logging.WARNING,
+                run_id=run_id,
+                hypothesis_subject=subject,
+                hypothesis_kind=kind,
+                hypothesis_supporting_fact_ids=",".join(supporting_fact_ids),
+                failure_code=failure_code,
             )
         except Exception:
             self._warn_telemetry_failure("logs")

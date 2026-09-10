@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import {
   FactChainPanel,
   TraceEventList,
+  TraceResultBanner,
   TraceRoundSidebar,
 } from './InvestigationTraceView'
 import type { InvestigationPlanningRound, LiveRunEvent } from './types'
@@ -73,4 +74,24 @@ test('renders only a backend-grounded connected fact chain', () => {
   expect(markup).toContain('F-deploy')
   expect(markup).toContain('F-commit')
   expect(markup).toContain('trace-chain-node--active')
+})
+
+
+test('links to the run dashboard once the investigation reaches a terminal state', () => {
+  const markup = renderToStaticMarkup(
+    <TraceResultBanner runId="49a8a46d-5c69-4e5d-a928-6a149b84d6e7" status="completed" />,
+  )
+
+  expect(markup).toContain('href="/runs/49a8a46d-5c69-4e5d-a928-6a149b84d6e7"')
+  expect(markup).toContain('View full result')
+  expect(markup).toContain('trace-result-banner--completed')
+})
+
+
+test('shows nothing while the investigation is still running', () => {
+  const markup = renderToStaticMarkup(
+    <TraceResultBanner runId="49a8a46d-5c69-4e5d-a928-6a149b84d6e7" status="running" />,
+  )
+
+  expect(markup).toBe('')
 })

@@ -68,7 +68,10 @@ from app.runtime import (
     RunRecordInvalidError,
     RunStateConflictError,
 )
-from app.workflows import InvestigationWorkflowService
+from app.workflows import (
+    InvestigationWorkflowService,
+    configure_investigation_runtime_logger,
+)
 
 
 async def fixture_not_found_handler(
@@ -162,6 +165,8 @@ def create_app(
     llm_settings: LLMSettings | None = None,
     llm_client: LLMClient | None = None,
 ) -> FastAPI:
+    configure_investigation_runtime_logger()
+
     if observability is not None:
         app_observability = observability
     else:
