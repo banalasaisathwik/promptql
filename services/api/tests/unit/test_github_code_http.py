@@ -11,6 +11,7 @@ from app.connectors.errors import (
     GitHubRateLimitedError,
     GitHubTimeoutError,
     GitHubUnauthorizedError,
+    GitHubUnprocessableEntityError,
     GitHubUpstreamUnavailableError,
 )
 from app.connectors.github_code_http import HttpGitHubCodeEvidenceSource
@@ -518,6 +519,9 @@ class HttpGitHubCodeEvidenceTests(unittest.IsolatedAsyncioTestCase):
             (403, {"x-ratelimit-remaining": "0"}, GitHubRateLimitedError),
             (429, {}, GitHubRateLimitedError),
             (404, {}, GitHubNotFoundError),
+
+
+            (422, {}, GitHubUnprocessableEntityError),
             (503, {}, GitHubUpstreamUnavailableError),
         )
         for status, headers, expected_error in cases:

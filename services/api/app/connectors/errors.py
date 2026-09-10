@@ -83,6 +83,14 @@ class GitHubInvalidResponseError(GitHubConnectorError):
         )
 
 
+class GitHubUnprocessableEntityError(GitHubConnectorError):
+    def __init__(self) -> None:
+        super().__init__(
+            GitHubErrorCategory.NOT_FOUND,
+            "GitHub could not resolve the requested identifier.",
+        )
+
+
 class GitHubIncompleteResultError(GitHubConnectorError):
     def __init__(self) -> None:
         super().__init__(
