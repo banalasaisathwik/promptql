@@ -3905,3 +3905,75 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   which reproduces the exact motivating scenario (a deployment with no
   `pull_request_number`) and asserts `changed_file` facts with
   `pull_request_number=None` are now produced where none were before.
+
+### 2026-09-10 - The Jira link isn't where general Sentry API knowledge says it is
+
+- **V2 milestone:** ADR-037 phases 1-2 — new `HttpSentrySource` capabilities
+  for a planned repo-only deterministic scan, not part of `IncidentSource`.
+- **Engineering concept and syntax:** `HttpSentrySource.list_open_issues`
+  (`SentryOpenIssuesRequest` -> `tuple[SentryOpenIssue, ...]`) calls
+  `GET /projects/{org}/{project_slug}/issues/?query=is:unresolved[+release:
+  {version}]`, reusing the existing `SentryIssueResponse` raw model as-is —
+  live verification showed its fields (`id`, `shortId`, `status`,
+  `firstSeen`, `lastSeen`, `project.slug`) already matched the list
+  response exactly, so no new raw model was needed, only a new public
+  output type (`SentryOpenIssue` in `connectors/models.py`, precedented by
+  `JiraIssue`/`GitHubPullRequest` — a plain connector output, not
+  `Evidence`, since ADR-037's scan path is designed to never touch the
+  Evidence/Fact/Tool pipeline at all).
+- **The live-verification catch:** the task's premise was to verify
+  whether a Sentry issue's linked Jira ticket appears via a
+  `pluginIssue`/`pluginActor`-shaped field, "same conservatism as
+  `sentry_http.py`'s environment/category fields" (see the `lineNo`
+  casing entry above). It doesn't. Two real, unlinked sandbox issues were
+  checked first (`GET /organizations/{org}/issues/{id}/`) — no such field
+  exists anywhere in that response, linked or not. Then a live link was
+  created for real (Sentry's "+ Link issue" action under an issue's
+  External Links panel, not the org-level integration settings page, which
+  was the wrong action tried first and cost a full round of "still empty"
+  re-checks before the actual mechanism was found) and the check re-run:
+  the linked Jira key only appears via a **separate, dedicated endpoint**,
+  `GET /organizations/{org}/issues/{issue_id}/integrations/`, at
+  `response[0].externalIssues[0].key` — confirmed against a real ticket
+  (`KAN-5`, linked from Sentry issue `PYTHON-FASTAPI-1` to Jira project
+  `promptql` on `banalasaisathwik.atlassian.net`). The ordinary issue-detail
+  endpoint's complete key list was re-diffed before and after the link
+  existed and is unchanged either way — confirming the field literally
+  never appears there, not just that it's easy to miss. `id`
+  (`externalIssues[0].id`, `"4715209"`) is a decoy: it's Sentry's own
+  internal link-record ID, not the Jira issue — only `.key` is the actual
+  ticket key, and `.url` independently corroborates it
+  (`.../browse/KAN-5`).
+- **Two multiplicity decisions made explicit rather than assumed:** the
+  `/integrations/` response is a list of integrations, each carrying its
+  own `externalIssues` list — both could in principle have more than one
+  entry, but this sandbox org only ever exercised the single-entry case
+  live. Decided (not verified): filter to `provider.key == "jira"`
+  explicitly (a non-Jira integration's `externalIssues` must never be read
+  as a Jira key just because it's first in the list) and take the first
+  match on both axes rather than raising, since the public return type
+  (`JiraIssueKey | None`) is a scalar, not a list, and a caller (the
+  planned Phase 3 scan) must not abort a whole issue over an unresolved
+  tie between equally-plausible links. Documented in
+  [ADR-037](decisions/ADR-037-deterministic-correlation-path-for-repo-only-input.md)
+  as a Reconsideration trigger, not a proven-correct default.
+- **A cost consequence flagged before it could be forgotten:**
+  `get_linked_jira_key` is a second Sentry HTTP call per issue on top of
+  `list_open_issues`. ADR-037's original Phase 3 sketch ("explicit cap on
+  issues processed per scan, e.g. max 20") implicitly assumed one call per
+  issue; the ADR now records the real minimum (1 list call + 2 per issue
+  once Phase 3 adds at least one more evidence call) so the eventual
+  per-scan cap gets sized against reality instead of the original guess.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  from `services/api` — 648 passed before this change, 656 after (8 new:
+  `HttpSentrySourceLinkedJiraKeyTests`, covering the verified single-link
+  case, no-link, no-integrations-at-all, non-Jira-integration filtering,
+  both take-first multiplicity cases, a malformed-key rejection, and a
+  non-list-payload rejection), 0 failed, 14 skipped throughout. Both new
+  methods were also run live end-to-end (not just against mocked
+  transports) against the real `student-whe` Sentry org:
+  `list_open_issues` returned real typed `SentryOpenIssue` objects with
+  release-filtering and empty-result behavior confirmed;
+  `get_linked_jira_key` returned `"KAN-5"` for the linked issue and `None`
+  for the still-unlinked one, matching the exact two assertions requested
+  before the commit was made.

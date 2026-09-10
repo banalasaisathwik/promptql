@@ -142,6 +142,22 @@ def open_issue_list_item(**updates) -> dict:
     return payload
 
 
+def jira_integration_payload(*, external_issues=None, **updates) -> dict:
+    payload = {
+        "id": "502008",
+        "name": "JIRA",
+        "status": "active",
+        "provider": {"key": "jira", "slug": "jira", "name": "Jira"},
+        "externalIssues": (
+            [{"id": "4715209", "key": "KAN-5", "url": "https://x/browse/KAN-5"}]
+            if external_issues is None
+            else external_issues
+        ),
+    }
+    payload.update(updates)
+    return payload
+
+
 def link_header(*, next_cursor: str | None, next_results: bool) -> str:
     previous = (
         '<https://sentry.io/api/0/x/?cursor=1:0:1>; rel="previous"; '
@@ -510,6 +526,145 @@ class HttpSentrySourceOpenIssuesTests(unittest.IsolatedAsyncioTestCase):
                 await source.list_open_issues(
                     SentryOpenIssuesRequest(project_slug="python-fastapi")
                 )
+        finally:
+            await client.aclose()
+
+
+class HttpSentrySourceLinkedJiraKeyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_the_linked_jira_key_from_the_verified_field_path(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=[jira_integration_payload()])
+
+        source, client = create_source(handler)
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7699024952")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(linked_jira_key, "KAN-5")
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(
+            requests[0].url.path,
+            "/api/0/organizations/acme/issues/7699024952/integrations/",
+        )
+
+    async def test_returns_none_when_external_issues_is_empty(self) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(
+                200, json=[jira_integration_payload(external_issues=[])]
+            )
+        )
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7697191065")
+        finally:
+            await client.aclose()
+
+        self.assertIsNone(linked_jira_key)
+
+    async def test_returns_none_when_no_integrations_are_configured_at_all(self) -> None:
+        source, client = create_source(lambda _request: httpx.Response(200, json=[]))
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7697191065")
+        finally:
+            await client.aclose()
+
+        self.assertIsNone(linked_jira_key)
+
+    async def test_non_jira_integrations_are_filtered_out_not_assumed_to_be_jira(
+        self,
+    ) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(
+                200,
+                json=[
+                    jira_integration_payload(
+                        id="1",
+                        provider={"key": "github", "slug": "github", "name": "GitHub"},
+                        externalIssues=[{"id": "9", "key": "org/repo#42"}],
+                    )
+                ],
+            )
+        )
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7699024952")
+        finally:
+            await client.aclose()
+
+        self.assertIsNone(linked_jira_key)
+
+    async def test_multiple_jira_integrations_take_the_first_documented_choice(
+        self,
+    ) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(
+                200,
+                json=[
+                    jira_integration_payload(
+                        id="1", externalIssues=[{"id": "1", "key": "KAN-5"}]
+                    ),
+                    jira_integration_payload(
+                        id="2", externalIssues=[{"id": "2", "key": "KAN-9"}]
+                    ),
+                ],
+            )
+        )
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7699024952")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(linked_jira_key, "KAN-5")
+
+    async def test_multiple_external_issues_take_the_first_documented_choice(
+        self,
+    ) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(
+                200,
+                json=[
+                    jira_integration_payload(
+                        external_issues=[
+                            {"id": "1", "key": "KAN-5"},
+                            {"id": "2", "key": "KAN-6"},
+                        ]
+                    )
+                ],
+            )
+        )
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7699024952")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(linked_jira_key, "KAN-5")
+
+    async def test_malformed_jira_key_shape_is_rejected_not_silently_dropped(self) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(
+                200,
+                json=[
+                    jira_integration_payload(
+                        externalIssues=[{"id": "1", "key": "not-a-valid-jira-key"}]
+                    )
+                ],
+            )
+        )
+        try:
+            with self.assertRaises(SentryInvalidResponseError):
+                await source.get_linked_jira_key("7699024952")
+        finally:
+            await client.aclose()
+
+    async def test_non_list_payload_is_rejected(self) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(200, json={"not": "a-list"})
+        )
+        try:
+            with self.assertRaises(SentryInvalidResponseError):
+                await source.get_linked_jira_key("7699024952")
         finally:
             await client.aclose()
 

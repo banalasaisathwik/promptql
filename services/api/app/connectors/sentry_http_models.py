@@ -24,6 +24,19 @@ class SentryIssueResponse(SentryResponseModel):
     project: SentryProjectResponse
 
 
+class SentryExternalIssueResponse(SentryResponseModel):
+    key: RequiredString
+
+
+class SentryIntegrationProviderResponse(SentryResponseModel):
+    key: RequiredString
+
+
+class SentryIssueIntegrationResponse(SentryResponseModel):
+    provider: SentryIntegrationProviderResponse
+    externalIssues: list[SentryExternalIssueResponse] = []
+
+
 class SentryShortIdResponse(SentryResponseModel):
     group: SentryIssueResponse
     groupId: RequiredString

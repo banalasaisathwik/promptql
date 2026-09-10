@@ -28,6 +28,7 @@ from app.connectors.models import (
     DeploymentEvidenceRequest,
     FailureLocationEvidenceRequest,
     IncidentEvidenceRequest,
+    JiraIssueKey,
     SentryOpenIssue,
     SentryOpenIssuesRequest,
     TelemetrySignal,
@@ -38,6 +39,7 @@ from app.connectors.sentry_http_models import (
     SentryEventResponse,
     SentryEventsStatsResponse,
     SentryExceptionEntryDataResponse,
+    SentryIssueIntegrationResponse,
     SentryIssueResponse,
     SentryReleaseResponse,
     SentryResponseModel,
@@ -58,6 +60,7 @@ from app.observability import FailureCategory, NoOpRuntimeTelemetry, RuntimeTele
 
 
 AwareDatetimeAdapter = TypeAdapter(AwareDatetime)
+JiraIssueKeyAdapter = TypeAdapter(JiraIssueKey)
 Clock = Callable[[], datetime]
 
 
@@ -246,6 +249,50 @@ class HttpSentrySource:
                 first_seen=self._parse_datetime(raw_issue.firstSeen),
                 last_seen=self._parse_datetime(raw_issue.lastSeen),
             )
+        except ValidationError:
+            raise SentryInvalidResponseError() from None
+
+    async def get_linked_jira_key(self, issue_id: str) -> JiraIssueKey | None:
+        with self._telemetry.observe_connector(
+            "sentry",
+            self.source.value,
+            "get_linked_jira_key",
+        ) as span:
+            try:
+                linked_jira_key = await self._load_linked_jira_key(issue_id)
+            except SentryConnectorError as error:
+                self._record_failure(span, error)
+                raise
+            self._record_success(span)
+            return linked_jira_key
+
+    async def _load_linked_jira_key(self, issue_id: str) -> JiraIssueKey | None:
+        payload = await self._get_json(
+            f"/organizations/{self._organization_path}/issues/"
+            f"{quote(issue_id, safe='')}/integrations/"
+        )
+        if not isinstance(payload, list):
+            raise SentryInvalidResponseError()
+        try:
+            integrations = [
+                SentryIssueIntegrationResponse.model_validate(item) for item in payload
+            ]
+        except ValidationError:
+            raise SentryInvalidResponseError() from None
+
+
+        jira_integrations = [
+            integration
+            for integration in integrations
+            if integration.provider.key == "jira"
+        ]
+        if not jira_integrations:
+            return None
+        external_issues = jira_integrations[0].externalIssues
+        if not external_issues:
+            return None
+        try:
+            return JiraIssueKeyAdapter.validate_python(external_issues[0].key)
         except ValidationError:
             raise SentryInvalidResponseError() from None
 

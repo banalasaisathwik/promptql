@@ -260,6 +260,19 @@ and `GitHubCodeEvidenceSource`/`IncidentSource` for investigation evidence.
   `DeploymentEvidenceRequest.deployment_reference` is parsed as
   `"version:environment"` to resolve one Sentry deploy unambiguously, since
   a release can have several environment-scoped deploys.
+- `HttpSentrySource` also exposes `list_open_issues` and
+  `get_linked_jira_key`, added for
+  [ADR-037](decisions/ADR-037-deterministic-correlation-path-for-repo-only-input.md)'s
+  planned repo-only deterministic scan. Deliberately **not** part of the
+  four-method `IncidentSource` protocol/`FakeIncidentSource` pair above —
+  ADR-037's scan path is designed to never touch
+  `AdaptiveInvestigationRuntime`/`TypedLLMPlanner`, so these live as
+  standalone methods on the concrete class only. `get_linked_jira_key`
+  calls a separate endpoint (`GET /organizations/{org}/issues/{id}/
+  integrations/`) from everything else in this file — live verification
+  found the Jira ticket key only ever appears in that endpoint's
+  `externalIssues[0].key`, never on the ordinary issue-detail response,
+  so it costs a second Sentry HTTP call per issue.
 - A lookup with no matching fixture raises `FixtureNotFoundError` rather than
   returning empty evidence, preserving the distinction between "unavailable"
   and "observed zero results."
