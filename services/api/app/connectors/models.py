@@ -139,6 +139,19 @@ class TelemetryWindowEvidenceRequest(ContractModel):
         return self
 
 
+class SentryOpenIssuesRequest(ContractModel):
+    project_slug: NonEmptyString
+    release: NonEmptyString | None = None
+
+
+class SentryOpenIssue(ContractModel):
+    issue_id: NonEmptyString
+    short_id: NonEmptyString
+    project_slug: NonEmptyString
+    first_seen: AwareDatetime
+    last_seen: AwareDatetime
+
+
 class GitHubUser(ContractModel):
     login: NonEmptyString
 

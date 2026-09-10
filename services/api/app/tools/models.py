@@ -22,6 +22,7 @@ class InvestigationToolId(StrEnum):
     GET_COMMIT = "get_commit"
     GET_PULL_REQUEST = "get_pull_request"
     GET_DIFF = "get_diff"
+    GET_COMMIT_DIFF = "get_commit_diff"
     GET_INCIDENT = "get_incident"
     GET_FAILURE_LOCATION = "get_failure_location"
     GET_DEPLOYMENTS = "get_deployments"
@@ -102,6 +103,10 @@ class GetDiffPlanOutput(ContractModel):
     pr_number: GitHubPullRequestEvidenceRequest.model_fields["pr_number"].rebuild_annotation()
 
 
+class GetCommitDiffPlanOutput(ContractModel):
+    commit_sha: GitHubCommitEvidenceRequest.model_fields["commit_sha"].rebuild_annotation()
+
+
 class GetIncidentPlanOutput(ContractModel):
     incident_reference: NonEmptyString
 
@@ -170,6 +175,12 @@ TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         description="Retrieve normalized evidence for one Git commit.",
         input_model=GitHubCommitEvidenceRequest,
         plan_output_model=GetCommitPlanOutput,
+    ),
+    ToolDefinition(
+        tool_id=InvestigationToolId.GET_COMMIT_DIFF,
+        description="Retrieve normalized changed-file and diff-hunk evidence for one commit, independent of any pull request.",
+        input_model=GitHubCommitEvidenceRequest,
+        plan_output_model=GetCommitDiffPlanOutput,
     ),
     ToolDefinition(
         tool_id=InvestigationToolId.GET_DEPLOYMENTS,

@@ -1,6 +1,7 @@
 import json
 import logging
 import unittest
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from opentelemetry import metrics, trace
@@ -16,10 +17,13 @@ from app.investigations.models import (
     EvidenceProvenance,
     EvidenceSource,
     FileChangeType,
+    InvestigationRequest,
 )
 from app.observability.live_event_broker import LiveEventBroker
 from app.observability.runtime_telemetry import RuntimeTelemetry
 from app.observability.structured_logging import StructuredEventLogger
+from app.runtime import RunStatus, RuntimeErrorCode, RuntimeErrorInfo
+from app.runtime.investigation_models import InvestigationRun
 from tests.telemetry_support import create_telemetry_harness
 
 
@@ -65,12 +69,18 @@ class InvestigationLiveEventTests(unittest.TestCase):
     def test_a_failed_tool_call_is_logged_at_warning(self) -> None:
         harness = create_telemetry_harness()
         try:
-            harness.telemetry.record_investigation_tool_call(uuid4(), "get_incident", "failed")
+            harness.telemetry.record_investigation_tool_call(
+                uuid4(),
+                "get_incident",
+                "failed",
+                failure_code="not_found",
+            )
         finally:
             harness.shutdown()
 
         record = json.loads(harness.log_stream.getvalue())
         self.assertEqual(record["level"], "warning")
+        self.assertEqual(record["failure_code"], "not_found")
 
     def test_round_planned_and_completed_events_carry_the_round_number(self) -> None:
         harness = create_telemetry_harness()
@@ -190,6 +200,43 @@ class InvestigationLiveEventTests(unittest.TestCase):
         self.assertEqual(published["run_id"], str(run_id))
         self.assertEqual(published["evidence_id"], first.evidence_id)
         self.assertIs(store.get(first.evidence_id), first)
+
+    def test_terminal_investigation_failure_reaches_a_broker_subscriber(self) -> None:
+        harness = create_telemetry_harness()
+        broker = LiveEventBroker()
+        harness.telemetry.event_logger.set_broker(broker)
+        run_id = uuid4()
+        queue = broker.subscribe(str(run_id))
+        try:
+            harness.telemetry.record_terminal_workflow(
+                InvestigationRun(
+                    run_id=run_id,
+                    workflow_name="investigation",
+                    workflow_version="2.19.2",
+                    status=RunStatus.FAILED,
+                    started_at=datetime(2026, 8, 29, 10, 0, tzinfo=UTC),
+                    completed_at=datetime(2026, 8, 29, 10, 1, tzinfo=UTC),
+                    error=RuntimeErrorInfo(
+                        code=RuntimeErrorCode.INVESTIGATION_RUNTIME_FAILURE,
+                        message="The investigation runtime failed before it could complete.",
+                    ),
+                    request=InvestigationRequest(
+                        repository_owner="acme",
+                        repository_name="checkout",
+                        question="Why did checkout fail?",
+                        incident_reference="incident:checkout-500",
+                    ),
+                    state=None,
+                )
+            )
+        finally:
+            harness.shutdown()
+
+        published = queue.get_nowait()
+        self.assertEqual(published["event"], "runtime.workflow.failed")
+        self.assertEqual(published["run_id"], str(run_id))
+        self.assertEqual(published["run_status"], "failed")
+        self.assertEqual(published["failure_category"], "system_failure")
 
 
 if __name__ == "__main__":

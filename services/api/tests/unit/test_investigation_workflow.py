@@ -1,6 +1,9 @@
 import asyncio
+import json
+import tempfile
 import unittest
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -47,8 +50,10 @@ from app.workflows.investigation import (
     INVESTIGATION_WORKFLOW_NAME,
     INVESTIGATION_WORKFLOW_VERSION,
     InvestigationWorkflowService,
+    _RUNTIME_FAILURE_LOGGER,
     _code_diagnosis_failure_diagnostics,
     _hypothesis_failure_diagnostics,
+    configure_investigation_runtime_logger,
 )
 from app.investigations.code_diagnosis import (
     CodeContextBuilder,
@@ -56,6 +61,7 @@ from app.investigations.code_diagnosis import (
     CodeDiagnosisFailureCode,
     TypedLLMCodeDiagnoser,
 )
+from tests.telemetry_support import create_telemetry_harness
 
 
 class SequentialPlannerClient:
@@ -198,6 +204,71 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             (rendered_hypothesis.supporting_fact_ids[1],),
         )
 
+    async def test_rejected_hypothesis_candidate_emits_validation_rejected_event(self):
+        captured_fact_id: dict[str, str] = {}
+
+        class MismatchedSubjectHypothesisClient(FakeLLMClient):
+            async def generate_typed(self, request):
+                facts = request.input.facts
+                failure = next(
+                    fact
+                    for fact in facts
+                    if fact.fact_type == "changed_file_matches_failure_file"
+                )
+                captured_fact_id["value"] = failure.fact_id
+
+
+                candidate = CandidateHypothesis(
+                    hypothesis_id="H_CODE_CHANGE",
+                    kind=HypothesisKind.CODE_CHANGE_MAY_HAVE_CONTRIBUTED,
+                    subject="services/unrelated.py",
+                    supporting_fact_ids=(failure.fact_id,),
+                )
+                return LLMStructuredResponse(
+                    output={"candidates": [candidate.model_dump(mode="json")]}
+                )
+
+        harness = create_telemetry_harness()
+        repository = InMemoryRunRepository()
+        workflow = InvestigationWorkflowService(
+            repository,
+            MismatchedSubjectHypothesisClient(),
+            planner_client=SequentialPlannerClient((hypothesis_plan(), hypothesis_plan())),
+            telemetry=harness.telemetry,
+        )
+        pending = await workflow.create_persisted_run(
+            InvestigationRequest(
+                repository_owner="octo-org",
+                repository_name="analytics",
+                question="Why did checkout failures increase?",
+                incident_reference="incident:checkout-500",
+                pull_request_number=42,
+            )
+        )
+
+        completed = await workflow.continue_persisted_run(pending)
+
+        self.assertEqual(len(completed.state.working_memory.validated_hypotheses), 0)
+        self.assertEqual(completed.state.execution_state.rejected_hypothesis_count, 1)
+
+        emitted_events = [
+            json.loads(line) for line in harness.log_stream.getvalue().splitlines() if line
+        ]
+        rejected_events = [
+            event for event in emitted_events if event["event"] == "hypothesis.validation_rejected"
+        ]
+        self.assertEqual(len(rejected_events), 1)
+        self.assertEqual(rejected_events[0]["run_id"], str(pending.run_id))
+        self.assertEqual(rejected_events[0]["failure_code"], "entity_mismatch")
+        self.assertEqual(rejected_events[0]["hypothesis_subject"], "services/unrelated.py")
+        self.assertEqual(
+            rejected_events[0]["hypothesis_kind"], "code_change_may_have_contributed"
+        )
+        self.assertEqual(
+            rejected_events[0]["hypothesis_supporting_fact_ids"],
+            captured_fact_id["value"],
+        )
+
     async def test_code_diagnosis_failure_preserves_grounded_hypothesis(self):
         repository = InMemoryRunRepository()
         workflow = InvestigationWorkflowService(
@@ -250,16 +321,86 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch(
-            "app.workflows.investigation.render_grounded_result",
-            side_effect=RuntimeError("private internal detail"),
-        ):
-            failed = await workflow.continue_persisted_run(pending)
+        with self.assertLogs("promptql.investigation", level="ERROR") as captured:
+            with patch(
+                "app.workflows.investigation.render_grounded_result",
+                side_effect=RuntimeError("private internal detail"),
+            ):
+                failed = await workflow.continue_persisted_run(pending)
 
         self.assertEqual(failed.status, RunStatus.FAILED)
         self.assertEqual(failed.error.code, "investigation_runtime_failure")
         self.assertNotIn("private internal detail", failed.error.message)
         self.assertIs(repository.get(failed.run_id), failed)
+
+
+        [log_record] = captured.records
+        self.assertIn("exception_class=RuntimeError", log_record.getMessage())
+        self.assertIn("message=private internal detail", log_record.getMessage())
+
+    async def test_unexpected_runtime_failure_log_redacts_secrets(self):
+        repository = InMemoryRunRepository()
+        workflow = InvestigationWorkflowService(
+            repository,
+            FakeLLMClient(),
+            planner_client=SequentialPlannerClient(
+                (hypothesis_plan(), hypothesis_plan())
+            ),
+        )
+        pending = await workflow.create_persisted_run(
+            InvestigationRequest(
+                repository_owner="octo-org",
+                repository_name="analytics",
+                question="Why did checkout fail?",
+                incident_reference="incident:checkout-500",
+                pull_request_number=42,
+            )
+        )
+
+        secret_bearer_token = "Bearer sk-live-should-never-reach-a-log-file"
+        with self.assertLogs("promptql.investigation", level="ERROR") as captured:
+            with patch(
+                "app.workflows.investigation.render_grounded_result",
+                side_effect=RuntimeError(
+                    f"upstream call failed: {secret_bearer_token}"
+                ),
+            ):
+                await workflow.continue_persisted_run(pending)
+
+        [log_record] = captured.records
+        logged_message = log_record.getMessage()
+        self.assertNotIn(secret_bearer_token, logged_message)
+        self.assertIn("[REDACTED]", logged_message)
+
+    async def test_configure_investigation_runtime_logger_writes_a_persistent_file(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_dir = Path(temp_dir)
+            original_handlers = list(_RUNTIME_FAILURE_LOGGER.handlers)
+            _RUNTIME_FAILURE_LOGGER.handlers = []
+            try:
+                configure_investigation_runtime_logger(log_dir)
+                configure_investigation_runtime_logger(log_dir)
+                self.assertEqual(len(_RUNTIME_FAILURE_LOGGER.handlers), 1)
+
+                _RUNTIME_FAILURE_LOGGER.error(
+                    "Unexpected investigation runtime failure run_id=%s "
+                    "exception_class=%s message=%s\n%s",
+                    uuid4(),
+                    "RuntimeError",
+                    "persisted after the terminal closes",
+                    "",
+                )
+
+                log_file = log_dir / "investigation-runtime.log"
+                self.assertTrue(log_file.exists())
+                contents = log_file.read_text()
+                self.assertIn("persisted after the terminal closes", contents)
+            finally:
+                for handler in _RUNTIME_FAILURE_LOGGER.handlers:
+                    handler.close()
+                _RUNTIME_FAILURE_LOGGER.handlers = original_handlers
 
     async def test_cancellation_mid_run_marks_the_run_cancelled_not_stuck_running(self):
         repository = InMemoryRunRepository()

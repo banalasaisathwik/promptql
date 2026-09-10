@@ -686,7 +686,15 @@ function isValidatedHypothesis(value: unknown): value is ValidatedHypothesis {
 function isGroundedHypothesis(
   value: unknown,
 ): value is ValidatedHypothesis & { statement: string } {
-  return isRecord(value) && isValidatedHypothesis(value) && isNonEmptyString(value.statement)
+  return (
+    isRecord(value) &&
+    isValidatedHypothesis(value) &&
+    isNonEmptyString(value.statement) &&
+    (value.connected_fact_chain === undefined ||
+      value.connected_fact_chain === null ||
+      (Array.isArray(value.connected_fact_chain) &&
+        value.connected_fact_chain.every(isNonEmptyString)))
+  )
 }
 
 

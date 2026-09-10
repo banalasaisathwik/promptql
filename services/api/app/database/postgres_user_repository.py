@@ -13,14 +13,16 @@ from app.database.models import UserRow
 
 
 def _read_user(row: UserRow) -> User:
-    return User(id=row.id, email=row.email, created_at=row.created_at)
+    return User(
+        id=row.id, email=row.email, created_at=row.created_at, is_demo=row.is_demo
+    )
 
 
 class PostgresUserRepository:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
-    def create_user(self, email: str, password: str) -> User:
+    def create_user(self, email: str, password: str, is_demo: bool = False) -> User:
         normalized_email = normalize_email(email)
         password_hash = hash_password(password)
         user_id = uuid4()
@@ -30,6 +32,7 @@ class PostgresUserRepository:
             email=normalized_email,
             password_hash=password_hash,
             created_at=created_at,
+            is_demo=is_demo,
         )
         try:
             with self._session_factory.begin() as session:
@@ -38,7 +41,9 @@ class PostgresUserRepository:
             raise UserAlreadyExistsError(normalized_email) from None
         except SQLAlchemyError:
             raise AuthPersistenceError("Auth persistence is unavailable.") from None
-        return User(id=user_id, email=normalized_email, created_at=created_at)
+        return User(
+            id=user_id, email=normalized_email, created_at=created_at, is_demo=is_demo
+        )
 
     def authenticate(self, email: str, password: str) -> User | None:
         normalized_email = normalize_email(email)

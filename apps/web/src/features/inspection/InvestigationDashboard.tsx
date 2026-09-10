@@ -69,6 +69,22 @@ function RecommendationList({ items }: { items: DeveloperRecommendation[] }) {
 }
 
 
+function ConnectedFactChain({ chain }: { chain: string[] | null | undefined }) {
+  if (!chain || chain.length === 0) return null
+  return (
+    <div className="result-fact-chain" aria-label="Connected fact chain">
+      <p className="result-section-label">Connected fact chain</p>
+      <ol className="result-chain-diagram">
+        {chain.map((factId, index) => <li className="result-chain-box" key={`${factId}-${index}`}>
+          <span>Fact</span>
+          {factId}
+        </li>)}
+      </ol>
+    </div>
+  )
+}
+
+
 // One entry in the growing thread (ADR-033): the original investigation's
 // result is always index 0, and each follow-up appends one more result after
 // it. Nothing here is ever replaced or removed once rendered.
@@ -80,14 +96,36 @@ function GroundedResultSection({
   index: number
 }) {
   const titleId = `grounded-result-title-${index}`
+  const primaryHypothesis = result.supported_hypotheses[0]
   return (
-    <section className="run-result" aria-labelledby={titleId}>
+    <section className="run-result result-layout" aria-labelledby={titleId}>
       <p className="eyebrow">{index === 0 ? 'Original investigation result' : `Follow-up result ${index}`}</p>
-      <h2 id={titleId}>{result.supported_hypotheses.length ? 'Likely contributing factor' : 'No supported causal hypothesis'}</h2>
-      <p>{result.summary}</p>
-      {result.supported_hypotheses.map((hypothesis) => <article className="grounded-hypothesis" key={hypothesis.hypothesis_id}><h3>{hypothesis.statement}</h3><p>Supporting Facts: {hypothesis.supporting_fact_ids.join(', ')}</p></article>)}
-      {result.code_findings.map((finding) => <article className="grounded-hypothesis" key={finding.finding_id}><h3>{finding.statement}</h3><p>Exact validated location: {codeFindingLocation(finding)}</p></article>)}
-      {result.recommendations.length > 0 && <div><h3>Grounded actions</h3><RecommendationList items={result.recommendations} /></div>}
+      {primaryHypothesis && <p className="result-supported-badge">✓ Supported hypothesis</p>}
+      <h2 className="result-statement" id={titleId}>
+        {primaryHypothesis?.statement ?? 'No supported causal hypothesis'}
+      </h2>
+      <p className="result-summary">{result.summary}</p>
+      <ConnectedFactChain chain={primaryHypothesis?.connected_fact_chain} />
+      {result.supported_hypotheses.slice(1).map((hypothesis) => (
+        <article className="grounded-hypothesis" key={hypothesis.hypothesis_id}>
+          <h3>{hypothesis.statement}</h3>
+          <p>Supporting Facts: {hypothesis.supporting_fact_ids.join(', ')}</p>
+          <ConnectedFactChain chain={hypothesis.connected_fact_chain} />
+        </article>
+      ))}
+      {result.code_findings.length > 0 && <section className="result-findings">
+        <p className="result-section-label">Validated code findings</p>
+        {result.code_findings.map((finding) => <article className="grounded-hypothesis" key={finding.finding_id}>
+          <h3>{finding.statement}</h3><p>Exact validated location: {codeFindingLocation(finding)}</p>
+        </article>)}
+      </section>}
+      {result.recommendations.length > 0 && <section className="result-recommendations">
+        <p className="result-section-label">Recommended next steps</p>
+        <ol>{result.recommendations.map((recommendation, recommendationIndex) => <li key={recommendation.recommendation_id}>
+          <span>{String(recommendationIndex + 1).padStart(2, '0')}</span>
+          <p>{recommendation.message}</p>
+        </li>)}</ol>
+      </section>}
       <p className="terminal-note">Stopped because: {result.termination_reason.replaceAll('_', ' ')}</p>
     </section>
   )

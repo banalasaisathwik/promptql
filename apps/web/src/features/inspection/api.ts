@@ -42,7 +42,7 @@ async function requestJson(
   let response: Response
 
   try {
-    response = await fetch(url, init)
+    response = await fetch(url, { ...init, credentials: 'include' })
   } catch {
     // Browser fetch throws for network failures, not for HTTP 404/500 statuses.
     throw new ConnectorApiError(
@@ -53,28 +53,7 @@ async function requestJson(
   const body = await readJson(response)
 
   if (!response.ok) {
-    let message = `The API request failed with status ${response.status}.`
-    if (
-      typeof body === 'object' &&
-      body !== null &&
-      'message' in body &&
-      typeof body.message === 'string'
-    ) {
-      message = body.message
-    } else if (
-      typeof body === 'object' &&
-      body !== null &&
-      'error' in body &&
-      typeof body.error === 'object' &&
-      body.error !== null &&
-      'message' in body.error &&
-      typeof body.error.message === 'string'
-    ) {
-      // Failed runs contain a sanitized error nested inside the run body.
-      message = body.error.message
-    }
-
-    throw new ConnectorApiError(message, response.status)
+    throw new ConnectorApiError(apiErrorMessage(body, response.status), response.status)
   }
 
   return body
@@ -87,7 +66,7 @@ async function requestMergeReadiness(
 ): Promise<unknown> {
   let response: Response
   try {
-    response = await fetch(url, init)
+    response = await fetch(url, { ...init, credentials: 'include' })
   } catch {
     throw new ConnectorApiError(
       'Could not reach the API. Confirm that the backend server is running.',
@@ -101,16 +80,7 @@ async function requestMergeReadiness(
     return body
   }
 
-  let message = `The API request failed with status ${response.status}.`
-  if (
-    typeof body === 'object' &&
-    body !== null &&
-    'message' in body &&
-    typeof body.message === 'string'
-  ) {
-    message = body.message
-  }
-  throw new ConnectorApiError(message, response.status)
+  throw new ConnectorApiError(apiErrorMessage(body, response.status), response.status)
 }
 
 
@@ -136,6 +106,9 @@ export async function extractGrounding(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
+    // POST responses are not normally cacheable, but this review step must
+    // always reflect the description submitted immediately above it.
+    cache: 'no-store',
   })
   return parseGroundingExtractionResponse(body)
 }
@@ -168,4 +141,178 @@ export async function fetchRuntimeRun(
     signal,
   })
   return parseRuntimeRun(body)
+}
+
+
+function apiErrorMessage(body: unknown, status: number): string {
+  if (isRecord(body) && typeof body.message === 'string') {
+    return body.message
+  }
+  if (isRecord(body) && isRecord(body.error) && typeof body.error.message === 'string') {
+    return body.error.message
+  }
+  if (isRecord(body) && Array.isArray(body.detail)) {
+    const detail = body.detail.find(
+      (item): item is Record<string, unknown> => isRecord(item) && typeof item.msg === 'string',
+    )
+    if (detail) return detail.msg as string
+  }
+  return `The API request failed with status ${status}.`
+}
+
+
+export type CredentialProvider = 'github' | 'jira' | 'sentry'
+
+export type CredentialSource = 'real' | 'demo'
+
+export type CredentialConnectionStatus = {
+  connected: boolean
+  source: CredentialSource
+}
+
+export type CredentialConnections = Record<CredentialProvider, CredentialConnectionStatus>
+
+export type AuthenticatedUser = {
+  id: string
+  email: string
+  createdAt: string
+}
+
+export type DemoAccount = {
+  email: string
+  password: string
+}
+
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+
+function parseAuthenticatedUser(value: unknown): AuthenticatedUser {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== 'string' ||
+    typeof value.email !== 'string' ||
+    typeof value.created_at !== 'string'
+  ) {
+    throw new ConnectorApiError('The API response is malformed.')
+  }
+  return { id: value.id, email: value.email, createdAt: value.created_at }
+}
+
+
+function parseCredentialConnections(value: unknown): CredentialConnections {
+  if (!isRecord(value) || !Array.isArray(value.providers)) {
+    throw new ConnectorApiError('The API response is malformed.')
+  }
+
+  const notConnected: CredentialConnectionStatus = { connected: false, source: 'real' }
+  const connections: CredentialConnections = {
+    github: notConnected,
+    jira: notConnected,
+    sentry: notConnected,
+  }
+  for (const item of value.providers) {
+    if (
+      !isRecord(item) ||
+      !['github', 'jira', 'sentry'].includes(String(item.provider)) ||
+      typeof item.connected !== 'boolean' ||
+      !['real', 'demo'].includes(String(item.source))
+    ) {
+      throw new ConnectorApiError('The API response is malformed.')
+    }
+    connections[item.provider as CredentialProvider] = {
+      connected: item.connected,
+      source: item.source as CredentialSource,
+    }
+  }
+  return connections
+}
+
+
+async function requestNoContent(url: string, init: RequestInit): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(url, { ...init, credentials: 'include' })
+  } catch {
+    throw new ConnectorApiError(
+      'Could not reach the API. Confirm that the backend server is running.',
+    )
+  }
+
+  if (!response.ok) {
+    const body = await readJson(response)
+    throw new ConnectorApiError(apiErrorMessage(body, response.status), response.status)
+  }
+}
+
+
+export async function registerWorkspace(
+  email: string,
+  password: string,
+): Promise<AuthenticatedUser> {
+  return parseAuthenticatedUser(await requestJson('/v1/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  }))
+}
+
+
+export async function loginWorkspace(
+  email: string,
+  password: string,
+): Promise<AuthenticatedUser> {
+  return parseAuthenticatedUser(await requestJson('/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  }))
+}
+
+
+export async function logoutWorkspace(): Promise<void> {
+  await requestNoContent('/v1/auth/logout', { method: 'POST' })
+}
+
+
+export async function fetchCredentialConnections(): Promise<CredentialConnections> {
+  return parseCredentialConnections(await requestJson('/v1/credentials'))
+}
+
+
+function parseDemoAccount(value: unknown): DemoAccount {
+  if (
+    !isRecord(value) ||
+    typeof value.email !== 'string' ||
+    typeof value.password !== 'string'
+  ) {
+    throw new ConnectorApiError('The API response is malformed.')
+  }
+  return { email: value.email, password: value.password }
+}
+
+
+export async function fetchDemoAccount(): Promise<DemoAccount> {
+  // Intentionally unauthenticated and non-secret (ADR-035): the demo
+  // account's password is meant to be visible on the public landing page.
+  return parseDemoAccount(await requestJson('/v1/demo-account'))
+}
+
+
+export async function connectCredential(
+  provider: CredentialProvider,
+  token: string,
+): Promise<void> {
+  await requestJson('/v1/credentials', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, token }),
+  })
+}
+
+
+export async function disconnectCredential(provider: CredentialProvider): Promise<void> {
+  await requestNoContent(`/v1/credentials/${provider}`, { method: 'DELETE' })
 }

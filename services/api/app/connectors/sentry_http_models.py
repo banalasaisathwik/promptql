@@ -15,6 +15,15 @@ class SentryProjectResponse(SentryResponseModel):
     slug: RequiredString
 
 
+class SentryCommitResponse(SentryResponseModel):
+    id: RequiredString
+
+
+class SentryIssueReleaseResponse(SentryResponseModel):
+    version: RequiredString
+    lastCommit: SentryCommitResponse | None = None
+
+
 class SentryIssueResponse(SentryResponseModel):
     id: RequiredString
     shortId: RequiredString
@@ -22,6 +31,26 @@ class SentryIssueResponse(SentryResponseModel):
     firstSeen: RequiredString
     lastSeen: RequiredString
     project: SentryProjectResponse
+    firstRelease: SentryIssueReleaseResponse | None = None
+
+
+class SentryExternalIssueResponse(SentryResponseModel):
+    key: RequiredString
+
+
+class SentryIntegrationProviderResponse(SentryResponseModel):
+    key: RequiredString
+
+
+class SentryIssueIntegrationResponse(SentryResponseModel):
+    provider: SentryIntegrationProviderResponse
+    externalIssues: list[SentryExternalIssueResponse] = []
+
+
+class SentryShortIdResponse(SentryResponseModel):
+    group: SentryIssueResponse
+    groupId: RequiredString
+    shortId: RequiredString
 
 
 class SentryStackFrameResponse(SentryResponseModel):
@@ -55,10 +84,6 @@ class SentryEventEntryResponse(SentryResponseModel):
 class SentryEventResponse(SentryResponseModel):
     eventID: RequiredString
     entries: list[SentryEventEntryResponse] = []
-
-
-class SentryCommitResponse(SentryResponseModel):
-    id: RequiredString
 
 
 class SentryReleaseProjectResponse(SentryResponseModel):

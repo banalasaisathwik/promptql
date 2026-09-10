@@ -1,0 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg: #12151B;
+  --surface: #1A1F29;
+  --surface-2: #212837;
+  --border: #2B3242;
+  --text: #E8ECF1;
+  --text-muted: #8B94A7;
+  --text-faint: #5C6478;
+  --teal: #33D6B0;
+  --teal-dim: #1E4A40;
+  --amber: #F0A93E;
+  --red: #F0555F;
+  --violet: #9C8CFF;
+
+  --amber-dim: color-mix(in srgb, var(--amber) 22%, var(--bg));
+  --red-dim: color-mix(in srgb, var(--red) 22%, var(--bg));
+  --violet-dim: color-mix(in srgb, var(--violet) 22%, var(--bg));
+  --page-bg: var(--bg);
+  --text-strong: var(--text);
+  --input-border: var(--border);
+  --input-bg: var(--surface);
+  --purple: var(--violet);
+  --purple-hover: color-mix(in srgb, var(--violet) 85%, var(--text));
+  --purple-soft: color-mix(in srgb, var(--violet) 13%, transparent);
+  --purple-border: color-mix(in srgb, var(--violet) 38%, transparent);
+  --purple-focus: color-mix(in srgb, var(--violet) 20%, transparent);
+  --purple-focus-strong: color-mix(in srgb, var(--violet) 38%, transparent);
+  --error: var(--red);
+  --card-shadow: 0 16px 34px color-mix(in srgb, var(--bg) 60%, transparent);
+  --sans: 'Inter', ui-sans-serif, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --display: 'Space Grotesk', ui-sans-serif, sans-serif;
+
+  /* Compatibility aliases keep existing access and inspection markup styled
+     from this one palette while it is progressively restyled. */
+  --access-bg: var(--bg);
+  --access-surface: var(--surface);
+  --access-surface-2: var(--surface-2);
+  --access-border: var(--border);
+  --access-text: var(--text);
+  --access-muted: var(--text-muted);
+  --access-faint: var(--text-faint);
+  --access-teal: var(--teal);
+  --access-teal-dim: var(--teal-dim);
+  --access-red: var(--red);
+}

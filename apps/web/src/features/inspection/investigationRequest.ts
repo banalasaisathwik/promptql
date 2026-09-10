@@ -28,6 +28,42 @@ export const CHECKOUT_500_PRESET = {
 }
 
 
+// Keep this predicate identical to the backend's
+// investigations.models.has_required_grounding_reference. The form converts
+// blank strings to null before calling it, just as the API request does.
+export function hasRequiredGroundingReference(
+  incidentReference: string | null,
+  pullRequestNumber: number | null,
+  deploymentReference: string | null,
+): boolean {
+  return !(
+    incidentReference === null
+    && pullRequestNumber === null
+    && deploymentReference === null
+  )
+}
+
+
+export function formHasRequiredGroundingReference(
+  form: typeof EMPTY_INVESTIGATION_FORM,
+): boolean {
+  const pullRequestNumber = form.pull_request_number.trim()
+    ? Number(form.pull_request_number)
+    : null
+  const validPullRequestNumber = pullRequestNumber !== null
+    && Number.isSafeInteger(pullRequestNumber)
+    && pullRequestNumber > 0
+    ? pullRequestNumber
+    : null
+
+  return hasRequiredGroundingReference(
+    form.incident_reference.trim() || null,
+    validPullRequestNumber,
+    form.deployment_reference.trim() || null,
+  )
+}
+
+
 export function buildInvestigationRequest(
   form: typeof EMPTY_INVESTIGATION_FORM,
 ): InvestigationRequest | string {
@@ -46,12 +82,21 @@ export function buildInvestigationRequest(
       (!Number.isSafeInteger(parsedPullRequestNumber) || parsedPullRequestNumber <= 0)) {
     return 'Pull request number must be a positive whole number.'
   }
+  const incidentReference = form.incident_reference.trim() || null
+  const deploymentReference = form.deployment_reference.trim() || null
+  if (!hasRequiredGroundingReference(
+    incidentReference,
+    parsedPullRequestNumber,
+    deploymentReference,
+  )) {
+    return 'At least one incident, deployment, or pull request is required.'
+  }
   return {
     repository_owner: form.repository_owner.trim(),
     repository_name: form.repository_name.trim(),
     question: form.question.trim(),
-    incident_reference: form.incident_reference.trim() || null,
-    deployment_reference: form.deployment_reference.trim() || null,
+    incident_reference: incidentReference,
+    deployment_reference: deploymentReference,
     pull_request_number: parsedPullRequestNumber,
     service: form.service.trim() || null,
     environment: form.environment.trim() || null,

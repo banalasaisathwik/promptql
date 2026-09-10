@@ -1,9 +1,12 @@
+from enum import StrEnum
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import Field, StringConstraints
 
 from app.api.v1.auth_router import get_current_user
+from app.api.v1.models import ApiError, ApiErrorCode
 from app.auth import (
     AuthPersistenceError,
     CredentialProvider,
@@ -26,9 +29,15 @@ class StoreCredentialRequest(ContractModel):
     ]
 
 
+class CredentialSource(StrEnum):
+    REAL = "real"
+    DEMO = "demo"
+
+
 class CredentialConnectionResponse(ContractModel):
     provider: CredentialProvider
     connected: bool
+    source: CredentialSource = CredentialSource.REAL
 
 
 class ConnectedProvidersResponse(ContractModel):
@@ -51,20 +60,46 @@ def _connected_providers_response(
             CredentialConnectionResponse(
                 provider=provider,
                 connected=provider in connected_provider_set,
+                source=CredentialSource.REAL,
             )
             for provider in CredentialProvider
         )
     )
 
 
-@router.post("", response_model=CredentialConnectionResponse)
+def _demo_connected_providers_response() -> ConnectedProvidersResponse:
+    return ConnectedProvidersResponse(
+        providers=tuple(
+            CredentialConnectionResponse(
+                provider=provider, connected=True, source=CredentialSource.DEMO
+            )
+            for provider in CredentialProvider
+        )
+    )
+
+
+def _demo_credentials_immutable_response() -> JSONResponse:
+    error = ApiError(
+        code=ApiErrorCode.DEMO_ACCOUNT_CREDENTIALS_IMMUTABLE,
+        message="Demo workspace credentials cannot be changed.",
+    )
+    return JSONResponse(status_code=403, content=error.model_dump(mode="json"))
+
+
+@router.post(
+    "",
+    response_model=CredentialConnectionResponse,
+    responses={403: {"model": ApiError}},
+)
 def store_credential(
     body: StoreCredentialRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     credential_repository: Annotated[
         CredentialRepository, Depends(get_credential_repository)
     ],
-) -> CredentialConnectionResponse:
+) -> CredentialConnectionResponse | JSONResponse:
+    if current_user.is_demo:
+        return _demo_credentials_immutable_response()
     credential_repository.store_credential(current_user.id, body.provider, body.token)
     return CredentialConnectionResponse(provider=body.provider, connected=True)
 
@@ -76,12 +111,18 @@ def list_credentials(
         CredentialRepository, Depends(get_credential_repository)
     ],
 ) -> ConnectedProvidersResponse:
+    if current_user.is_demo:
+        return _demo_connected_providers_response()
     return _connected_providers_response(
         credential_repository.list_connected_providers(current_user.id)
     )
 
 
-@router.delete("/{provider}", status_code=204)
+@router.delete(
+    "/{provider}",
+    status_code=204,
+    responses={403: {"model": ApiError}},
+)
 def delete_credential(
     provider: CredentialProvider,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -89,5 +130,7 @@ def delete_credential(
         CredentialRepository, Depends(get_credential_repository)
     ],
 ) -> Response:
+    if current_user.is_demo:
+        return _demo_credentials_immutable_response()
     credential_repository.delete_credential(current_user.id, provider)
     return Response(status_code=204)

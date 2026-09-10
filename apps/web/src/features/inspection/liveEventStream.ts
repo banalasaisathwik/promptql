@@ -23,6 +23,11 @@ export interface EventSourceLike {
 
 export type EventSourceFactory = (url: string) => EventSourceLike
 
+const TERMINAL_WORKFLOW_EVENTS = new Set([
+  'runtime.workflow.completed',
+  'runtime.workflow.failed',
+])
+
 interface LiveEventStreamControllerOptions {
   runId: string
   onEvent: (event: LiveRunEvent) => void
@@ -74,6 +79,9 @@ export class LiveEventStreamController {
         return
       }
       this.onEvent(parsed)
+      if (TERMINAL_WORKFLOW_EVENTS.has(parsed.event)) {
+        this.stop()
+      }
     }
   }
 

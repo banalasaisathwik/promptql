@@ -12,7 +12,10 @@ afterEach(() => {
 
 
 test('extracts a complete grounding proposal from a known text sample', async () => {
-  globalThis.fetch = (async () => new Response(JSON.stringify({
+  let requestInit: RequestInit | undefined
+  globalThis.fetch = (async (_url, init) => {
+    requestInit = init
+    return new Response(JSON.stringify({
     status: 'complete',
     extracted: {
       repository_owner: 'octo-org',
@@ -23,7 +26,8 @@ test('extracts a complete grounding proposal from a known text sample', async ()
     },
     missing: [],
     question: null,
-  }), { status: 200 })) as typeof fetch
+  }), { status: 200 })
+  }) as typeof fetch
 
   const response = await extractGrounding({
     description: 'PR 42 in octo-org/analytics, deployment 52, checkout throwing errors',
@@ -33,6 +37,7 @@ test('extracts a complete grounding proposal from a known text sample', async ()
   expect(response.extracted.repository_owner).toBe('octo-org')
   expect(response.extracted.pull_request_number).toBe(42)
   expect(response.missing).toEqual([])
+  expect(requestInit?.cache).toBe('no-store')
 })
 
 

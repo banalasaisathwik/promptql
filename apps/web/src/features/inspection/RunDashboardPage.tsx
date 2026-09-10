@@ -192,9 +192,9 @@ export function RunDashboardPage({ runId }: { runId: string }) {
   return (
     <main className="app-shell">
       <header className="site-header">
-        <a className="brand" href="/" aria-label="PromptQL home">
-          <span className="brand-mark" aria-hidden="true">P</span>
-          <span>PromptQL</span>
+        <a className="brand" href="/" aria-label="Whyline home">
+          <span className="brand-mark" aria-hidden="true">W</span>
+          <span>Whyline</span>
         </a>
         <span className="environment-badge">Runtime dashboard</span>
       </header>

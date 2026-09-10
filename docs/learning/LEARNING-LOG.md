@@ -1,5 +1,315 @@
 # Learning log
 
+## 2026-08-30 — a rejected hypothesis's own reason was computed and then thrown away; making it visible found a real, closed answer
+
+- **Concept:** `DeterministicHypothesisValidator.validate()`
+  (`app/investigations/hypotheses/validator.py`) already computes a full
+  `RejectedHypothesis(candidate, reason)` per rejected LLM candidate —
+  the candidate's `subject`, `kind`, `supporting_fact_ids`, and the exact
+  `HypothesisValidationFailureCode` it failed on. `investigation.py`'s
+  `_complete_adaptive_run` reduced that to `len(validation_result.
+  rejected_candidates)` and discarded everything else — the same shape of
+  gap as the unexpected-runtime-failure entry below (a real, already-
+  computed reason existing only in memory for one stack frame), but for
+  *expected*, correctly-functioning rejections rather than crashes.
+- **Where:** mirrored the existing `plan.validation_rejected` funnel
+  exactly. Added `SUPPORTED_HYPOTHESIS_VALIDATION_FAILURE_CODES` (hardcoded
+  strings, same reasoning as the existing plan-code frozenset: observability
+  stays free of a dependency on the investigations domain) and
+  `RuntimeTelemetry.record_hypothesis_validation_rejected()`
+  (`app/observability/runtime_telemetry.py`), which emits a new
+  `hypothesis.validation_rejected` event (WARNING level, matching
+  `plan.validation_rejected`) through the same `StructuredEventLogger` /
+  `LiveEventBroker` funnel every other runtime event already uses. Added
+  three new fields to `ALLOWED_EVENT_FIELDS`
+  (`app/observability/structured_logging.py`): `hypothesis_subject`,
+  `hypothesis_kind`, `hypothesis_supporting_fact_ids` (the fact-id tuple
+  joined with `,` — the allowlist's `_json_value` only accepts scalars, and
+  no existing field carries a list). `investigation.py`'s validation block
+  now loops `validation_result.rejected_candidates` and calls the new
+  method once per rejection, alongside the unchanged `len(...)` count.
+  `DeterministicHypothesisValidator`'s own accept/reject logic was not
+  touched — this only exposes a reason it already decided.
+- **Frontend:** `InvestigationTraceView.tsx`'s `eventTone()` classified
+  any event name containing `"reject"` as the red `error` tone before
+  checking for `"hypothesis"` — so the new event would have rendered in
+  the same lane as a real crash. Reordered the check so `"hypothesis"`
+  is tested first: `hypothesis.validation_rejected` now renders in the
+  existing amber `hypothesis` tone (a deterministic, expected rejection,
+  not a runtime failure), while `plan.validation_rejected` is unaffected
+  and still renders red.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  — 635 tests, 0 failures, 0 errors, 14 skipped (634 before this change,
+  plus one new test,
+  `test_rejected_hypothesis_candidate_emits_validation_rejected_event` in
+  `tests/unit/test_investigation_workflow.py`, which feeds the validator a
+  candidate whose `subject` doesn't match its cited facts' file path and
+  asserts the emitted event's `failure_code`, `hypothesis_subject`, and
+  `hypothesis_supporting_fact_ids` land correctly using the existing
+  `tests/telemetry_support.py` harness). `bun run test:web` — 63 pass, 0
+  fail. `bunx tsc -b --noEmit` — no errors.
+- **Closing the real open question:** re-ran the exact
+  `request_payload` from run `1fc0d643-ad3f-40b5-a483-73e1345d8839`
+  (checkout-api / PR #42 / deployment 1042 / incident checkout-500) as a
+  live, paid OpenRouter call (`openai/gpt-oss-120b`, same models/provider
+  as the original run) with the new telemetry wired to a capturing logger
+  instead of guessing. This time 1 of 3 candidates was accepted and 2 were
+  rejected, both with real, captured events:
+  `{"failure_code": "entity_mismatch", "hypothesis_subject": "commit
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ...}` and
+  `{"failure_code": "entity_mismatch", "hypothesis_subject":
+  "deployment:1042", ...}`. Both rejected candidates asked for a
+  `CODE_CHANGE_MAY_HAVE_CONTRIBUTED` hypothesis but named a commit SHA or
+  a deployment reference as the `subject` instead of the changed file
+  path the validator requires for that hypothesis kind — the validator
+  rejected them correctly; nothing in `DeterministicHypothesisValidator`
+  is a bug. This is model output variance in what the LLM treats as the
+  hypothesis's "subject" across calls, not a validator defect — the
+  original run's 3-for-3 rejection was very likely the same
+  `entity_mismatch` pattern happening on all three candidates that time
+  instead of one out of three.
+- **Unresolved:** whether the hypothesis-generation prompt should more
+  strongly constrain `subject` to "must be one of the file paths named in
+  the supplied Facts" is a prompt-quality question or an
+  `investigations/CLAUDE.md` "LLM proposes, deterministic code decides"
+  question — real, but explicitly out of scope for this observability fix
+  and left for a separate decision.
+
+## 2026-08-30 — a "silently failed" investigation was actually a completed run with nowhere on the Live Trace page to see the result
+
+- **Concept:** distinguishing a genuine backend failure from a missing
+  frontend affordance requires checking the persisted source of truth
+  (`workflow_runs`) before trusting a UI symptom ("nothing appeared to
+  happen"). Queried `workflow_runs` directly for run
+  `1fc0d643-ad3f-40b5-a483-73e1345d8839`: `status='completed'`,
+  `investigation_results` held one real, non-empty
+  `GroundedInvestigationResult` (`termination_reason:
+  "planning_limit_reached"`, empty `supported_hypotheses`/`recommendations`
+  because the investigation ran out of planning rounds before grounding a
+  hypothesis — a legitimate answer, not an error). `services/api/logs/
+  investigation-runtime.log` (the new rotating file handler from the prior
+  entry) had zero lines for this `run_id`, consistent with a clean
+  completion and no unhandled exception. This confirmed the run genuinely
+  succeeded — the gap was entirely in
+  `InvestigationTraceView.tsx` (`app/features/inspection`), which streams
+  live SSE events and persisted planning rounds but had no link, button, or
+  section pointing at the final result once the run reached a terminal
+  state; the only place that ever rendered `investigation_results` was
+  `RunDashboardPage`/`InvestigationDashboard` at `/runs/{id}`, a different
+  route the trace view never referenced.
+- **Where:** added `TraceResultBanner` to `InvestigationTraceView.tsx` — a
+  link (`runPathFor(runId)` from `apps/web/src/routing.ts`, already used
+  elsewhere) rendered only when `isTerminal(status)`, labelled per status
+  (`completed`/`failed`/`cancelled`), styled in
+  `investigationDesign.css` to match the existing `trace-*` class
+  conventions.
+- **Design decision:** kept the fix presentation-only. The backend already
+  had a complete, correct answer sitting in Postgres; nothing about
+  persistence, the runtime state machine, or the terminal-event contract
+  needed to change. Reused the existing `/runs/{id}` route and its
+  `InvestigationDashboard` rendering (ADR-033) instead of duplicating
+  result rendering inside the trace view.
+- **Validation evidence:** `bun run test:web` — 63 pass, 0 fail (added two
+  tests to `InvestigationTraceView.test.tsx`: the banner links to
+  `/runs/{id}` and shows the right label when terminal, and renders nothing
+  while still running). `bunx tsc -b --noEmit` — no errors. `bun run
+  build:web` — succeeded. No backend change was needed, so no backend test
+  run was required for this fix.
+- **Unresolved:** the underlying investigation logic hitting
+  `planning_limit_reached` with zero supported hypotheses on this
+  particular run is a separate, pre-existing question (is the planning
+  round budget too low, or was this fixture genuinely under-evidenced?) —
+  out of scope for this frontend-navigation fix.
+
+## 2026-08-30 — unexpected runtime failures were logging a class name with no message and no durable destination
+
+- **Concept:** `_record_unexpected_runtime_failure` (`app/workflows/investigation.py`)
+  is the catch-all for any exception `AdaptiveInvestigationRuntime.investigate()`
+  or `_complete_adaptive_run()` doesn't handle explicitly. It existed
+  specifically so an operator could debug a crash after the fact, but it only
+  ever logged `exception_class` and `traceback.format_tb()` frames —
+  `traceback.format_tb()` returns stack *frames*, never `str(error)`, so the
+  actual reason for the failure was never captured anywhere. Confirmed this
+  gap live while diagnosing run `bb997d26-2611-401c-92fe-d55efa186e2a`: the
+  class name and frame locations were the only things that could ever have
+  been recovered, and even that only existed in whatever terminal's stdout
+  happened to have the uvicorn process attached — no file handler existed, so
+  closing that terminal destroyed the only copy.
+- **Where:** `app/observability/redaction.py` now holds `sanitize_message()`,
+  extracted verbatim from `app/diagnostics/openrouter.py`'s private
+  `_sanitize_message()` (redacts a known API key, `Bearer <token>`, and
+  `sk-...` shapes, then truncates to 500 chars) so both the OpenRouter
+  diagnostic script and the investigation workflow reuse one proven-safe
+  redaction path instead of two copies drifting apart. The runtime-failure
+  log line now includes `message=<sanitized>` alongside `exception_class`
+  and the stack frames. A new `configure_investigation_runtime_logger()`
+  attaches a `RotatingFileHandler` (5 MB × 3 backups) to the
+  `promptql.investigation` logger, writing to `services/api/logs/
+  investigation-runtime.log` (gitignored via the existing bare `logs`
+  pattern) — called once from `create_app()` in `main.py`, not at import
+  time, matching how `create_observability()` already wires up the
+  structured-event logger.
+- **Design decision:** the sanitized message goes on the backend log line
+  only — `record_investigation_diagnostic_failure`'s structured JSON event
+  (which the live SSE broker republishes toward the client) keeps its
+  existing `ALLOWED_EVENT_FIELDS` allowlist unchanged and still carries no
+  message. Redaction narrows what can leak; it is not a guarantee, so the
+  boundary that actually matters is which sink an untrusted string is
+  allowed to reach, not just whether it passed through `sanitize_message()`
+  first.
+- **Validation evidence:** full suite —
+  `uv run python -m unittest discover -s tests -v` — 634 tests, 0 failures,
+  0 errors, 14 skipped. Added three tests to
+  `tests/unit/test_investigation_workflow.py` covering the message now
+  reaching the log (`test_unexpected_post_processing_error_terminally_fails_run`,
+  extended), secret redaction on that same path
+  (`test_unexpected_runtime_failure_log_redacts_secrets`), and the rotating
+  file handler actually persisting a line to disk and being idempotent
+  across repeated `configure_investigation_runtime_logger()` calls
+  (`test_configure_investigation_runtime_logger_writes_a_persistent_file`).
+  Beyond the test suite, ran a standalone script (outside unittest) that
+  called `create_app()`'s real logger wiring, forced
+  `RuntimeError("connector call failed: Authorization: Bearer sk-live-...")`
+  through `continue_persisted_run`, and read back the real bytes appended to
+  `services/api/logs/investigation-runtime.log`. The persisted line reads
+  `exception_class=RuntimeError message=connector call failed: Authorization:
+  Bearer [REDACTED]` followed by real stack frames pointing at
+  `investigation.py:533` → `:756` (`_complete_adaptive_run` →
+  `render_grounded_result`); the raw secret string never appears in the
+  file, and the client-facing `failed.error.message` stayed the generic
+  sanitized text, unchanged from before this fix.
+- **Unresolved:** the log directory path is a fixed relative location next
+  to `services/api`, not configurable via settings — acceptable for a
+  single-instance local/dev deployment, but would need revisiting (env-var
+  path, or shipping to the same place the OTEL/Langfuse export already goes)
+  before this runs anywhere with an ephemeral or read-only filesystem.
+
+## 2026-08-29 - extraction UI is a projection of the typed response
+
+- **Concept:** `InvestigationConsolePage.tsx` has two separate concerns:
+  the compact question-and-demo layout, and the extraction review state. The
+  live extraction endpoint can propose values, but the UI must copy those
+  values into the controlled form inputs so the review card shows what the
+  backend actually returned rather than an independent "not detected" view.
+- **Where:** `extractDetails()` writes each `response.extracted` field to
+  `form` before rendering the review card. The console heading now uses the
+  compact `NEW INVESTIGATION` / `What happened?` hierarchy and the demo path
+  follows the question form rather than appearing above it as introductory
+  marketing content. `InvestigationConsolePage.test.tsx` protects the retired
+  heading and paragraph from returning.
+- **Validation evidence:** With `PROMPTQL_LLM_PROVIDER=groq`, a live local
+  `POST /v1/investigations/extract-grounding` for `PR 42 in
+  octo-org/analytics, deployment 1042, checkout throwing errors` returned
+  `repository_owner=octo-org`, `repository_name=analytics`,
+  `pull_request_number=42`, `deployment_reference=1042`, and
+  `incident_reference=null`. That is complete and correct for text that does
+  not name an incident.
+- **Design decision:** preserve the existing controlled-input prefill rather
+  than add a parallel display-only extraction state. The user can still edit
+  every value before the unchanged submit path starts a run.
+
+## 2026-08-29 — close the users-table startup check gap ADR-035 left open
+
+- **Concept:** `verify_database_ready()` (`app/database/engine.py`) is the
+  one deterministic gate meant to fail startup loudly whenever the schema
+  the ORM models expect is not the schema actually applied, instead of
+  letting the app boot and surface the mismatch as a generic sanitized 503
+  on the first real query. ADR-035's `20260829_0012_add_users_is_demo.py`
+  migration added `UserRow.is_demo` without extending this check, so a
+  database still on `20260828_0011` booted successfully and only failed
+  inside `PostgresUserRepository.authenticate()`, where the resulting
+  `psycopg.errors.UndefinedColumn` was caught by the generic
+  `except SQLAlchemyError` and re-raised as `AuthPersistenceError("Auth
+  persistence is unavailable.")` — a message identical to the one used for
+  an actually-unreachable database, giving no hint that the real cause was
+  one specific missing column. Reproduced live: `alembic current` showed
+  `20260828_0011` against a repo whose `alembic heads` was `20260829_0012`.
+- **Where:** `verify_database_ready()` now also inspects `users`' columns
+  and requires `{"id", "email", "password_hash", "created_at",
+  "is_demo"}`, raising the same `RunPersistenceError("Runtime database
+  migrations have not been applied.")` the existing `workflow_runs` check
+  raises — deliberately the same error type and message shape as every
+  other missing-migration case this function already guards, not a new
+  auth-specific one. Test:
+  `test_startup_rejects_users_table_missing_is_demo_column` in
+  `tests/unit/test_database_config.py`, mirroring
+  `test_startup_rejects_database_missing_users_table` immediately above it.
+- **Design decision:** extend the existing single startup check rather than
+  add a second one scoped to auth. `verify_database_ready()` already mixes
+  runtime and auth tables in one place; splitting it by domain would add a
+  second failure path with no behavioral benefit for a check that only
+  runs once, at startup.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  — 629 tests, OK, 14 pre-existing skips (630 total: one net-new test vs.
+  the 628 recorded in the ADR-035 entry below, alongside a small counting
+  discrepancy in that older entry).
+- **Unresolved question:** the live dev database is still one migration
+  behind (`alembic upgrade head` was not run as part of this change, since
+  it was out of scope for what was asked) — the next server restart will
+  now fail startup loudly with the new check instead of serving broken
+  logins, which is the intended behavior change, but the migration itself
+  still needs to be applied to actually fix login.
+
+## 2026-08-29 — ADR-035: an identity-flag bypass is safer than a fake credential
+
+- **Concept:** when one account's traffic must never reach a real external
+  system, the safest place to enforce that is the exact code path that is
+  already the single, exhaustive producer of a live connection — not a new
+  parallel check, and not a plausible-looking-but-inert stored credential.
+  ADR-035's `is_demo` flag is checked inside the same four functions
+  (`get_github_connector`, `get_github_code_evidence_source`,
+  `get_jira_connector`, `get_incident_source` in
+  `app/api/v1/connector_router.py`) that ADR-034 Phase 3 already made the
+  *only* place anywhere in the backend that turns a stored credential into
+  a live connector, confirmed by grepping every caller of
+  `from_stored_credential`/`get_credential_repository` before writing the
+  ADR. The rejected alternative — provisioning the demo account with a
+  real `credentials` row holding a syntactically valid but non-functional
+  token — would have been strictly worse than "meaningless encrypted
+  data": Phase 3's resolution code has no concept of a known-bad token, so
+  that account would still attempt a real outbound call on every
+  investigation step, with safety resting on an unenforced runtime
+  assumption (the token staying broken forever) instead of on code that
+  structurally prevents the call from being attempted.
+- **Where:** migration `20260829_0012_add_users_is_demo.py`; the
+  `current_user.is_demo` branch added to the four functions above; the
+  matching `GET/POST/DELETE /v1/credentials` short-circuits in
+  `app/api/v1/credentials_router.py`; `scripts/seed_demo_account.py`
+  (manual, idempotent, never a public endpoint) and the new public
+  `GET /v1/demo-account` config endpoint
+  (`app/api/v1/demo_account_router.py`) that serves the frontend the same
+  values the seed script provisioned, from the same
+  `PROMPTQL_DEMO_ACCOUNT_EMAIL`/`PROMPTQL_DEMO_ACCOUNT_PASSWORD` pair, so
+  the password exists in exactly one place rather than being duplicated
+  into frontend source.
+- **Design decision:** the demo account's password is deliberately not
+  secret — it is visibly pre-filled on a public landing page. That is
+  safe specifically *because* safety was built to depend on the `is_demo`
+  bypass alone, not on the password being hard to find or on restricting
+  who can reach the login form; anyone who retyped the visible
+  email/password directly, bypassing the "Try the Demo" button entirely,
+  would land on exactly the same safe, bypassed account.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  (628 tests, OK, 14 pre-existing skips) and `bun run test:web` (55
+  passed) after every implementation step, plus a live run against a
+  dedicated Neon test branch (never the application branch): the seed
+  script run twice proved idempotent; login and `GET /v1/credentials`
+  proved the demo response shape; a real investigation completed using
+  `app.state`'s `Fake*` connectors, confirmed to hold no HTTP client
+  attribute at all (no transport for a live call to travel over,
+  independent of any application logic); and a freshly registered
+  non-demo user with no stored credential was confirmed still rejected
+  with the original, unchanged `409`.
+- **Unresolved question:** ADR-034 Phases 3 and 4 themselves (per-request
+  connector resolution, and `workflow_runs.user_id` ownership isolation)
+  merged with zero documentation updates in their own commits — no
+  ARCHITECTURE.md or LEARNING-LOG.md entry existed for either until this
+  session's doc pass folded the ARCHITECTURE.md side of that gap in
+  alongside ADR-035. Whether Phases 3/4 also deserve their own
+  LEARNING-LOG.md entries, written after the fact, is an open question
+  this session did not resolve — it was raised but scoped out as separate
+  from ADR-035's own documentation debt.
+
 ## 2026-08-28 - ADR-034 Phase 2: authenticated encryption at rest
 
 - **Concept reinforced:** provider credentials cross a narrow security boundary:
@@ -3708,3 +4018,300 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   above (round/action-history merging, and choosing the field-based
   fact-recurrence mechanism the plan already offered as an option) are
   both within what Steps 1–5 asked for, not scope changes.
+
+### 2026-09-08 - Derive code-change facts from a commit with no pull request
+
+- **V2 milestone:** V2.4 code-diagnosis evidence — closing a stall class
+  discovered live rather than in a test.
+- **Engineering concept and syntax:** `DeterministicBaseline.investigate`
+  (`investigations/baseline.py`) called `GET_COMMIT` for every
+  deployment-sourced commit unconditionally, but only called `GET_DIFF`
+  (changed-file/diff-hunk evidence) when `request.pull_request_number` was
+  present. A deployment's commit and a request's referenced PR are
+  independent facts, so a commit pushed straight to `main` had commit
+  metadata but no changed-file evidence at all, and
+  `derive_code_failure_facts` (`fact_derivation/code_change.py`) had
+  nothing to derive from — the investigation stalled with `no_progress`.
+  [ADR-036](decisions/ADR-036-commit-scoped-code-change-evidence.md)
+  chose Option B: new, parallel `CommitChangedFileEvidenceContent`/
+  `CommitDiffHunkEvidenceContent` types correlated by `commit_sha` (never
+  `pull_request_number`), not a shared/optional key on the existing
+  PR-scoped types — the domain's typed-contract discipline says a
+  consumer should never have to branch on "which correlation key is
+  populated," and extending the existing types would have forced exactly
+  that on every current and future consumer.
+- **Implementation locations, in commit order:** (1)
+  `connectors/github_code_http.py`'s new
+  `get_commit_changed_file_evidence`, reusing `parse_github_patch` via
+  sibling `_normalize_commit_changed_file`/`_normalize_commit_hunk`
+  methods, plus `EvidenceKind.COMMIT_CHANGED_FILE`/`COMMIT_DIFF_HUNK` and
+  the two new content types in `investigations/models.py`; (2) a second,
+  fully parallel branch in `derive_code_failure_facts` correlating by
+  `commit_sha` instead of `pull_request_number`, producing the same
+  `ChangedFileFact`/`ChangedFileMatchesFailureFileFact`/
+  `ChangedHunkOverlapsFailureLineFact` types with `pull_request_number=
+  None`; (3) a new `GET_COMMIT_DIFF` tool (`GetCommitDiffTool`,
+  `tools/adapters.py`) registered alongside — not replacing — `GET_DIFF`;
+  (4) the actual fix: `DeterministicBaseline` now calls `GET_COMMIT_DIFF`
+  unconditionally in the same loop that already calls `GET_COMMIT`,
+  independent of `request.pull_request_number`.
+- **The live-verification catch (or rather, the absence of one):** the
+  task required verifying `GET /repos/{owner}/{repo}/commits/{sha}`'s
+  `files[]` shape against the real GitHub API before writing the parser,
+  same discipline as the Sentry `lineNo` casing bug above. The
+  `.env` `GITHUB_TOKEN` turned out to be revoked (`401 Bad credentials`),
+  but the target repository is public, so an unauthenticated call to the
+  repo's own latest commit worked and confirmed the ADR's claimed shape
+  exactly — `filename`/`status`/`additions`/`deletions`/`changes`/`patch`,
+  the same fields `GitHubChangedFileResponse` already parses for PR files.
+  Unlike the Sentry case, this one had no surprise: the ADR's own live
+  check (done before it was written) was correct. Also surfaced but out
+  of scope: this endpoint isn't paginated like `/pulls/{n}/files` — GitHub
+  silently caps it around 300 files with no truncation signal in the
+  response body.
+- **A pre-existing test caught a wiring gap for free:**
+  `test_evidence_models.py`'s `test_each_initial_source_kind_content_pair_is_valid`
+  asserts every `EvidenceKind` member has a constructible, valid
+  content/source pair — adding the two new kinds without extending that
+  test's case list failed the assertion immediately, which is exactly the
+  "every consumer must handle every kind" property Option B was chosen to
+  preserve.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  from `services/api` after each of the four commits — 639, 639, 642, then
+  643 tests, 0 failures, 14 skipped (unrelated opt-in PostgreSQL/live-model
+  tests) each time. New tests: commit-diff connector normalization/error
+  cases in `test_github_code_http.py`; the two new content types in
+  `test_evidence_models.py`'s exhaustiveness case; a commit-sha-correlated
+  fact-derivation test in `test_deterministic_baseline.py` proving a
+  hunk from a *different* commit_sha does not overlap; the new tool's
+  definition/adapter/failure-path coverage in `test_tool_registry.py`;
+  and, most directly, `test_direct_to_main_commit_without_pull_request_still_derives_code_facts`,
+  which reproduces the exact motivating scenario (a deployment with no
+  `pull_request_number`) and asserts `changed_file` facts with
+  `pull_request_number=None` are now produced where none were before.
+
+### 2026-09-10 - The Jira link isn't where general Sentry API knowledge says it is
+
+- **V2 milestone:** ADR-037 phases 1-2 — new `HttpSentrySource` capabilities
+  for a planned repo-only deterministic scan, not part of `IncidentSource`.
+- **Engineering concept and syntax:** `HttpSentrySource.list_open_issues`
+  (`SentryOpenIssuesRequest` -> `tuple[SentryOpenIssue, ...]`) calls
+  `GET /projects/{org}/{project_slug}/issues/?query=is:unresolved[+release:
+  {version}]`, reusing the existing `SentryIssueResponse` raw model as-is —
+  live verification showed its fields (`id`, `shortId`, `status`,
+  `firstSeen`, `lastSeen`, `project.slug`) already matched the list
+  response exactly, so no new raw model was needed, only a new public
+  output type (`SentryOpenIssue` in `connectors/models.py`, precedented by
+  `JiraIssue`/`GitHubPullRequest` — a plain connector output, not
+  `Evidence`, since ADR-037's scan path is designed to never touch the
+  Evidence/Fact/Tool pipeline at all).
+- **The live-verification catch:** the task's premise was to verify
+  whether a Sentry issue's linked Jira ticket appears via a
+  `pluginIssue`/`pluginActor`-shaped field, "same conservatism as
+  `sentry_http.py`'s environment/category fields" (see the `lineNo`
+  casing entry above). It doesn't. Two real, unlinked sandbox issues were
+  checked first (`GET /organizations/{org}/issues/{id}/`) — no such field
+  exists anywhere in that response, linked or not. Then a live link was
+  created for real (Sentry's "+ Link issue" action under an issue's
+  External Links panel, not the org-level integration settings page, which
+  was the wrong action tried first and cost a full round of "still empty"
+  re-checks before the actual mechanism was found) and the check re-run:
+  the linked Jira key only appears via a **separate, dedicated endpoint**,
+  `GET /organizations/{org}/issues/{issue_id}/integrations/`, at
+  `response[0].externalIssues[0].key` — confirmed against a real ticket
+  (`KAN-5`, linked from Sentry issue `PYTHON-FASTAPI-1` to Jira project
+  `promptql` on `banalasaisathwik.atlassian.net`). The ordinary issue-detail
+  endpoint's complete key list was re-diffed before and after the link
+  existed and is unchanged either way — confirming the field literally
+  never appears there, not just that it's easy to miss. `id`
+  (`externalIssues[0].id`, `"4715209"`) is a decoy: it's Sentry's own
+  internal link-record ID, not the Jira issue — only `.key` is the actual
+  ticket key, and `.url` independently corroborates it
+  (`.../browse/KAN-5`).
+- **Two multiplicity decisions made explicit rather than assumed:** the
+  `/integrations/` response is a list of integrations, each carrying its
+  own `externalIssues` list — both could in principle have more than one
+  entry, but this sandbox org only ever exercised the single-entry case
+  live. Decided (not verified): filter to `provider.key == "jira"`
+  explicitly (a non-Jira integration's `externalIssues` must never be read
+  as a Jira key just because it's first in the list) and take the first
+  match on both axes rather than raising, since the public return type
+  (`JiraIssueKey | None`) is a scalar, not a list, and a caller (the
+  planned Phase 3 scan) must not abort a whole issue over an unresolved
+  tie between equally-plausible links. Documented in
+  [ADR-037](decisions/ADR-037-deterministic-correlation-path-for-repo-only-input.md)
+  as a Reconsideration trigger, not a proven-correct default.
+- **A cost consequence flagged before it could be forgotten:**
+  `get_linked_jira_key` is a second Sentry HTTP call per issue on top of
+  `list_open_issues`. ADR-037's original Phase 3 sketch ("explicit cap on
+  issues processed per scan, e.g. max 20") implicitly assumed one call per
+  issue; the ADR now records the real minimum (1 list call + 2 per issue
+  once Phase 3 adds at least one more evidence call) so the eventual
+  per-scan cap gets sized against reality instead of the original guess.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  from `services/api` — 648 passed before this change, 656 after (8 new:
+  `HttpSentrySourceLinkedJiraKeyTests`, covering the verified single-link
+  case, no-link, no-integrations-at-all, non-Jira-integration filtering,
+  both take-first multiplicity cases, a malformed-key rejection, and a
+  non-list-payload rejection), 0 failed, 14 skipped throughout. Both new
+  methods were also run live end-to-end (not just against mocked
+  transports) against the real `student-whe` Sentry org:
+  `list_open_issues` returned real typed `SentryOpenIssue` objects with
+  release-filtering and empty-result behavior confirmed;
+  `get_linked_jira_key` returned `"KAN-5"` for the linked issue and `None`
+  for the still-unlinked one, matching the exact two assertions requested
+  before the commit was made.
+
+### 2026-09-10 - A planned call turned out unnecessary once the data was actually read
+
+- **V2 milestone:** ADR-037 phase 3 — the deterministic scan orchestrator,
+  the first thing in this ADR that actually fans out across issues and
+  writes a real per-issue result, not just a single connector method.
+- **Engineering concept and syntax:** `app/workflows/correlation_scan.py`'s
+  `scan_repository_for_correlations` calls `list_open_issues` once, then
+  for each capped issue: `get_failure_location_evidence`,
+  `get_linked_jira_key` (phase 2), a new `get_issue_commit_sha`, and — only
+  if a commit resolved — `get_commit_evidence`/`get_commit_changed_file_evidence`
+  (ADR-036). `derive_deployment_code_facts`/`derive_code_failure_facts` run
+  as plain pure functions over whatever evidence was actually collected.
+  No `AgentExecutor`, no planner, no `InvestigationResult` — the return
+  type is a new, separate `RepositoryCorrelationScanResult`.
+- **The planned step that turned out wrong, found before writing it:**
+  the ADR's original sketch called for `get_deployment_evidence` per
+  issue. Checking live (issue detail for both real sandbox issues) showed
+  two things at once: a bare Sentry issue never exposes the single
+  `"version:environment"` string that method requires (only a *count* of
+  distinct environment values seen, never the value), and even if it did,
+  this sandbox's releases have `lastCommit: null` — so
+  `get_deployment_evidence` would fail with
+  `SentryReleaseMissingCommitError` regardless. Replaced with a new
+  `get_issue_commit_sha`, which turned out cheaper than expected: the
+  issue-detail response already embeds the *full* release object
+  (`firstRelease`, including `lastCommit`) directly — not just a version
+  string — so no second call to Sentry's dedicated Release API endpoint
+  was needed at all, reusing `_resolve_issue`'s existing single call. The
+  fallback (treat `firstRelease.version` as the commit SHA when
+  `lastCommit` is null and the version string happens to already match
+  `CommitSha`'s shape) is what actually resolves both real sandbox
+  issues — confirmed live before writing the fallback logic, not assumed.
+- **Two ambiguities resolved as explicit design, not silent defaults:**
+  (1) a `None` `jira_ticket` on its own can't distinguish "Sentry confirmed
+  no link" from "the lookup failed" — `IssueCorrelationResult.step_failures`
+  carries a `ScanStep.LINKED_JIRA_KEY` entry only in the second case,
+  proven with a dedicated test forcing a 401 on that one call. (2) GitHub's
+  undocumented ~300-file cap (deferred in the ADR-036 entry above) got an
+  explicit decision here rather than staying open indefinitely: a
+  no-extra-call heuristic, `possibly_truncated_file_list = (count == 300)`
+  — not certain (a commit could legitimately touch exactly 300 files), but
+  it is the only signal GitHub's API offers, and flagging a heuristic beats
+  silence.
+- **Per-issue failure isolation, not one big try/except:** `_call_step`
+  wraps each connector call individually, retrying exactly once and only
+  for `ToolFailure.retryable`'s existing category set
+  (`RATE_LIMITED`/`TIMEOUT`/`UPSTREAM_UNAVAILABLE`) — no backoff, not
+  `AgentExecutor`/`RetryPolicy`. This means a later step failing (e.g. the
+  commit isn't on GitHub) never discards evidence a successful earlier step
+  already produced — confirmed live (see below): `PYTHON-FASTAPI-1`'s
+  result still carries its failure-location evidence even though both
+  GitHub steps failed. `list_open_issues` itself is deliberately outside
+  this isolation — if the scan can't list issues at all, returning an
+  empty result would misrepresent "provider down" as "nothing open."
+- **`MAX_ISSUES_PER_SCAN` lowered from the ADR's own "e.g. max 20" sketch
+  to 5** — a direct instruction, not a default: at up to ~6 calls per
+  issue (confirmed, not estimated, once the real call sequence was known),
+  20 issues risked real rate-limit exposure before the orchestrator had
+  been proven correct even once against live data.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  from `services/api` — 670 passed (662 before this change plus 6 new
+  `HttpSentrySourceIssueCommitShaTests` plus 8 new `CorrelationScanTests`),
+  0 failed, 14 skipped. Then the real end-to-end proof requested before
+  approval to move on: both real `HttpSentrySource` and
+  `HttpGitHubCodeEvidenceSource` together (not mocked) against both real
+  sandbox issues. `PYTHON-FASTAPI-1`: `jira_ticket="KAN-5"`,
+  `commit_sha` resolved via the fallback, `status="partial"` — that
+  specific commit was never pushed to GitHub (a real `422`, mapped to
+  `invalid_response` since 422 isn't one of GitHub's specifically-handled
+  status codes), while the failure-location evidence collected earlier
+  survived into the result unchanged. `PYTHON-FLASK-1`: `jira_ticket=None`
+  with no `LINKED_JIRA_KEY` step failure (confirmed-unlinked, not a lookup
+  error), a real commit SHA that *is* on GitHub, `status="ok"`, 86 evidence
+  IDs and 31 `changed_file` facts derived from that commit's real diff.
+
+### 2026-09-10 - A silent-truncation bug caught by tracing a "should work" result
+
+- **V2 milestone:** ADR-037 phase 4 — the HTTP entry point, and the
+  investigation of the Phase 3 "partial" result that preceded it.
+- **The investigation:** told not to accept the Phase 3 report's "partial"
+  status as proof the per-issue isolation worked and move on, checked
+  whether `e1448f6171fd...` (`PYTHON-FASTAPI-1`'s resolved commit) existed
+  anywhere for real. It did — in `banalasaisathwik/promptql-sandbox`, a
+  *separate* GitHub repository from `banalasaisathwik/promptql`, which is
+  what the Phase 3 end-to-end verification script had been pointed at. The
+  commit's message and its one changed file
+  (`sandbox-target/app/checkout.py`) directly match the crash frame. The
+  earlier "partial" report was a bug in the verification script, not in
+  `get_issue_commit_sha` or the scan — but it surfaced a real, load-bearing
+  fact worth documenting anyway: `get_issue_commit_sha`'s
+  release-version fallback is shape-validated only, never
+  existence-validated against the specific repo a scan targets, since
+  nothing in Sentry's API ties a project to a GitHub repository at all.
+  `repository_owner`/`repository_name`/`sentry_project_slug` are three
+  independent caller-supplied inputs with no cross-check.
+- **A small, deliberately scoped fix that came out of it:** GitHub's `422`
+  ("No commit found for SHA") fell through `github_http_base.py`'s
+  `_raise_for_status` into the generic `GitHubInvalidResponseError`
+  catch-all — genuinely additive, one new case
+  (`GitHubUnprocessableEntityError`, category `NOT_FOUND`, reusing the
+  existing shared category rather than adding one), every other status
+  code's mapping untouched. Verified against the real 422 this
+  investigation had already produced: re-running the deliberate
+  `promptql`/`promptql-sandbox` mismatch through the full scan now shows
+  `failure_code: "not_found"` in `step_failures` where it previously said
+  `"invalid_response"`.
+- **An unrelated discovery mid-investigation, explained rather than
+  worked around:** chasing why `git diff` kept under-reporting a docstring
+  I had just written led to `.local-tools/strip_python_comments.py` — a
+  deliberate git clean filter (its own docstring: "the commented learning
+  source remains in the workspace") that strips comments/docstrings from
+  what actually gets committed, while the working tree keeps them intact.
+  This matches CLAUDE.md's own instruction ("long teaching explanations
+  belong in the response or the learning log, not the source") enforced
+  at the git level. Nothing was lost — every comment written this session
+  survives in the working tree and in this log; the filter only changes
+  what git's history stores. Worth naming explicitly so a future "why does
+  my diff look smaller than my edit" moment doesn't need rediscovering it.
+- **Engineering concept and syntax (phase 4 itself):** `POST
+  /v1/correlation-scans` (`app/api/v1/correlation_scan_router.py`), a
+  synchronous route (no async/SSE run lifecycle — nothing here makes an
+  LLM call) returning `RepositoryCorrelationScanResult` directly. Three
+  decisions were made explicit before writing route code, since a new HTTP
+  route is a Level-2 public API/schema change: `sentry_project_slug` is a
+  required, independent request field rather than assumed equal to
+  `repository_name` (the mismatch investigation above is exactly why that
+  assumption would have been actively dangerous); the route requires an
+  authenticated caller with their own connected Sentry+GitHub credentials,
+  with no anonymous/demo fallback, since no fake equivalent of the new
+  Sentry scan methods exists; and the response is synchronous rather than
+  matching `POST /v1/investigations`'s async/SSE shape.
+- **A testability gap found while wiring the new dependency, fixed locally
+  rather than inherited:** `connector_router.py`'s existing
+  `get_incident_source`/`get_github_connector`/etc. call
+  `get_credential_repository(request)` as a plain function rather than a
+  `Depends()` parameter — invisible until a test tries to override it,
+  since `app.dependency_overrides` only intercepts `Depends()`-injected
+  parameters, not direct calls. The new `get_sentry_source_for_scan`
+  declares `credential_repository` as a real `Depends(get_credential_repository)`
+  parameter instead, matching how `credentials_router.py`'s own routes
+  already do it. The existing functions were left exactly as they were —
+  this was a choice for new code, not a fix applied elsewhere.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  from `services/api` — 670 passed before the 422 fix, 676 after (6 new:
+  `tests/integration/test_correlation_scan_api.py`'s
+  `CorrelationScanApiTests`, covering anonymous/demo/no-credential 409s,
+  a missing-field 422, a mapped `SentryConnectorError` 503, and a full
+  successful scan's response shape), 0 failed, 14 skipped throughout. The
+  422 mapping was independently confirmed against the real API twice: once
+  directly against `HttpGitHubCodeEvidenceSource.get_commit_evidence`, and
+  once by re-running the full live scan through the deliberate repo
+  mismatch and reading `failure_code: "not_found"` out of the actual
+  `step_failures` output.

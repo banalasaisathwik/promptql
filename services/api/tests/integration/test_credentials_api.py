@@ -66,7 +66,10 @@ class CredentialsApiTests(unittest.TestCase):
         )
 
         self.assertEqual(stored.status_code, 200)
-        self.assertEqual(stored.json(), {"provider": "github", "connected": True})
+        self.assertEqual(
+            stored.json(),
+            {"provider": "github", "connected": True, "source": "real"},
+        )
         self.assertNotIn("token", stored.text.lower())
 
         listed = self.client.get(
@@ -110,6 +113,107 @@ class CredentialsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["message"], "Credential storage is unavailable.")
         self.assertNotIn("token", response.text.lower())
+
+
+class _NeverCalledCredentialRepository:
+    def store_credential(self, *args: object, **kwargs: object) -> None:
+        raise AssertionError("store_credential must not be called for a demo user")
+
+    def get_decrypted_credential(self, *args: object, **kwargs: object) -> None:
+        raise AssertionError("get_decrypted_credential must not be called for a demo user")
+
+    def list_connected_providers(self, *args: object, **kwargs: object) -> None:
+        raise AssertionError("list_connected_providers must not be called for a demo user")
+
+    def delete_credential(self, *args: object, **kwargs: object) -> None:
+        raise AssertionError("delete_credential must not be called for a demo user")
+
+
+class DemoAccountCredentialsApiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.client = TestClient(app)
+
+    def setUp(self) -> None:
+        self.environment = patch.dict(
+            os.environ,
+            {"PROMPTQL_CREDENTIAL_ENCRYPTION_KEY": Fernet.generate_key().decode()},
+            clear=False,
+        )
+        self.environment.start()
+        self.user_repository = InMemoryUserRepository()
+        self.demo_user = self.user_repository.create_user(
+            "demo@example.com", "correct horse battery staple", is_demo=True
+        )
+        self.session_signer = SessionSigner(
+            secret_key="test-only-secret-key-32-characters!!",
+            max_age_seconds=3600,
+        )
+        app.dependency_overrides[get_user_repository] = lambda: self.user_repository
+        app.dependency_overrides[get_session_signer] = lambda: self.session_signer
+        app.dependency_overrides[get_credential_repository] = (
+            lambda: _NeverCalledCredentialRepository()
+        )
+
+    def tearDown(self) -> None:
+        app.dependency_overrides.clear()
+        self.environment.stop()
+
+    def _authenticated_headers(self) -> dict[str, str]:
+        return {
+            "cookie": (
+                f"{SESSION_COOKIE_NAME}={self.session_signer.sign(self.demo_user.id)}"
+            )
+        }
+
+    def test_get_shows_all_three_providers_connected_with_demo_source(self) -> None:
+        response = self.client.get(
+            "/v1/credentials", headers=self._authenticated_headers()
+        )
+
+        self.assertEqual(response.status_code, 200)
+        providers = {
+            item["provider"]: (item["connected"], item["source"])
+            for item in response.json()["providers"]
+        }
+        self.assertEqual(
+            providers,
+            {
+                "github": (True, "demo"),
+                "jira": (True, "demo"),
+                "sentry": (True, "demo"),
+            },
+        )
+
+    def test_post_is_rejected_with_403_and_does_not_touch_storage(self) -> None:
+        response = self.client.post(
+            "/v1/credentials",
+            headers=self._authenticated_headers(),
+            json={"provider": "github", "token": "irrelevant-token"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json(),
+            {
+                "code": "demo_account_credentials_immutable",
+                "message": "Demo workspace credentials cannot be changed.",
+            },
+        )
+
+    def test_delete_is_rejected_with_403_and_does_not_touch_storage(self) -> None:
+        response = self.client.delete(
+            "/v1/credentials/github", headers=self._authenticated_headers()
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json(),
+            {
+                "code": "demo_account_credentials_immutable",
+                "message": "Demo workspace credentials cannot be changed.",
+            },
+        )
 
 
 if __name__ == "__main__":

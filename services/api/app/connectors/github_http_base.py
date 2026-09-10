@@ -13,6 +13,7 @@ from app.connectors.errors import (
     GitHubRateLimitedError,
     GitHubTimeoutError,
     GitHubUnauthorizedError,
+    GitHubUnprocessableEntityError,
     GitHubUpstreamUnavailableError,
 )
 from app.observability import NoOpRuntimeTelemetry, RuntimeTelemetry
@@ -69,6 +70,8 @@ class BaseHttpGitHubConnector:
             raise GitHubForbiddenError()
         if status == 404:
             raise GitHubNotFoundError()
+        if status == 422:
+            raise GitHubUnprocessableEntityError()
         if 500 <= status <= 599:
             raise GitHubUpstreamUnavailableError()
         if not 200 <= status <= 299:

@@ -9,6 +9,7 @@ from app.observability.contracts import (
 )
 from app.observability.live_event_broker import LiveEventBroker
 from app.observability.observed_run_repository import ObservedRunRepository
+from app.observability.redaction import sanitize_message
 from app.observability.runtime_telemetry import (
     NoOpRuntimeTelemetry,
     RuntimeTelemetry,
@@ -29,4 +30,5 @@ __all__ = [
     "RuntimeTelemetry",
     "StepOutcome",
     "create_observability",
+    "sanitize_message",
 ]

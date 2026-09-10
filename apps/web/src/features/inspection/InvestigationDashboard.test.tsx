@@ -132,7 +132,7 @@ test('renders a budget stop separately from a failed or blocked tool state', () 
 })
 
 
-test('shows only validated hypotheses in the final grounded result', () => {
+test('renders a supported result statement before its grounded fact chain', () => {
   const markup = renderToStaticMarkup(<InvestigationDashboard run={{
     ...RUN,
     state: {
@@ -155,12 +155,18 @@ test('shows only validated hypotheses in the final grounded result', () => {
         subject: 'checkout.py',
         statement: 'Changes associated with checkout.py may have contributed to the incident.',
         supporting_fact_ids: ['F1'],
+        connected_fact_chain: ['F-deployment', 'F-change'],
       }],
     }],
   }} />)
 
-  expect(markup).toContain('Likely contributing factor')
+  expect(markup).toContain('Supported hypothesis')
   expect(markup).toContain('Changes associated with checkout.py may have contributed')
+  expect(markup).toContain('Connected fact chain')
+  expect(markup).toContain('F-deployment')
+  expect(markup.indexOf('Changes associated with checkout.py may have contributed')).toBeLessThan(
+    markup.indexOf('Connected fact chain'),
+  )
   expect(markup).not.toContain('provider rationale')
 })
 
@@ -209,6 +215,8 @@ test('projects only backend-validated code locations and recommendations', () =>
   expect(markup).toContain('checkout.py:42 in submit_order')
   expect(markup).toContain('The validated evidence identifies an error handling concern')
   expect(markup).toContain('Verify the error-handling path at the validated location.')
+  expect(markup).toContain('Recommended next steps')
+  expect(markup).toContain('01')
   expect(markup).not.toContain('provider code rationale')
 })
 

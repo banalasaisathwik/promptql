@@ -56,6 +56,58 @@ test('parses a pending investigation snapshot through the shared run route', asy
 })
 
 
+test('preserves a backend-grounded connected fact chain in a completed snapshot', async () => {
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    run_id: 'run-1',
+    workflow_name: 'investigation',
+    workflow_version: '2.19',
+    status: 'completed',
+    started_at: '2026-08-29T10:00:00Z',
+    completed_at: '2026-08-29T10:00:01Z',
+    steps: [],
+    request: {
+      repository_owner: 'octo-org',
+      repository_name: 'analytics',
+      question: 'Why did checkout fail?',
+    },
+    error: null,
+    state: {
+      working_memory: {
+        evidence: [], evidence_content: [], facts: [], missing_information: [],
+        validated_hypotheses: [], validated_code_findings: [],
+        developer_recommendations: [], action_history: [],
+      },
+      execution_state: {
+        rounds: [], hypothesis_generation_metadata: null, rejected_hypothesis_count: 0,
+        code_diagnosis_metadata: null, rejected_code_finding_count: 0,
+        max_tool_calls: 10, used_tool_calls: 1,
+        remaining_tool_calls: 9, termination_reason: 'goal_satisfied',
+      },
+    },
+    results: [{
+      termination_reason: 'goal_satisfied',
+      summary: 'Validated evidence supports a causal hypothesis.',
+      supported_hypotheses: [{
+        hypothesis_id: 'H1', kind: 'code_change_may_have_contributed',
+        subject: 'checkout.py', statement: 'A validated statement.',
+        supporting_fact_ids: ['F-deployment', 'F-change'],
+        connected_fact_chain: ['F-deployment', 'F-change'],
+      }],
+      code_findings: [], recommendations: [], key_fact_ids: [], missing_information: [],
+    }],
+  }), { status: 200 })) as typeof fetch
+
+  const run = await fetchRuntimeRun('run-1')
+
+  expect(run.workflow_name).toBe('investigation')
+  if (run.workflow_name === 'investigation') {
+    expect(run.results[0].supported_hypotheses[0].connected_fact_chain).toEqual([
+      'F-deployment', 'F-change',
+    ])
+  }
+})
+
+
 test('rejects a completed snapshot with an unvalidated code-location shape', async () => {
   globalThis.fetch = (async () => new Response(JSON.stringify({
     run_id: 'run-1',

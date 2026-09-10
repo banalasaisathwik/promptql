@@ -7,6 +7,8 @@ from fastapi.responses import JSONResponse
 from app.api.v1.auth_router import router as auth_router
 from app.api.v1.credentials_router import router as credentials_router
 from app.api.v1.connector_router import router as connector_router
+from app.api.v1.correlation_scan_router import router as correlation_scan_router
+from app.api.v1.demo_account_router import router as demo_account_router
 from app.api.v1.live_events_router import router as live_events_router
 from app.api.v1.models import (
     ApiError,
@@ -21,6 +23,7 @@ from app.auth import (
 )
 from app.config import (
     DatabaseSettings,
+    DemoAccountConfigurationError,
     GitHubConnectorMode,
     GitHubSettings,
     JiraConnectorMode,
@@ -65,7 +68,10 @@ from app.runtime import (
     RunRecordInvalidError,
     RunStateConflictError,
 )
-from app.workflows import InvestigationWorkflowService
+from app.workflows import (
+    InvestigationWorkflowService,
+    configure_investigation_runtime_logger,
+)
 
 
 async def fixture_not_found_handler(
@@ -125,6 +131,17 @@ async def credential_error_handler(
     return JSONResponse(status_code=503, content=error.model_dump(mode="json"))
 
 
+async def demo_account_configuration_error_handler(
+    _request: Request,
+    _error: DemoAccountConfigurationError,
+) -> JSONResponse:
+    error = ApiError(
+        code=ApiErrorCode.AUTH_PERSISTENCE_UNAVAILABLE,
+        message="Demo account is not configured.",
+    )
+    return JSONResponse(status_code=503, content=error.model_dump(mode="json"))
+
+
 async def run_record_invalid_handler(
     _request: Request,
     _error: RunRecordInvalidError,
@@ -148,6 +165,8 @@ def create_app(
     llm_settings: LLMSettings | None = None,
     llm_client: LLMClient | None = None,
 ) -> FastAPI:
+    configure_investigation_runtime_logger()
+
     if observability is not None:
         app_observability = observability
     else:
@@ -306,9 +325,11 @@ def create_app(
     application.state.live_run_task_registry = live_run_task_registry
     application.state.live_event_broker = live_event_broker
     application.include_router(connector_router)
+    application.include_router(correlation_scan_router)
     application.include_router(live_events_router)
     application.include_router(auth_router)
     application.include_router(credentials_router)
+    application.include_router(demo_account_router)
     application.add_exception_handler(
         FixtureNotFoundError,
         fixture_not_found_handler,
@@ -324,6 +345,10 @@ def create_app(
     application.add_exception_handler(
         CredentialDecryptionError,
         credential_error_handler,
+    )
+    application.add_exception_handler(
+        DemoAccountConfigurationError,
+        demo_account_configuration_error_handler,
     )
     application.add_exception_handler(
         RunPersistenceError,

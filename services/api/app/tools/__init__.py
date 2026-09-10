@@ -1,4 +1,5 @@
 from app.tools.adapters import (
+    GetCommitDiffTool,
     GetCommitTool,
     GetDeploymentsTool,
     GetDiffTool,
@@ -30,6 +31,7 @@ from app.tools.registry import ToolRegistry
 
 __all__ = [
     "DuplicateToolError",
+    "GetCommitDiffTool",
     "GetCommitTool",
     "GetDeploymentsTool",
     "GetDiffTool",

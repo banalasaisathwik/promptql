@@ -146,6 +146,54 @@ class DatabaseConfigurationTests(unittest.TestCase):
             ):
                 verify_database_ready(Engine())
 
+    def test_startup_rejects_users_table_missing_is_demo_column(self) -> None:
+        class Connection:
+            def execute(self, _statement) -> None:
+                return None
+
+        class Engine:
+            def connect(self):
+                class ConnectionContext:
+                    def __enter__(self):
+                        return Connection()
+
+                    def __exit__(self, *_args) -> None:
+                        return None
+
+                return ConnectionContext()
+
+        class Inspector:
+            def get_table_names(self):
+                return [
+                    "workflow_runs",
+                    "workflow_steps",
+                    "repository_fact_recurrence",
+                    "users",
+                    "credentials",
+                ]
+
+            def get_columns(self, table_name):
+                if table_name == "workflow_runs":
+                    return [
+                        {"name": "run_id"},
+                        {"name": "request_payload"},
+                        {"name": "investigation_state"},
+                        {"name": "user_id"},
+                    ]
+                return [
+                    {"name": "id"},
+                    {"name": "email"},
+                    {"name": "password_hash"},
+                    {"name": "created_at"},
+                ]
+
+        with patch("app.database.engine.inspect", return_value=Inspector()):
+            with self.assertRaisesRegex(
+                RunPersistenceError,
+                "migrations have not been applied",
+            ):
+                verify_database_ready(Engine())
+
 
 if __name__ == "__main__":
     unittest.main()

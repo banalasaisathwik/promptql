@@ -135,6 +135,17 @@ SUPPORTED_PLAN_VALIDATION_FAILURE_CODES = frozenset(
 )
 
 
+SUPPORTED_HYPOTHESIS_VALIDATION_FAILURE_CODES = frozenset(
+    {
+        "unknown_supporting_fact",
+        "unsupported_hypothesis_kind",
+        "entity_mismatch",
+        "missing_required_support",
+        "duplicate_fact_reference",
+    }
+)
+
+
 class SpanObservation:
     def __init__(self, span: Span) -> None:
         self._span = span
@@ -451,6 +462,8 @@ class RuntimeTelemetry:
         run_id: UUID,
         tool_id: str,
         outcome: str,
+        *,
+        failure_code: str | None = None,
     ) -> None:
         try:
             labels = {"tool.id": tool_id, "tool.outcome": outcome}
@@ -464,6 +477,7 @@ class RuntimeTelemetry:
             run_id=run_id,
             tool_id=tool_id,
             tool_outcome=outcome,
+            failure_code=failure_code,
         )
 
     def record_investigation_termination(
@@ -642,6 +656,31 @@ class RuntimeTelemetry:
         except Exception:
             self._warn_telemetry_failure("logs")
 
+    def record_hypothesis_validation_rejected(
+        self,
+        run_id: UUID,
+        subject: str,
+        kind: str,
+        supporting_fact_ids: tuple[str, ...],
+        failure_code: str,
+    ) -> None:
+        try:
+            if failure_code not in SUPPORTED_HYPOTHESIS_VALIDATION_FAILURE_CODES:
+                raise ValueError(
+                    "hypothesis validation failure code is not approved for logs"
+                )
+            self._event_logger.emit(
+                "hypothesis.validation_rejected",
+                logging.WARNING,
+                run_id=run_id,
+                hypothesis_subject=subject,
+                hypothesis_kind=kind,
+                hypothesis_supporting_fact_ids=",".join(supporting_fact_ids),
+                failure_code=failure_code,
+            )
+        except Exception:
+            self._warn_telemetry_failure("logs")
+
     def checkpoint(self, checkpoint: PersistenceCheckpoint) -> Iterator[None]:
         return use_persistence_checkpoint(checkpoint)
 
@@ -687,8 +726,12 @@ class RuntimeTelemetry:
                 workflow_name=run.workflow_name,
                 workflow_version=run.workflow_version,
                 run_status=run.status,
+
+
                 policy_decision=(
-                    run.result.decision if run.result is not None else None
+                    result.decision
+                    if (result := getattr(run, "result", None)) is not None
+                    else None
                 ),
                 failure_category=(
                     failure_category_for_runtime_code(run.error.code.value)

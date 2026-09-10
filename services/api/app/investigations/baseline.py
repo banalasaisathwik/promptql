@@ -142,14 +142,15 @@ class DeterministicBaseline:
             content = item.content
             if content.content_type != "deployment":
                 continue
-            await self._collect_tool(
-                evidence, missing, InvestigationToolId.GET_COMMIT,
-                {
-                    "repository_owner": request.repository_owner,
-                    "repository_name": request.repository_name,
-                    "commit_sha": content.commit_sha,
-                },
-            )
+            commit_arguments = {
+                "repository_owner": request.repository_owner,
+                "repository_name": request.repository_name,
+                "commit_sha": content.commit_sha,
+            }
+            await self._collect_tool(evidence, missing, InvestigationToolId.GET_COMMIT, commit_arguments)
+
+
+            await self._collect_tool(evidence, missing, InvestigationToolId.GET_COMMIT_DIFF, commit_arguments)
 
         if request.pull_request_number is not None:
             pull_request_arguments = {

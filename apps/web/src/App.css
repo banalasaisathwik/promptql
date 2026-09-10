@@ -1038,6 +1038,14 @@
   font: inherit;
 }
 
+.workspace-signup-link {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--purple);
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .investigation-question {
   color: var(--text-strong, #1f2933) !important;
   font-size: 1rem !important;

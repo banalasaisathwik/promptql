@@ -7,6 +7,7 @@ from app.connectors.errors import (
     FixtureNotFoundError,
     GitHubConnectorError,
     JiraConnectorError,
+    SentryConnectorError,
 )
 from app.connectors.models import (
     DeploymentEvidenceRequest,
@@ -74,7 +75,10 @@ class _EvidenceTool:
         if isinstance(error, ConnectorUnavailableError):
             code = ToolFailureCode.CAPABILITY_UNAVAILABLE
             message = "the underlying capability is unavailable"
-        elif isinstance(error, (GitHubConnectorError, JiraConnectorError)):
+        elif isinstance(
+            error,
+            (GitHubConnectorError, JiraConnectorError, SentryConnectorError),
+        ):
             code = ToolFailureCode(error.category.value)
             message = "the provider source failed to return evidence"
         elif isinstance(error, FixtureNotFoundError):
@@ -134,6 +138,21 @@ class GetDiffTool(_EvidenceTool):
             return self._failed(error)
 
 
+class GetCommitDiffTool(_EvidenceTool):
+    definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.GET_COMMIT_DIFF)
+
+    def __init__(self, source: GitHubCodeEvidenceSource, store: EvidenceStore) -> None:
+        super().__init__(store)
+        self._source = source
+
+    async def execute(self, arguments: Mapping[str, object]) -> ToolResult:
+        request = self._arguments(arguments)
+        try:
+            return self._observed(await self._source.get_commit_changed_file_evidence(request))
+        except (ConnectorUnavailableError, FixtureNotFoundError, GitHubConnectorError) as error:
+            return self._failed(error)
+
+
 class GetIncidentTool(_EvidenceTool):
     definition = next(item for item in TOOL_DEFINITIONS if item.tool_id == InvestigationToolId.GET_INCIDENT)
 
@@ -145,7 +164,11 @@ class GetIncidentTool(_EvidenceTool):
         request = self._arguments(arguments)
         try:
             return self._observed(await self._source.get_incident_evidence(request))
-        except (ConnectorUnavailableError, FixtureNotFoundError) as error:
+        except (
+            ConnectorUnavailableError,
+            FixtureNotFoundError,
+            SentryConnectorError,
+        ) as error:
             return self._failed(error)
 
 
@@ -166,7 +189,11 @@ class GetFailureLocationTool(_EvidenceTool):
             return self._observed(
                 await self._source.get_failure_location_evidence(request)
             )
-        except (ConnectorUnavailableError, FixtureNotFoundError) as error:
+        except (
+            ConnectorUnavailableError,
+            FixtureNotFoundError,
+            SentryConnectorError,
+        ) as error:
             return self._failed(error)
 
 
@@ -181,7 +208,11 @@ class GetDeploymentsTool(_EvidenceTool):
         request = self._arguments(arguments)
         try:
             return self._observed(await self._source.get_deployment_evidence(request))
-        except (ConnectorUnavailableError, FixtureNotFoundError) as error:
+        except (
+            ConnectorUnavailableError,
+            FixtureNotFoundError,
+            SentryConnectorError,
+        ) as error:
             return self._failed(error)
 
 
@@ -196,7 +227,11 @@ class QueryTelemetryTool(_EvidenceTool):
         request = self._arguments(arguments)
         try:
             return self._observed(await self._source.get_telemetry_window_evidence(request))
-        except (ConnectorUnavailableError, FixtureNotFoundError) as error:
+        except (
+            ConnectorUnavailableError,
+            FixtureNotFoundError,
+            SentryConnectorError,
+        ) as error:
             return self._failed(error)
 
 
@@ -252,6 +287,7 @@ def build_tool_adapters(
         GetCommitTool(github_source, store),
         GetPullRequestTool(github_source, store),
         GetDiffTool(github_source, store),
+        GetCommitDiffTool(github_source, store),
         GetFailureLocationTool(incident_source, store),
         GetIncidentTool(incident_source, store),
         GetDeploymentsTool(incident_source, store),

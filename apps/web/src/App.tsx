@@ -8,8 +8,11 @@ import './App.css'
 import { useEffect, useState } from 'react'
 import { InvestigationConsolePage } from './features/inspection/InvestigationConsolePage'
 import { InvestigationTraceView } from './features/inspection/InvestigationTraceView'
+import { LandingPage } from './features/inspection/LandingPage'
 import { RunDashboardPage } from './features/inspection/RunDashboardPage'
-import { runPathFor } from './routing'
+import { ConnectToolsPage } from './features/inspection/ConnectToolsPage'
+import { WorkspaceAuthPage } from './features/inspection/WorkspaceAuthPage'
+import { runTracePathFor } from './routing'
 
 
 function runIdFromPath(pathname: string): string | null {
@@ -26,8 +29,14 @@ function traceRunIdFromPath(pathname: string): string | null {
 
 function App() {
   const [pathname, setPathname] = useState(window.location.pathname)
+  const [demoPrefill, setDemoPrefill] = useState<{ email: string, password: string } | null>(null)
   const traceRunId = traceRunIdFromPath(pathname)
   const runId = runIdFromPath(pathname)
+
+  function navigate(nextPath: string) {
+    window.history.pushState(null, '', nextPath)
+    setPathname(nextPath)
+  }
 
   useEffect(() => {
     function updatePathname() {
@@ -45,12 +54,48 @@ function App() {
     return <RunDashboardPage runId={runId} />
   }
 
+  if (pathname === '/') {
+    return (
+      <LandingPage
+        onTryDemo={(email, password) => {
+          setDemoPrefill({ email, password })
+          navigate('/login')
+        }}
+        onExploreAnonymously={() => navigate('/console')}
+      />
+    )
+  }
+
+  if (pathname === '/signup' || pathname === '/login') {
+    return (
+      <WorkspaceAuthPage
+        initialMode={pathname === '/login' ? 'login' : 'signup'}
+        initialEmail={pathname === '/login' ? demoPrefill?.email : undefined}
+        initialPassword={pathname === '/login' ? demoPrefill?.password : undefined}
+        onAuthenticated={() => {
+          setDemoPrefill(null)
+          navigate('/connect')
+        }}
+        onModeChanged={(mode) => navigate(mode === 'login' ? '/login' : '/signup')}
+      />
+    )
+  }
+
+  if (pathname === '/connect') {
+    return (
+      <ConnectToolsPage
+        onContinue={() => navigate('/console')}
+        onLoggedOut={() => navigate('/login')}
+      />
+    )
+  }
+
+  // The console is shared by anonymous visitors and authenticated workspaces.
+  // Its existing demo action submits the same checkout-500 fixture for both.
   return (
     <InvestigationConsolePage
       onRunStarted={(nextRunId) => {
-        const nextPath = runPathFor(nextRunId)
-        window.history.pushState(null, '', nextPath)
-        setPathname(nextPath)
+        navigate(runTracePathFor(nextRunId))
       }}
     />
   )

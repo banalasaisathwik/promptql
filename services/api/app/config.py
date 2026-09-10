@@ -27,6 +27,10 @@ class AuthConfigurationError(RuntimeError):
     pass
 
 
+class DemoAccountConfigurationError(RuntimeError):
+    pass
+
+
 class GitHubConnectorMode(StrEnum):
     FAKE = "fake"
     GITHUB = "github"
@@ -382,6 +386,23 @@ class AuthSettings:
                 os.environ.get("AUTH_SESSION_MAX_AGE_SECONDS", "1209600")
             ),
         )
+
+
+@dataclass(frozen=True)
+class DemoAccountSettings:
+    email: str
+    password: str
+
+    @classmethod
+    def from_environment(cls) -> "DemoAccountSettings":
+        email = os.environ.get("PROMPTQL_DEMO_ACCOUNT_EMAIL", "").strip()
+        password = os.environ.get("PROMPTQL_DEMO_ACCOUNT_PASSWORD", "")
+        if not email or not password:
+            raise DemoAccountConfigurationError(
+                "PROMPTQL_DEMO_ACCOUNT_EMAIL and PROMPTQL_DEMO_ACCOUNT_PASSWORD "
+                "must both be set."
+            )
+        return cls(email=email, password=password)
 
 
 @dataclass(frozen=True)

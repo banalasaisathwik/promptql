@@ -93,7 +93,7 @@ async def get_github_connector(
     request: Request,
     current_user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> AsyncIterator[GitHubConnector]:
-    if current_user is None:
+    if current_user is None or current_user.is_demo:
         yield request.app.state.github_connector
         return
 
@@ -122,7 +122,7 @@ async def get_github_code_evidence_source(
     request: Request,
     current_user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> AsyncIterator[GitHubCodeEvidenceSource]:
-    if current_user is None:
+    if current_user is None or current_user.is_demo:
         yield request.app.state.github_code_source
         return
 
@@ -151,7 +151,7 @@ async def get_jira_connector(
     request: Request,
     current_user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> AsyncIterator[JiraConnector]:
-    if current_user is None:
+    if current_user is None or current_user.is_demo:
         yield request.app.state.jira_connector
         return
 
@@ -184,7 +184,7 @@ async def get_incident_source(
     request: Request,
     current_user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> AsyncIterator[IncidentSource]:
-    if current_user is None:
+    if current_user is None or current_user.is_demo:
         yield request.app.state.incident_source
         return
 

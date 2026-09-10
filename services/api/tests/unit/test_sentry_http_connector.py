@@ -7,6 +7,7 @@ import httpx
 from app.connectors.errors import (
     SentryDeployNotFoundError,
     SentryForbiddenError,
+    SentryIncompleteResultError,
     SentryInvalidDeploymentReferenceError,
     SentryInvalidResponseError,
     SentryNotFoundError,
@@ -21,6 +22,7 @@ from app.connectors.models import (
     DeploymentEvidenceRequest,
     FailureLocationEvidenceRequest,
     IncidentEvidenceRequest,
+    SentryOpenIssuesRequest,
     TelemetryFilter,
     TelemetrySignal,
     TelemetryWindowEvidenceRequest,
@@ -115,6 +117,60 @@ def stats_payload() -> dict:
     }
 
 
+def short_id_payload(**updates) -> dict:
+    payload = {
+        "group": issue_payload(id="6507332222"),
+        "groupId": "6507332222",
+        "organizationSlug": ORGANIZATION_SLUG,
+        "projectSlug": "checkout-api",
+        "shortId": "PYTHON-FASTAPI-1",
+    }
+    payload.update(updates)
+    return payload
+
+
+def open_issue_list_item(**updates) -> dict:
+    payload = {
+        "id": "7699024952",
+        "shortId": "PYTHON-FASTAPI-1",
+        "status": "unresolved",
+        "firstSeen": "2026-08-29T05:54:44.826751Z",
+        "lastSeen": "2026-08-29T05:59:31.353765Z",
+        "project": {"id": "4511988894531584", "slug": "python-fastapi"},
+    }
+    payload.update(updates)
+    return payload
+
+
+def jira_integration_payload(*, external_issues=None, **updates) -> dict:
+    payload = {
+        "id": "502008",
+        "name": "JIRA",
+        "status": "active",
+        "provider": {"key": "jira", "slug": "jira", "name": "Jira"},
+        "externalIssues": (
+            [{"id": "4715209", "key": "KAN-5", "url": "https://x/browse/KAN-5"}]
+            if external_issues is None
+            else external_issues
+        ),
+    }
+    payload.update(updates)
+    return payload
+
+
+def link_header(*, next_cursor: str | None, next_results: bool) -> str:
+    previous = (
+        '<https://sentry.io/api/0/x/?cursor=1:0:1>; rel="previous"; '
+        'results="false"; cursor="1:0:1"'
+    )
+    cursor = next_cursor or "1:100:0"
+    next_ = (
+        f'<https://sentry.io/api/0/x/?cursor={cursor}>; rel="next"; '
+        f'results="{"true" if next_results else "false"}"; cursor="{cursor}"'
+    )
+    return f"{previous}, {next_}"
+
+
 class SentryResponses:
     def __init__(self) -> None:
         self.issue = issue_payload()
@@ -202,6 +258,46 @@ class HttpSentrySourceSuccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence.content.function_name, "create_order")
         self.assertEqual(evidence.content.line_number, 87)
         self.assertEqual(evidence.content.error_category, "ValueError")
+
+    async def test_short_id_resolves_before_issue_and_event_requests(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            path = request.url.path
+            if path.endswith("/issues/PYTHON-FASTAPI-1/"):
+                return httpx.Response(404)
+            if path.endswith("/shortids/PYTHON-FASTAPI-1/"):
+                return httpx.Response(200, json=short_id_payload())
+            if path.endswith("/issues/6507332222/events/latest/"):
+                return httpx.Response(200, json=event_payload())
+            raise AssertionError(f"unexpected path {path}")
+
+        source, client = create_source(handler)
+        try:
+            incident = await source.get_incident_evidence(
+                IncidentEvidenceRequest(incident_reference="PYTHON-FASTAPI-1")
+            )
+            location = await source.get_failure_location_evidence(
+                FailureLocationEvidenceRequest(
+                    incident_reference="PYTHON-FASTAPI-1"
+                )
+            )
+        finally:
+            await client.aclose()
+
+        self.assertEqual(incident.content.service, "checkout-api")
+        self.assertEqual(location.content.file_path, "services/checkout.py")
+        self.assertEqual(
+            [request.url.path for request in requests],
+            [
+                "/api/0/organizations/acme/issues/PYTHON-FASTAPI-1/",
+                "/api/0/organizations/acme/shortids/PYTHON-FASTAPI-1/",
+                "/api/0/organizations/acme/issues/PYTHON-FASTAPI-1/",
+                "/api/0/organizations/acme/shortids/PYTHON-FASTAPI-1/",
+                "/api/0/organizations/acme/issues/6507332222/events/latest/",
+            ],
+        )
 
     async def test_frame_line_number_uses_sentrys_actual_camelcase_field(self) -> None:
         responses = SentryResponses()
@@ -306,6 +402,366 @@ class HttpSentrySourceSuccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("event.type:error", params["query"])
         self.assertIn("environment:production", params["query"])
         self.assertEqual(params["yAxis"], "count()")
+
+
+class HttpSentrySourceOpenIssuesTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lists_open_issues_and_normalizes_the_verified_fields(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[open_issue_list_item()],
+                headers={"link": link_header(next_cursor=None, next_results=False)},
+            )
+
+        source, client = create_source(handler)
+        try:
+            issues = await source.list_open_issues(
+                SentryOpenIssuesRequest(project_slug="python-fastapi")
+            )
+        finally:
+            await client.aclose()
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].issue_id, "7699024952")
+        self.assertEqual(issues[0].short_id, "PYTHON-FASTAPI-1")
+        self.assertEqual(issues[0].project_slug, "python-fastapi")
+        self.assertEqual(
+            issues[0].first_seen,
+            datetime(2026, 8, 29, 5, 54, 44, 826751, tzinfo=UTC),
+        )
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(
+            requests[0].url.path,
+            "/api/0/projects/acme/python-fastapi/issues/",
+        )
+        self.assertEqual(requests[0].url.params["query"], "is:unresolved")
+
+    async def test_release_filter_is_appended_to_the_query_parameter(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[],
+                headers={"link": link_header(next_cursor=None, next_results=False)},
+            )
+
+        source, client = create_source(handler)
+        try:
+            issues = await source.list_open_issues(
+                SentryOpenIssuesRequest(
+                    project_slug="python-fastapi",
+                    release="e1448f6171fd009aca9f8136f7e6ec8120a9e515",
+                )
+            )
+        finally:
+            await client.aclose()
+
+        self.assertEqual(issues, ())
+        self.assertEqual(
+            requests[0].url.params["query"],
+            "is:unresolved release:e1448f6171fd009aca9f8136f7e6ec8120a9e515",
+        )
+
+    async def test_follows_the_next_cursor_until_results_is_false(self) -> None:
+        pages = [
+            httpx.Response(
+                200,
+                json=[open_issue_list_item(id="1", shortId="PYTHON-FASTAPI-1")],
+                headers={"link": link_header(next_cursor="page-2", next_results=True)},
+            ),
+            httpx.Response(
+                200,
+                json=[open_issue_list_item(id="2", shortId="PYTHON-FASTAPI-2")],
+                headers={"link": link_header(next_cursor=None, next_results=False)},
+            ),
+        ]
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return pages[len(requests) - 1]
+
+        source, client = create_source(handler)
+        try:
+            issues = await source.list_open_issues(
+                SentryOpenIssuesRequest(project_slug="python-fastapi")
+            )
+        finally:
+            await client.aclose()
+
+        self.assertEqual([issue.issue_id for issue in issues], ["1", "2"])
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[1].url.params["cursor"], "page-2")
+
+    async def test_pagination_bound_is_a_typed_incomplete_result_not_a_silent_truncation(
+        self,
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=[open_issue_list_item()],
+                headers={"link": link_header(next_cursor="always-more", next_results=True)},
+            )
+
+        source, client = create_source(handler)
+        try:
+            with self.assertRaises(SentryIncompleteResultError):
+                await source.list_open_issues(
+                    SentryOpenIssuesRequest(project_slug="python-fastapi")
+                )
+        finally:
+            await client.aclose()
+
+    async def test_non_list_payload_is_rejected(self) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(200, json={"not": "a-list"})
+        )
+        try:
+            with self.assertRaises(SentryInvalidResponseError):
+                await source.list_open_issues(
+                    SentryOpenIssuesRequest(project_slug="python-fastapi")
+                )
+        finally:
+            await client.aclose()
+
+
+class HttpSentrySourceLinkedJiraKeyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_the_linked_jira_key_from_the_verified_field_path(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=[jira_integration_payload()])
+
+        source, client = create_source(handler)
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7699024952")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(linked_jira_key, "KAN-5")
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(
+            requests[0].url.path,
+            "/api/0/organizations/acme/issues/7699024952/integrations/",
+        )
+
+    async def test_returns_none_when_external_issues_is_empty(self) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(
+                200, json=[jira_integration_payload(external_issues=[])]
+            )
+        )
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7697191065")
+        finally:
+            await client.aclose()
+
+        self.assertIsNone(linked_jira_key)
+
+    async def test_returns_none_when_no_integrations_are_configured_at_all(self) -> None:
+        source, client = create_source(lambda _request: httpx.Response(200, json=[]))
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7697191065")
+        finally:
+            await client.aclose()
+
+        self.assertIsNone(linked_jira_key)
+
+    async def test_non_jira_integrations_are_filtered_out_not_assumed_to_be_jira(
+        self,
+    ) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(
+                200,
+                json=[
+                    jira_integration_payload(
+                        id="1",
+                        provider={"key": "github", "slug": "github", "name": "GitHub"},
+                        externalIssues=[{"id": "9", "key": "org/repo#42"}],
+                    )
+                ],
+            )
+        )
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7699024952")
+        finally:
+            await client.aclose()
+
+        self.assertIsNone(linked_jira_key)
+
+    async def test_multiple_jira_integrations_take_the_first_documented_choice(
+        self,
+    ) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(
+                200,
+                json=[
+                    jira_integration_payload(
+                        id="1", externalIssues=[{"id": "1", "key": "KAN-5"}]
+                    ),
+                    jira_integration_payload(
+                        id="2", externalIssues=[{"id": "2", "key": "KAN-9"}]
+                    ),
+                ],
+            )
+        )
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7699024952")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(linked_jira_key, "KAN-5")
+
+    async def test_multiple_external_issues_take_the_first_documented_choice(
+        self,
+    ) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(
+                200,
+                json=[
+                    jira_integration_payload(
+                        external_issues=[
+                            {"id": "1", "key": "KAN-5"},
+                            {"id": "2", "key": "KAN-6"},
+                        ]
+                    )
+                ],
+            )
+        )
+        try:
+            linked_jira_key = await source.get_linked_jira_key("7699024952")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(linked_jira_key, "KAN-5")
+
+    async def test_malformed_jira_key_shape_is_rejected_not_silently_dropped(self) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(
+                200,
+                json=[
+                    jira_integration_payload(
+                        externalIssues=[{"id": "1", "key": "not-a-valid-jira-key"}]
+                    )
+                ],
+            )
+        )
+        try:
+            with self.assertRaises(SentryInvalidResponseError):
+                await source.get_linked_jira_key("7699024952")
+        finally:
+            await client.aclose()
+
+    async def test_non_list_payload_is_rejected(self) -> None:
+        source, client = create_source(
+            lambda _request: httpx.Response(200, json={"not": "a-list"})
+        )
+        try:
+            with self.assertRaises(SentryInvalidResponseError):
+                await source.get_linked_jira_key("7699024952")
+        finally:
+            await client.aclose()
+
+
+class HttpSentrySourceIssueCommitShaTests(unittest.IsolatedAsyncioTestCase):
+    async def test_uses_lastcommit_when_the_release_tracks_one(self) -> None:
+        responses = SentryResponses()
+        responses.issue = issue_payload(
+            firstRelease={
+                "version": "checkout@1.0.0",
+                "lastCommit": {"id": "a" * 40},
+            }
+        )
+        source, client = create_source(responses)
+        try:
+            commit_sha = await source.get_issue_commit_sha("6507332222")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(commit_sha, "a" * 40)
+
+    async def test_falls_back_to_release_version_shaped_like_a_commit_sha(self) -> None:
+        responses = SentryResponses()
+        responses.issue = issue_payload(
+            firstRelease={"version": "e" * 40, "lastCommit": None}
+        )
+        source, client = create_source(responses)
+        try:
+            commit_sha = await source.get_issue_commit_sha("6507332222")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(commit_sha, "e" * 40)
+
+    async def test_returns_none_when_version_does_not_look_like_a_commit_sha(self) -> None:
+        responses = SentryResponses()
+        responses.issue = issue_payload(
+            firstRelease={"version": "checkout@1.0.0", "lastCommit": None}
+        )
+        source, client = create_source(responses)
+        try:
+            commit_sha = await source.get_issue_commit_sha("6507332222")
+        finally:
+            await client.aclose()
+
+        self.assertIsNone(commit_sha)
+
+    async def test_returns_none_when_the_issue_has_no_release_at_all(self) -> None:
+        responses = SentryResponses()
+        responses.issue = issue_payload(firstRelease=None)
+        source, client = create_source(responses)
+        try:
+            commit_sha = await source.get_issue_commit_sha("6507332222")
+        finally:
+            await client.aclose()
+
+        self.assertIsNone(commit_sha)
+
+    async def test_malformed_lastcommit_id_is_rejected_not_silently_dropped(self) -> None:
+        responses = SentryResponses()
+        responses.issue = issue_payload(
+            firstRelease={"version": "checkout@1.0.0", "lastCommit": {"id": "not-a-sha"}}
+        )
+        source, client = create_source(responses)
+        try:
+            with self.assertRaises(SentryInvalidResponseError):
+                await source.get_issue_commit_sha("6507332222")
+        finally:
+            await client.aclose()
+
+    async def test_resolves_via_short_id_the_same_as_other_issue_lookups(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            path = request.url.path
+            if path.endswith("/issues/PYTHON-FASTAPI-1/"):
+                return httpx.Response(404)
+            if path.endswith("/shortids/PYTHON-FASTAPI-1/"):
+                return httpx.Response(
+                    200,
+                    json=short_id_payload(
+                        group=issue_payload(
+                            id="6507332222",
+                            firstRelease={"version": "f" * 40, "lastCommit": None},
+                        )
+                    ),
+                )
+            raise AssertionError(f"unexpected path {path}")
+
+        source, client = create_source(handler)
+        try:
+            commit_sha = await source.get_issue_commit_sha("PYTHON-FASTAPI-1")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(commit_sha, "f" * 40)
 
 
 class HttpSentrySourceValidationTests(unittest.IsolatedAsyncioTestCase):

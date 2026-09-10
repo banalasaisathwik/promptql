@@ -50,6 +50,17 @@ def verify_database_ready(engine: Engine) -> None:
             raise RunPersistenceError(
                 "Runtime database migrations have not been applied."
             )
+
+
+        user_columns = {
+            column["name"] for column in database_inspector.get_columns("users")
+        }
+        if not {"id", "email", "password_hash", "created_at", "is_demo"}.issubset(
+            user_columns
+        ):
+            raise RunPersistenceError(
+                "Runtime database migrations have not been applied."
+            )
     except RunPersistenceError:
         raise
     except SQLAlchemyError:

@@ -12,6 +12,7 @@ from app.connectors.errors import (
     SentryConnectorError,
     SentryDeployNotFoundError,
     SentryForbiddenError,
+    SentryIncompleteResultError,
     SentryInvalidDeploymentReferenceError,
     SentryInvalidResponseError,
     SentryNotFoundError,
@@ -23,10 +24,14 @@ from app.connectors.errors import (
     SentryUpstreamUnavailableError,
 )
 from app.connectors.models import (
+    CommitSha,
     ConnectorSource,
     DeploymentEvidenceRequest,
     FailureLocationEvidenceRequest,
     IncidentEvidenceRequest,
+    JiraIssueKey,
+    SentryOpenIssue,
+    SentryOpenIssuesRequest,
     TelemetrySignal,
     TelemetryWindowEvidenceRequest,
 )
@@ -35,9 +40,11 @@ from app.connectors.sentry_http_models import (
     SentryEventResponse,
     SentryEventsStatsResponse,
     SentryExceptionEntryDataResponse,
+    SentryIssueIntegrationResponse,
     SentryIssueResponse,
     SentryReleaseResponse,
     SentryResponseModel,
+    SentryShortIdResponse,
 )
 from app.investigations import (
     DeploymentEvidenceContent,
@@ -54,7 +61,32 @@ from app.observability import FailureCategory, NoOpRuntimeTelemetry, RuntimeTele
 
 
 AwareDatetimeAdapter = TypeAdapter(AwareDatetime)
+JiraIssueKeyAdapter = TypeAdapter(JiraIssueKey)
+CommitShaAdapter = TypeAdapter(CommitSha)
 Clock = Callable[[], datetime]
+
+
+MAX_ISSUE_PAGES = 10
+
+
+def _parse_link_header(value: str | None) -> dict[str, dict[str, str]]:
+    links: dict[str, dict[str, str]] = {}
+    if not value:
+        return links
+    for entry in value.split(","):
+        segments = [segment.strip() for segment in entry.split(";")]
+        if not segments or not segments[0].startswith("<"):
+            continue
+        attributes = {"url": segments[0].strip("<>")}
+        for segment in segments[1:]:
+            key, separator, raw_value = segment.partition("=")
+            if not separator:
+                continue
+            attributes[key.strip()] = raw_value.strip().strip('"')
+        rel = attributes.get("rel")
+        if rel:
+            links[rel] = attributes
+    return links
 
 
 _SIGNAL_QUERY_FRAGMENTS: dict[TelemetrySignal, str] = {
@@ -163,15 +195,145 @@ class HttpSentrySource:
             self._record_success(span)
             return evidence
 
+    async def list_open_issues(
+        self,
+        request: SentryOpenIssuesRequest,
+    ) -> tuple[SentryOpenIssue, ...]:
+        with self._telemetry.observe_connector(
+            "sentry",
+            self.source.value,
+            "list_open_issues",
+        ) as span:
+            try:
+                issues = await self._load_open_issues(request)
+            except SentryConnectorError as error:
+                self._record_failure(span, error)
+                raise
+            self._record_success(span)
+            return issues
+
+    async def _load_open_issues(
+        self,
+        request: SentryOpenIssuesRequest,
+    ) -> tuple[SentryOpenIssue, ...]:
+        project_path = quote(request.project_slug, safe="")
+        query = "is:unresolved"
+        if request.release is not None:
+            query = f"{query} release:{request.release}"
+        path = f"/projects/{self._organization_path}/{project_path}/issues/"
+        params: dict[str, str] = {"query": query}
+
+        issues: list[SentryOpenIssue] = []
+        for _page in range(MAX_ISSUE_PAGES):
+            payload, response = await self._get_json_page(path, params)
+            if not isinstance(payload, list):
+                raise SentryInvalidResponseError()
+            try:
+                raw_issues = [
+                    SentryIssueResponse.model_validate(item) for item in payload
+                ]
+            except ValidationError:
+                raise SentryInvalidResponseError() from None
+            issues.extend(self._normalize_open_issue(raw_issue) for raw_issue in raw_issues)
+
+            next_link = _parse_link_header(response.headers.get("link")).get("next")
+            if next_link is None or next_link.get("results") != "true":
+                return tuple(issues)
+            params = {"query": query, "cursor": next_link["cursor"]}
+        raise SentryIncompleteResultError()
+
+    def _normalize_open_issue(self, raw_issue: SentryIssueResponse) -> SentryOpenIssue:
+        try:
+            return SentryOpenIssue(
+                issue_id=raw_issue.id,
+                short_id=raw_issue.shortId,
+                project_slug=raw_issue.project.slug,
+                first_seen=self._parse_datetime(raw_issue.firstSeen),
+                last_seen=self._parse_datetime(raw_issue.lastSeen),
+            )
+        except ValidationError:
+            raise SentryInvalidResponseError() from None
+
+    async def get_linked_jira_key(self, issue_id: str) -> JiraIssueKey | None:
+        with self._telemetry.observe_connector(
+            "sentry",
+            self.source.value,
+            "get_linked_jira_key",
+        ) as span:
+            try:
+                linked_jira_key = await self._load_linked_jira_key(issue_id)
+            except SentryConnectorError as error:
+                self._record_failure(span, error)
+                raise
+            self._record_success(span)
+            return linked_jira_key
+
+    async def _load_linked_jira_key(self, issue_id: str) -> JiraIssueKey | None:
+        payload = await self._get_json(
+            f"/organizations/{self._organization_path}/issues/"
+            f"{quote(issue_id, safe='')}/integrations/"
+        )
+        if not isinstance(payload, list):
+            raise SentryInvalidResponseError()
+        try:
+            integrations = [
+                SentryIssueIntegrationResponse.model_validate(item) for item in payload
+            ]
+        except ValidationError:
+            raise SentryInvalidResponseError() from None
+
+
+        jira_integrations = [
+            integration
+            for integration in integrations
+            if integration.provider.key == "jira"
+        ]
+        if not jira_integrations:
+            return None
+        external_issues = jira_integrations[0].externalIssues
+        if not external_issues:
+            return None
+        try:
+            return JiraIssueKeyAdapter.validate_python(external_issues[0].key)
+        except ValidationError:
+            raise SentryInvalidResponseError() from None
+
+    async def get_issue_commit_sha(self, issue_id: str) -> CommitSha | None:
+        with self._telemetry.observe_connector(
+            "sentry",
+            self.source.value,
+            "get_issue_commit_sha",
+        ) as span:
+            try:
+                commit_sha = await self._load_issue_commit_sha(issue_id)
+            except SentryConnectorError as error:
+                self._record_failure(span, error)
+                raise
+            self._record_success(span)
+            return commit_sha
+
+    async def _load_issue_commit_sha(self, issue_id: str) -> CommitSha | None:
+        raw_issue, _resolved_id = await self._resolve_issue(issue_id)
+        release = raw_issue.firstRelease
+        if release is None:
+            return None
+        if release.lastCommit is not None:
+            try:
+                return CommitShaAdapter.validate_python(release.lastCommit.id)
+            except ValidationError:
+                raise SentryInvalidResponseError() from None
+
+
+        try:
+            return CommitShaAdapter.validate_python(release.version)
+        except ValidationError:
+            return None
+
     async def _load_incident_evidence(
         self,
         request: IncidentEvidenceRequest,
     ) -> Evidence:
-        issue_id = quote(request.incident_reference, safe="")
-        raw_issue = await self._get_model(
-            f"/organizations/{self._organization_path}/issues/{issue_id}/",
-            SentryIssueResponse,
-        )
+        raw_issue, _issue_id = await self._resolve_issue(request.incident_reference)
         started_at = self._parse_datetime(raw_issue.firstSeen)
         try:
             return Evidence(
@@ -270,7 +432,7 @@ class HttpSentrySource:
         self,
         request: FailureLocationEvidenceRequest,
     ) -> Evidence:
-        issue_id = quote(request.incident_reference, safe="")
+        _raw_issue, issue_id = await self._resolve_issue(request.incident_reference)
         raw_event = await self._get_model(
             f"/organizations/{self._organization_path}/issues/{issue_id}"
             f"/events/latest/",
@@ -308,6 +470,25 @@ class HttpSentrySource:
             )
         except ValidationError:
             raise SentryInvalidResponseError() from None
+
+    async def _resolve_issue(
+        self,
+        incident_reference: str,
+    ) -> tuple[SentryIssueResponse, str]:
+        encoded_reference = quote(incident_reference, safe="")
+        try:
+            issue = await self._get_model(
+                f"/organizations/{self._organization_path}/issues/{encoded_reference}/",
+                SentryIssueResponse,
+            )
+            return issue, issue.id
+        except SentryNotFoundError:
+            resolved = await self._get_model(
+                f"/organizations/{self._organization_path}/shortids/"
+                f"{encoded_reference}/",
+                SentryShortIdResponse,
+            )
+            return resolved.group, resolved.groupId
 
     async def _load_telemetry_window_evidence(
         self,
@@ -426,6 +607,14 @@ class HttpSentrySource:
         path: str,
         params: dict[str, str] | None = None,
     ) -> Any:
+        payload, _response = await self._get_json_page(path, params)
+        return payload
+
+    async def _get_json_page(
+        self,
+        path: str,
+        params: dict[str, str] | None = None,
+    ) -> tuple[Any, httpx.Response]:
         try:
             response = await self._client.get(path, params=params)
         except httpx.TimeoutException:
@@ -434,7 +623,7 @@ class HttpSentrySource:
             raise SentryUpstreamUnavailableError() from None
         self._raise_for_status(response)
         try:
-            return response.json()
+            return response.json(), response
         except ValueError:
             raise SentryInvalidResponseError() from None
 

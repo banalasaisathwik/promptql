@@ -132,6 +132,27 @@ describe('LiveEventStreamController', () => {
     ])
   })
 
+  test('closes the stream after a terminal workflow event', () => {
+    const statuses: string[] = []
+    let fake: FakeEventSource | null = null
+    const controller = new LiveEventStreamController({
+      runId: 'run-1',
+      onEvent: () => undefined,
+      onStatusChange: (status) => statuses.push(status),
+      createEventSource: (url) => {
+        fake = new FakeEventSource(url)
+        return fake
+      },
+    })
+
+    controller.start()
+    fake?.emitOpen()
+    fake?.emitMessage(validEvent({ event: 'runtime.workflow.completed' }))
+
+    expect(fake?.closed).toBe(true)
+    expect(statuses).toEqual(['connecting', 'open', 'closed'])
+  })
+
   test('drops a malformed message without calling onEvent', () => {
     const received: LiveRunEvent[] = []
     let fake: FakeEventSource | null = null
