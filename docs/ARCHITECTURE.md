@@ -260,10 +260,10 @@ and `GitHubCodeEvidenceSource`/`IncidentSource` for investigation evidence.
   `DeploymentEvidenceRequest.deployment_reference` is parsed as
   `"version:environment"` to resolve one Sentry deploy unambiguously, since
   a release can have several environment-scoped deploys.
-- `HttpSentrySource` also exposes `list_open_issues` and
-  `get_linked_jira_key`, added for
+- `HttpSentrySource` also exposes `list_open_issues`, `get_linked_jira_key`,
+  and `get_issue_commit_sha`, added for
   [ADR-037](decisions/ADR-037-deterministic-correlation-path-for-repo-only-input.md)'s
-  planned repo-only deterministic scan. Deliberately **not** part of the
+  repo-only deterministic scan. Deliberately **not** part of the
   four-method `IncidentSource` protocol/`FakeIncidentSource` pair above —
   ADR-037's scan path is designed to never touch
   `AdaptiveInvestigationRuntime`/`TypedLLMPlanner`, so these live as
@@ -434,7 +434,7 @@ these were built incrementally under the V2.5–V2.16 milestones tracked in
 [Part 3's implementation sequence](#implementation-sequence) rather than each
 getting a separate decision record. [ADR-023](decisions/ADR-023-bounded-tool-retry-policy.md) covers the retry policy specifically.
 
-## Deterministic repo-only correlation scan (Implemented, phases 1-3; phase 4 planned)
+## Deterministic repo-only correlation scan (Implemented, all 4 phases)
 
 `app/workflows/correlation_scan.py`'s `scan_repository_for_correlations`
 (see [ADR-037](decisions/ADR-037-deterministic-correlation-path-for-repo-only-input.md))
@@ -458,8 +458,24 @@ never aborts the scan; the result is a flat
 `HttpSentrySource.get_issue_commit_sha` (new for this scan) resolves an
 issue's commit from its issue-detail response's embedded `firstRelease`
 object — not `get_deployment_evidence`, which needs an environment string
-a bare Sentry issue never exposes. Phase 4 (an HTTP entry point) is
-planned, not yet built.
+a bare Sentry issue never exposes.
+
+`POST /v1/correlation-scans` (`app/api/v1/correlation_scan_router.py`) is
+the entry point: synchronous, returns the full
+`RepositoryCorrelationScanResult` in the response body (no async/SSE run
+lifecycle — nothing here makes an LLM call or needs one), and requires an
+authenticated caller with their own connected Sentry and GitHub
+credentials. Unlike `get_incident_source`/`get_github_code_evidence_source`
+(`connector_router.py`), there is no anonymous/demo fallback — no fake
+equivalent of `list_open_issues`/`get_linked_jira_key`/
+`get_issue_commit_sha` exists, so `get_sentry_source_for_scan` (the new
+route's own dependency) returns a clean `409` instead. That dependency
+also takes `credential_repository` as a real `Depends()` parameter rather
+than calling `get_credential_repository(request)` directly the way
+`connector_router.py`'s existing functions do — the direct-call form
+bypasses `app.dependency_overrides` entirely, which would have made the
+new route untestable the same way; the existing functions were left
+unchanged.
 
 ## Grounding extraction: natural-language pre-step (Implemented)
 

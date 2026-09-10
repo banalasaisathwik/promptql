@@ -21,6 +21,7 @@ class ApiErrorCode(StrEnum):
     INVALID_CREDENTIALS = "invalid_credentials"
     AUTH_PERSISTENCE_UNAVAILABLE = "auth_persistence_unavailable"
     DEMO_ACCOUNT_CREDENTIALS_IMMUTABLE = "demo_account_credentials_immutable"
+    CORRELATION_SCAN_UPSTREAM_FAILED = "correlation_scan_upstream_failed"
 
 
 class ApiError(ContractModel):

@@ -1,6 +1,6 @@
 # ADR-037: Deterministic correlation path for repo-only input
 
-- Status: Proposed (Phases 1-3 decided and implemented; Phase 4 planned, not yet built)
+- Status: Accepted (all four phases decided and implemented)
 - Date: 2026-09-08
 - Owners: Repository owner
 - Supersedes: None
@@ -236,10 +236,55 @@ beyond this ADR's original `{pr, sentry_issue, jira_ticket, evidence_ids}`
 sketch), `possibly_truncated_file_list`, `status`
 (`ok`/`partial`/`failed`), `step_failures`.
 
-### Phase 4 — Wire up new entry point (PLANNED, not yet built)
+### Phase 4 — Wire up new entry point (IMPLEMENTED)
 
-A new route/service method taking only `{repo}`. Does not touch the
-existing planner-driven investigation path.
+`POST /v1/correlation-scans` (`app/api/v1/correlation_scan_router.py`).
+Three design decisions were made explicitly before implementation (per the
+Level-2 process — a new HTTP route is a public API/schema change), not
+assumed:
+
+- **Request body is not `{repo}`-only.** The original sketch above said
+  "a route taking only `{repo}`," but `scan_repository_for_correlations`
+  genuinely needs `sentry_project_slug` as an independent, required field —
+  proven by this ADR's own Phase 3 correction (`promptql` vs.
+  `promptql-sandbox`, a Sentry project whose commits live in a differently-
+  named repo). `CorrelationScanRequest` requires
+  `repository_owner`/`repository_name`/`sentry_project_slug` explicitly;
+  none is derived from another.
+- **Requires an authenticated user with their own connected Sentry and
+  GitHub credentials — no anonymous/demo fallback.** Unlike
+  `get_incident_source`/`get_github_code_evidence_source`
+  (`connector_router.py`), which fall back to `app.state`'s fake/demo
+  sources for anonymous callers, `list_open_issues`/`get_linked_jira_key`/
+  `get_issue_commit_sha` have no fake equivalent (deliberately, Phases
+  1-2), so there is nothing to fall back to. A new
+  `get_sentry_source_for_scan` dependency returns a clean `409` for an
+  anonymous or demo caller, or one with no stored Sentry credential.
+- **Synchronous, not async/SSE like `POST /v1/investigations`.** The scan
+  makes zero LLM calls and is bounded (≤~35 external calls at
+  `MAX_ISSUES_PER_SCAN = 5`); the existing async/SSE run-lifecycle
+  machinery exists specifically for unpredictable LLM planning latency,
+  which does not apply here. The route returns the full
+  `RepositoryCorrelationScanResult` directly in the response body.
+
+**A real testability gap found and fixed while building this, not
+inherited silently:** `connector_router.py`'s existing `get_incident_source`
+et al. call `get_credential_repository(request)` as a plain function, not
+`Depends(get_credential_repository)` — meaning `app.dependency_overrides`
+cannot intercept it, since overrides only affect `Depends()`-injected
+parameters. `get_sentry_source_for_scan` uses a real `Depends()` parameter
+instead, matching `credentials_router.py`'s own testable pattern rather
+than copying the untestable one forward into new code. The existing
+functions were not changed — this is a local, contained choice for new
+code, not a fix to pre-existing routes.
+
+`SentryConnectorError` from the one call `scan_repository_for_correlations`
+does not isolate (`list_open_issues` itself) is caught at the route and
+mapped to a typed `ApiError` (`CORRELATION_SCAN_UPSTREAM_FAILED`), `503`
+for the same retryable-shaped categories `_call_step` already treats as
+retryable plus `CONFIGURATION_ERROR`, `502` otherwise. Every per-issue
+failure inside the scan is already isolated into `step_failures` and never
+reaches the route as an exception.
 
 ### Dependency (satisfied)
 
@@ -316,9 +361,14 @@ Phase 3 above.
 status, confirmed-unlinked vs. lookup-failed disambiguation, GitHub-not-found
 handled as partial not a crash, no-resolvable-commit skips GitHub entirely,
 cap-before-fan-out with the non-silent `truncated` flag, the 300-file
-heuristic, and the single thin retry actually retrying exactly once). Full
-backend suite: `uv run python -m unittest discover -s tests -v` from
-`services/api` (670 passed, 0 failed, 14 skipped as of the Phase 3 commit).
+heuristic, and the single thin retry actually retrying exactly once).
+`POST /v1/correlation-scans`: `tests/integration/test_correlation_scan_api.py`
+(`CorrelationScanApiTests` — anonymous/demo/no-credential all `409` before
+any connector call, missing `sentry_project_slug` rejected as `422`, a
+`SentryConnectorError` from `list_open_issues` mapped to the typed
+`ApiError`, and a full successful scan's response shape). Full backend
+suite: `uv run python -m unittest discover -s tests -v` from `services/api`
+(676 passed, 0 failed, 14 skipped as of the Phase 4 commit).
 
 Live end-to-end, the real `HttpSentrySource` and `HttpGitHubCodeEvidenceSource`
 together (not mocked), against both real sandbox issues:

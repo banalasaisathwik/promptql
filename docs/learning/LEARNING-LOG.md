@@ -4052,3 +4052,82 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   with no `LINKED_JIRA_KEY` step failure (confirmed-unlinked, not a lookup
   error), a real commit SHA that *is* on GitHub, `status="ok"`, 86 evidence
   IDs and 31 `changed_file` facts derived from that commit's real diff.
+
+### 2026-09-10 - A silent-truncation bug caught by tracing a "should work" result
+
+- **V2 milestone:** ADR-037 phase 4 — the HTTP entry point, and the
+  investigation of the Phase 3 "partial" result that preceded it.
+- **The investigation:** told not to accept the Phase 3 report's "partial"
+  status as proof the per-issue isolation worked and move on, checked
+  whether `e1448f6171fd...` (`PYTHON-FASTAPI-1`'s resolved commit) existed
+  anywhere for real. It did — in `banalasaisathwik/promptql-sandbox`, a
+  *separate* GitHub repository from `banalasaisathwik/promptql`, which is
+  what the Phase 3 end-to-end verification script had been pointed at. The
+  commit's message and its one changed file
+  (`sandbox-target/app/checkout.py`) directly match the crash frame. The
+  earlier "partial" report was a bug in the verification script, not in
+  `get_issue_commit_sha` or the scan — but it surfaced a real, load-bearing
+  fact worth documenting anyway: `get_issue_commit_sha`'s
+  release-version fallback is shape-validated only, never
+  existence-validated against the specific repo a scan targets, since
+  nothing in Sentry's API ties a project to a GitHub repository at all.
+  `repository_owner`/`repository_name`/`sentry_project_slug` are three
+  independent caller-supplied inputs with no cross-check.
+- **A small, deliberately scoped fix that came out of it:** GitHub's `422`
+  ("No commit found for SHA") fell through `github_http_base.py`'s
+  `_raise_for_status` into the generic `GitHubInvalidResponseError`
+  catch-all — genuinely additive, one new case
+  (`GitHubUnprocessableEntityError`, category `NOT_FOUND`, reusing the
+  existing shared category rather than adding one), every other status
+  code's mapping untouched. Verified against the real 422 this
+  investigation had already produced: re-running the deliberate
+  `promptql`/`promptql-sandbox` mismatch through the full scan now shows
+  `failure_code: "not_found"` in `step_failures` where it previously said
+  `"invalid_response"`.
+- **An unrelated discovery mid-investigation, explained rather than
+  worked around:** chasing why `git diff` kept under-reporting a docstring
+  I had just written led to `.local-tools/strip_python_comments.py` — a
+  deliberate git clean filter (its own docstring: "the commented learning
+  source remains in the workspace") that strips comments/docstrings from
+  what actually gets committed, while the working tree keeps them intact.
+  This matches CLAUDE.md's own instruction ("long teaching explanations
+  belong in the response or the learning log, not the source") enforced
+  at the git level. Nothing was lost — every comment written this session
+  survives in the working tree and in this log; the filter only changes
+  what git's history stores. Worth naming explicitly so a future "why does
+  my diff look smaller than my edit" moment doesn't need rediscovering it.
+- **Engineering concept and syntax (phase 4 itself):** `POST
+  /v1/correlation-scans` (`app/api/v1/correlation_scan_router.py`), a
+  synchronous route (no async/SSE run lifecycle — nothing here makes an
+  LLM call) returning `RepositoryCorrelationScanResult` directly. Three
+  decisions were made explicit before writing route code, since a new HTTP
+  route is a Level-2 public API/schema change: `sentry_project_slug` is a
+  required, independent request field rather than assumed equal to
+  `repository_name` (the mismatch investigation above is exactly why that
+  assumption would have been actively dangerous); the route requires an
+  authenticated caller with their own connected Sentry+GitHub credentials,
+  with no anonymous/demo fallback, since no fake equivalent of the new
+  Sentry scan methods exists; and the response is synchronous rather than
+  matching `POST /v1/investigations`'s async/SSE shape.
+- **A testability gap found while wiring the new dependency, fixed locally
+  rather than inherited:** `connector_router.py`'s existing
+  `get_incident_source`/`get_github_connector`/etc. call
+  `get_credential_repository(request)` as a plain function rather than a
+  `Depends()` parameter — invisible until a test tries to override it,
+  since `app.dependency_overrides` only intercepts `Depends()`-injected
+  parameters, not direct calls. The new `get_sentry_source_for_scan`
+  declares `credential_repository` as a real `Depends(get_credential_repository)`
+  parameter instead, matching how `credentials_router.py`'s own routes
+  already do it. The existing functions were left exactly as they were —
+  this was a choice for new code, not a fix applied elsewhere.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  from `services/api` — 670 passed before the 422 fix, 676 after (6 new:
+  `tests/integration/test_correlation_scan_api.py`'s
+  `CorrelationScanApiTests`, covering anonymous/demo/no-credential 409s,
+  a missing-field 422, a mapped `SentryConnectorError` 503, and a full
+  successful scan's response shape), 0 failed, 14 skipped throughout. The
+  422 mapping was independently confirmed against the real API twice: once
+  directly against `HttpGitHubCodeEvidenceSource.get_commit_evidence`, and
+  once by re-running the full live scan through the deliberate repo
+  mismatch and reading `failure_code: "not_found"` out of the actual
+  `step_failures` output.
