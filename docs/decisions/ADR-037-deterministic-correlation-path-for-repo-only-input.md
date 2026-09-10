@@ -323,17 +323,24 @@ backend suite: `uv run python -m unittest discover -s tests -v` from
 Live end-to-end, the real `HttpSentrySource` and `HttpGitHubCodeEvidenceSource`
 together (not mocked), against both real sandbox issues:
 
-- **`python-fastapi` project (issue `PYTHON-FASTAPI-1`)**: `jira_ticket:
-  "KAN-5"`, `commit_sha: "e1448f6171fd..."` (resolved via the
-  `firstRelease.version` fallback — Sentry's `lastCommit` was `null`),
-  `status: "partial"` — `commit_evidence`/`commit_changed_file_evidence`
-  both failed with `failure_code: "invalid_response"`, because that commit
-  SHA was never pushed to GitHub (a local-only commit at the time this
-  release was tracked; GitHub's real response is `422`, which falls
-  through `_raise_for_status`'s generic non-2xx branch since 422 isn't one
-  of GitHub's specifically mapped codes). `evidence_ids` still contains
-  the successful failure-location evidence — proving a later step's
-  failure does not discard earlier-succeeding evidence.
+- **`python-fastapi` project (issue `PYTHON-FASTAPI-1`)**: first run
+  produced `jira_ticket: "KAN-5"`, `commit_sha: "e1448f6171fd..."`
+  (resolved via the `firstRelease.version` fallback — Sentry's
+  `lastCommit` was `null`), `status: "partial"` —
+  `commit_evidence`/`commit_changed_file_evidence` both failed (GitHub's
+  real response was `422`). **Corrected 2026-09-10**: that `422` was not
+  a genuinely-unpushed commit — the verification script was pointed at
+  the wrong repo (`banalasaisathwik/promptql`). The commit is real and
+  exists in `banalasaisathwik/promptql-sandbox`, the app's actual
+  deployed source; re-run against the correct repo gives `status: "ok"`,
+  one changed file, one hunk, one `changed_file` fact, and the commit's
+  message/changed file directly match the crash frame. See
+  Reconsideration triggers for the resulting design finding (the fallback
+  is shape- not existence-validated) and the `COMMIT_NOT_FOUND` mapping
+  this prompted. `evidence_ids` in the original `"partial"` run still
+  contained the successful failure-location evidence even though the
+  GitHub steps failed — proving a later step's failure does not discard
+  earlier-succeeding evidence, independent of which repo was queried.
 - **`python-flask` project (issue `PYTHON-FLASK-1`)**: `jira_ticket: null`
   (confirmed unlinked — no `LINKED_JIRA_KEY` entry in `step_failures`,
   correctly distinguished from a lookup failure), `commit_sha:
@@ -358,8 +365,47 @@ together (not mocked), against both real sandbox issues:
   GitHub per issue) makes `MAX_ISSUES_PER_SCAN = 5` too slow or expensive
   in practice, or too conservative once correctness is well-established,
   revisit the cap before or shortly after shipping Phase 4's entry point.
-- If a real project's commits are reliably pushed to GitHub (unlike this
-  sandbox's `PYTHON-FASTAPI-1` case), `status: "partial"` from a genuinely
-  unpushed/local-only commit should become rare; if it turns out common in
-  practice, that is worth its own investigation rather than treated as
-  routine partial-status noise.
+- **Correction to the entry above, found 2026-09-10**: the `PYTHON-FASTAPI-1`
+  `"partial"` case was not a genuinely-unpushed commit. `e1448f6171fd...`
+  is real, and exists in a *different* repository
+  (`banalasaisathwik/promptql-sandbox`, not `banalasaisathwik/promptql`) —
+  the actual deployed source for that Sentry project's sandbox app. The
+  end-to-end verification script was pointed at the wrong repo. Re-run
+  against the correct repo: `status: "ok"`, one changed file, one hunk,
+  one `changed_file` fact, from a commit whose message and sole changed
+  file (`sandbox-target/app/checkout.py`) directly match the crash frame.
+  Genuinely-unpushed commits producing `"partial"` remains a real,
+  separate possibility worth revisiting if it turns out common in
+  practice — see the next trigger for why the two causes are currently
+  indistinguishable in the result.
+- **`get_issue_commit_sha`'s fallback is shape-validated only, never
+  existence-validated against the specific repo a scan targets.** When
+  `firstRelease.lastCommit` is null, the fallback trusts
+  `firstRelease.version` as a commit SHA purely because it matches
+  `CommitSha`'s regex — it has no way to confirm that SHA actually exists
+  in `repository_owner`/`repository_name`, because nothing in Sentry's API
+  ties a project to a specific GitHub repository. `repository_owner`,
+  `repository_name`, and `sentry_project_slug` are three independent
+  caller-supplied inputs to `scan_repository_for_correlations`, and
+  nothing validates that they name the same deployed app. Found live,
+  the hard way: the very `PYTHON-FASTAPI-1` mismatch above was caused by
+  exactly this — pairing `sentry_project_slug="python-fastapi"` with the
+  wrong repo produced a confident-looking `commit_sha` that then failed
+  at the GitHub step. This is the caller's responsibility to get right;
+  the scan cannot detect the mismatch itself, and a mismatch is
+  observationally identical (until the 2026-09-10 fix directly below) to
+  "this issue's commit genuinely hasn't been pushed yet" — both produced
+  `status: "partial"` with the same generic GitHub failure code. Revisit
+  if Phase 4 needs to actively guard against this (e.g. a configured
+  Sentry-project-to-repo mapping checked before scanning) rather than
+  leaving it purely on the caller.
+- **Partially addressed 2026-09-10**: `github_http_base.py`'s
+  `_raise_for_status` now maps GitHub's `422` (returned for "no commit
+  found for this SHA") to a distinct `COMMIT_NOT_FOUND` category instead
+  of the generic `INVALID_RESPONSE` catch-all — see
+  `GitHubCommitNotFoundError`. This makes "commit doesn't exist in this
+  repo" distinguishable from other invalid-response causes in
+  `step_failures`, but does not by itself distinguish "wrong repo" from
+  "not pushed yet" — both are still `COMMIT_NOT_FOUND` from the scan's
+  point of view, since neither Sentry nor GitHub's API can tell those two
+  apart without the mapping above.
