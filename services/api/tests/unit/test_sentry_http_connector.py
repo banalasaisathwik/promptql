@@ -669,6 +669,101 @@ class HttpSentrySourceLinkedJiraKeyTests(unittest.IsolatedAsyncioTestCase):
             await client.aclose()
 
 
+class HttpSentrySourceIssueCommitShaTests(unittest.IsolatedAsyncioTestCase):
+    async def test_uses_lastcommit_when_the_release_tracks_one(self) -> None:
+        responses = SentryResponses()
+        responses.issue = issue_payload(
+            firstRelease={
+                "version": "checkout@1.0.0",
+                "lastCommit": {"id": "a" * 40},
+            }
+        )
+        source, client = create_source(responses)
+        try:
+            commit_sha = await source.get_issue_commit_sha("6507332222")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(commit_sha, "a" * 40)
+
+    async def test_falls_back_to_release_version_shaped_like_a_commit_sha(self) -> None:
+        responses = SentryResponses()
+        responses.issue = issue_payload(
+            firstRelease={"version": "e" * 40, "lastCommit": None}
+        )
+        source, client = create_source(responses)
+        try:
+            commit_sha = await source.get_issue_commit_sha("6507332222")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(commit_sha, "e" * 40)
+
+    async def test_returns_none_when_version_does_not_look_like_a_commit_sha(self) -> None:
+        responses = SentryResponses()
+        responses.issue = issue_payload(
+            firstRelease={"version": "checkout@1.0.0", "lastCommit": None}
+        )
+        source, client = create_source(responses)
+        try:
+            commit_sha = await source.get_issue_commit_sha("6507332222")
+        finally:
+            await client.aclose()
+
+        self.assertIsNone(commit_sha)
+
+    async def test_returns_none_when_the_issue_has_no_release_at_all(self) -> None:
+        responses = SentryResponses()
+        responses.issue = issue_payload(firstRelease=None)
+        source, client = create_source(responses)
+        try:
+            commit_sha = await source.get_issue_commit_sha("6507332222")
+        finally:
+            await client.aclose()
+
+        self.assertIsNone(commit_sha)
+
+    async def test_malformed_lastcommit_id_is_rejected_not_silently_dropped(self) -> None:
+        responses = SentryResponses()
+        responses.issue = issue_payload(
+            firstRelease={"version": "checkout@1.0.0", "lastCommit": {"id": "not-a-sha"}}
+        )
+        source, client = create_source(responses)
+        try:
+            with self.assertRaises(SentryInvalidResponseError):
+                await source.get_issue_commit_sha("6507332222")
+        finally:
+            await client.aclose()
+
+    async def test_resolves_via_short_id_the_same_as_other_issue_lookups(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            path = request.url.path
+            if path.endswith("/issues/PYTHON-FASTAPI-1/"):
+                return httpx.Response(404)
+            if path.endswith("/shortids/PYTHON-FASTAPI-1/"):
+                return httpx.Response(
+                    200,
+                    json=short_id_payload(
+                        group=issue_payload(
+                            id="6507332222",
+                            firstRelease={"version": "f" * 40, "lastCommit": None},
+                        )
+                    ),
+                )
+            raise AssertionError(f"unexpected path {path}")
+
+        source, client = create_source(handler)
+        try:
+            commit_sha = await source.get_issue_commit_sha("PYTHON-FASTAPI-1")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(commit_sha, "f" * 40)
+
+
 class HttpSentrySourceValidationTests(unittest.IsolatedAsyncioTestCase):
     async def test_unsupported_telemetry_signal_is_rejected_before_http(self) -> None:
         request_count = 0

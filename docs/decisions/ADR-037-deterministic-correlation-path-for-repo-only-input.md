@@ -1,6 +1,6 @@
 # ADR-037: Deterministic correlation path for repo-only input
 
-- Status: Proposed (Phases 1-2 decided and implemented; Phases 3-4 planned, not yet built)
+- Status: Proposed (Phases 1-3 decided and implemented; Phase 4 planned, not yet built)
 - Date: 2026-09-08
 - Owners: Repository owner
 - Supersedes: None
@@ -152,16 +152,89 @@ per-scan call-count cap Phase 3 introduces (the original sketch below
 said "e.g. max 20") must size N against this real total, not against a
 1-call-per-issue assumption.
 
-### Phase 3 — Deterministic scan orchestrator (PLANNED, not yet built)
+### Phase 3 — Deterministic scan orchestrator (IMPLEMENTED)
 
-For each open Sentry issue (capped at N — sized per the call-budget note
-above), call the existing `get_failure_location_evidence`,
-`get_deployment_evidence`/`get_commit_evidence`, `get_changed_file_evidence`,
-then the existing `fact_derivation/deployment.py` and `code_change.py`
-functions directly as pure functions — no `AgentExecutor`, no planner.
-Explicit per-issue `try`/`except` with a thin retry (not `AgentExecutor`);
-one issue failing must not abort the scan. Emits a flat
-`{pr, sentry_issue, jira_ticket, evidence_ids}` list.
+`app/workflows/correlation_scan.py`'s `scan_repository_for_correlations`
+implements the orchestrator, with two material corrections to this ADR's
+original sketch, both found live rather than assumed:
+
+**`get_deployment_evidence` is not called at all — replaced by a new
+`HttpSentrySource.get_issue_commit_sha(issue_id) -> CommitSha | None`.**
+A bare Sentry issue never exposes a single `"version:environment"` string
+`get_deployment_evidence` requires (only a tag *facet count*, e.g.
+`{"key":"environment","totalValues":2}`, never the value itself), and this
+sandbox's real release data has `lastCommit: null` regardless — so even a
+successful environment resolution would still fail with
+`SentryReleaseMissingCommitError`. `get_issue_commit_sha` instead reuses
+`_resolve_issue`'s existing single call to the issue-detail endpoint (no
+dedicated call needed — verified live that the issue-detail response
+already embeds the *full* release object, including `lastCommit`, not just
+a version string) and: (1) returns `firstRelease.lastCommit.id` when
+Sentry tracked one; (2) otherwise falls back to `firstRelease.version`
+itself, **only** when it already matches `CommitSha`'s exact shape
+(shape-validated, never assumed); (3) otherwise `None`. Both real sandbox
+issues resolve via the fallback path (`firstRelease.lastCommit` is `null`
+for both; `firstRelease.version` happens to already be a raw commit SHA
+in this sandbox's release-tracking setup).
+
+**Call sequence, as actually built (per issue):**
+```
+get_failure_location_evidence(incident_reference=issue.issue_id)  — Sentry
+get_linked_jira_key(issue.issue_id)                                — Sentry (Phase 2)
+get_issue_commit_sha(issue.issue_id)                                — Sentry (new)
+if commit_sha:
+  get_commit_evidence(owner, name, commit_sha)                     — GitHub
+  get_commit_changed_file_evidence(owner, name, commit_sha)        — GitHub (ADR-036)
+derive_deployment_code_facts(evidence)  — pure; () here, no DeploymentEvidenceContent ever gathered
+derive_code_failure_facts(evidence)     — pure; the real per-issue fact output
+```
+
+**Per-scan cap: `MAX_ISSUES_PER_SCAN = 5`** (lowered from this ADR's
+original "e.g. max 20" sketch — at up to ~4 Sentry + 2 GitHub calls per
+issue, 20 issues risked real rate-limit/cost exposure before the
+orchestrator had been proven correct even once; raise later once verified
+against real, higher-volume data). Applied by slicing
+`open_issues[:max_issues]` *before* the per-issue loop starts, never as an
+afterthought. Non-silent: `RepositoryCorrelationScanResult` carries
+`total_open_issues_found`, `issues_scanned`, and `truncated: bool`
+explicitly, the same principle as flagging GitHub's file-list cap below
+rather than hiding either.
+
+**Per-issue failure isolation:** each connector call in `_correlate_issue`
+is wrapped individually by `_call_step`, a thin, single retry — exactly
+one retry, only for the same retryable category set `ToolFailure.retryable`
+already defines (`RATE_LIMITED`/`TIMEOUT`/`UPSTREAM_UNAVAILABLE`), no
+backoff — not `AgentExecutor`/`RetryPolicy`. A failed step is recorded as a
+typed `StepFailure(step, failure_code)` and the loop continues; evidence
+already collected from earlier-succeeding steps is never discarded because
+a later step failed. `list_open_issues` (the scan's bootstrapping call) is
+deliberately *not* wrapped this way — if the scan can't even list issues,
+returning an empty result would misrepresent "provider unavailable" as
+"zero open issues," so that failure is allowed to propagate.
+
+**A real, load-bearing ambiguity this design resolves explicitly:** a
+`None` `jira_ticket` is ambiguous on its own — "confirmed no link" and
+"lookup failed" both produce `None`. `step_failures` disambiguates: a
+`LINKED_JIRA_KEY` entry there means the lookup failed (link status
+unknown), its absence with `jira_ticket=None` means Sentry confirmed no
+link exists.
+
+**GitHub's ~300-file silent cap (deferred in ADR-036, decided here):** a
+cheap, no-extra-call heuristic —
+`possibly_truncated_file_list: bool = (changed_file_count == 300)` per
+issue. Imperfect (a commit could legitimately touch exactly 300 files) but
+it is the only signal GitHub's API offers, and surfacing a heuristic beats
+staying silent about it.
+
+**Output contract, as built** (`IssueCorrelationResult`): `sentry_issue_id`,
+`sentry_short_id`, `jira_ticket: JiraIssueKey | None`,
+`commit_sha: CommitSha | None`, `pull_request_number: int | None` (always
+`None` on this path — kept for shape parity with the PR-scoped facts the
+same `derive_code_failure_facts` also knows how to produce, and for a
+possible future PR-resolution phase), `evidence_ids`, `fact_ids` (addition
+beyond this ADR's original `{pr, sentry_issue, jira_ticket, evidence_ids}`
+sketch), `possibly_truncated_file_list`, `status`
+(`ok`/`partial`/`failed`), `step_failures`.
 
 ### Phase 4 — Wire up new entry point (PLANNED, not yet built)
 
@@ -175,13 +248,11 @@ evidence without a PR) had to land first — without it, any Sentry issue
 whose deployment commit has no associated PR would be silently dropped
 from results. ADR-036 is Accepted and implemented.
 
-### Bounded execution (planned, Phase 3)
+### Bounded execution (IMPLEMENTED)
 
-No `AgentExecutor`/budget-enforcer reuse; an explicit cap on issues
-processed per scan, sized against the real Sentry call count established
-above (1 list call + 2 calls per issue: `get_linked_jira_key` plus at least
-one more evidence call), not the originally-sketched "1 call per issue"
-assumption.
+No `AgentExecutor`/budget-enforcer reuse. `MAX_ISSUES_PER_SCAN = 5`,
+applied before fan-out, with an explicit non-silent `truncated` flag — see
+Phase 3 above.
 
 ## Consequences
 
@@ -195,10 +266,21 @@ assumption.
 - `get_linked_jira_key`'s take-first multiplicity choice (Phase 2) is a
   correctness assumption that has not been exercised against a real
   multi-link case; see Reconsideration triggers.
+- `derive_deployment_code_facts` is called in the Phase 3 chain but
+  currently always returns `()`, since no `DeploymentEvidenceContent` is
+  ever gathered on this path (deliberately — see Phase 3's
+  `get_deployment_evidence` explanation). Kept for forward-compatibility,
+  not dead code by design — it would activate automatically if a future
+  revision ever adds deployment evidence to this evidence set.
+- `MAX_ISSUES_PER_SCAN = 5` is conservative and will need raising once the
+  orchestrator is exercised against a higher-issue-count project; the real
+  per-issue call count (up to 4 Sentry + 2 GitHub) is now measured, not
+  estimated, so a future increase can be sized against real data.
 - Not materially relevant: no new production dependency, no persistence
   migration, no public HTTP API yet (Phase 4 adds one), no LLM/deterministic
-  boundary change within Phases 1-2 (both are pure connector-normalization
-  work, same category as the rest of `sentry_http.py`).
+  boundary change within Phases 1-3 (all pure connector-normalization and
+  deterministic orchestration, same category as the rest of
+  `sentry_http.py`/`fact_derivation`).
 
 ## Invariants
 
@@ -212,22 +294,57 @@ assumption.
 - `list_open_issues` never returns a partial page silently; hitting
   `MAX_ISSUE_PAGES` before Sentry's `Link` header reports
   `results="false"` raises `SentryIncompleteResultError`.
-- Phases 1-2 introduce zero coupling to `AdaptiveInvestigationRuntime`,
-  `TypedLLMPlanner`, or any Tool/Evidence/`InvestigationResult` type — both
-  new methods return plain connector-level types
-  (`SentryOpenIssue`, `JiraIssueKey | None`), not `Evidence`.
+- Phases 1-3 introduce zero coupling to `AdaptiveInvestigationRuntime`,
+  `TypedLLMPlanner`, or any Tool/Evidence/`InvestigationResult` type —
+  `scan_repository_for_correlations` returns `RepositoryCorrelationScanResult`,
+  a plain workflow-level type, never an `InvestigationResult`.
+- A `None` `jira_ticket` alone never distinguishes "confirmed no link" from
+  "lookup failed" — callers must check `step_failures` for a
+  `ScanStep.LINKED_JIRA_KEY` entry to tell them apart.
+- One issue's connector failure never aborts the scan; `list_open_issues`
+  failing does (see Phase 3's "Per-issue failure isolation" above).
+- The per-issue cap is applied before fan-out; a truncated scan is always
+  reported via `RepositoryCorrelationScanResult.truncated`, never silent.
 
 ## Validation
 
-`HttpSentrySource.list_open_issues` and `.get_linked_jira_key`: unit tests
-in `tests/unit/test_sentry_http_connector.py`
-(`HttpSentrySourceOpenIssuesTests`, `HttpSentrySourceLinkedJiraKeyTests`),
-plus live verification against the real Sentry API (`student-whe` org) for
-both methods, including the actual typed method (not just raw HTTP) for
-`list_open_issues`, and both the linked (`KAN-5`) and unlinked (`None`)
-cases for `get_linked_jira_key`. Full backend suite:
-`uv run python -m unittest discover -s tests -v` from `services/api`
-(656 passed, 0 failed, 14 skipped as of the Phase 2 commit).
+`HttpSentrySource.list_open_issues`, `.get_linked_jira_key`,
+`.get_issue_commit_sha`: unit tests in `tests/unit/test_sentry_http_connector.py`
+(`HttpSentrySourceOpenIssuesTests`, `HttpSentrySourceLinkedJiraKeyTests`,
+`HttpSentrySourceIssueCommitShaTests`). `scan_repository_for_correlations`:
+`tests/unit/test_correlation_scan.py` (`CorrelationScanTests` — ok/partial
+status, confirmed-unlinked vs. lookup-failed disambiguation, GitHub-not-found
+handled as partial not a crash, no-resolvable-commit skips GitHub entirely,
+cap-before-fan-out with the non-silent `truncated` flag, the 300-file
+heuristic, and the single thin retry actually retrying exactly once). Full
+backend suite: `uv run python -m unittest discover -s tests -v` from
+`services/api` (670 passed, 0 failed, 14 skipped as of the Phase 3 commit).
+
+Live end-to-end, the real `HttpSentrySource` and `HttpGitHubCodeEvidenceSource`
+together (not mocked), against both real sandbox issues:
+
+- **`python-fastapi` project (issue `PYTHON-FASTAPI-1`)**: `jira_ticket:
+  "KAN-5"`, `commit_sha: "e1448f6171fd..."` (resolved via the
+  `firstRelease.version` fallback — Sentry's `lastCommit` was `null`),
+  `status: "partial"` — `commit_evidence`/`commit_changed_file_evidence`
+  both failed with `failure_code: "invalid_response"`, because that commit
+  SHA was never pushed to GitHub (a local-only commit at the time this
+  release was tracked; GitHub's real response is `422`, which falls
+  through `_raise_for_status`'s generic non-2xx branch since 422 isn't one
+  of GitHub's specifically mapped codes). `evidence_ids` still contains
+  the successful failure-location evidence — proving a later step's
+  failure does not discard earlier-succeeding evidence.
+- **`python-flask` project (issue `PYTHON-FLASK-1`)**: `jira_ticket: null`
+  (confirmed unlinked — no `LINKED_JIRA_KEY` entry in `step_failures`,
+  correctly distinguished from a lookup failure), `commit_sha:
+  "c88b0693..."` (same fallback path, and this SHA *is* real on GitHub),
+  `status: "ok"`, 86 evidence IDs (1 failure-location + 1 commit + ~30
+  changed files + ~54 diff hunks) and 31 `changed_file` facts derived —
+  `possibly_truncated_file_list: false` (well under 300). No
+  `changed_hunk_overlaps_failure_line` facts, expected: this real commit
+  in the `promptql` repo is unrelated to the sandboxed Flask app's crash
+  site, so no hunk overlaps the failure-location's line — a correct
+  "no fact" outcome, not a bug.
 
 ## Reconsideration triggers
 
@@ -237,7 +354,12 @@ cases for `get_linked_jira_key`. Full backend suite:
   whether Sentry's ordering is actually meaningful (e.g. most-recent-first)
   before trusting it, or consider surfacing all candidates and letting
   Phase 3's caller decide instead of picking silently.
-- If Phase 3's real per-scan Sentry call count (1 list + 2 per issue,
-  minimum) makes the cap-per-scan number too expensive or slow in practice,
-  revisit before shipping Phase 4's entry point — this was sized on paper
-  here, not load-tested.
+- If the real per-scan call count (1 Sentry list + up to 4 Sentry + 2
+  GitHub per issue) makes `MAX_ISSUES_PER_SCAN = 5` too slow or expensive
+  in practice, or too conservative once correctness is well-established,
+  revisit the cap before or shortly after shipping Phase 4's entry point.
+- If a real project's commits are reliably pushed to GitHub (unlike this
+  sandbox's `PYTHON-FASTAPI-1` case), `status: "partial"` from a genuinely
+  unpushed/local-only commit should become rare; if it turns out common in
+  practice, that is worth its own investigation rather than treated as
+  routine partial-status noise.

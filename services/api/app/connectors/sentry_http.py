@@ -24,6 +24,7 @@ from app.connectors.errors import (
     SentryUpstreamUnavailableError,
 )
 from app.connectors.models import (
+    CommitSha,
     ConnectorSource,
     DeploymentEvidenceRequest,
     FailureLocationEvidenceRequest,
@@ -61,6 +62,7 @@ from app.observability import FailureCategory, NoOpRuntimeTelemetry, RuntimeTele
 
 AwareDatetimeAdapter = TypeAdapter(AwareDatetime)
 JiraIssueKeyAdapter = TypeAdapter(JiraIssueKey)
+CommitShaAdapter = TypeAdapter(CommitSha)
 Clock = Callable[[], datetime]
 
 
@@ -295,6 +297,37 @@ class HttpSentrySource:
             return JiraIssueKeyAdapter.validate_python(external_issues[0].key)
         except ValidationError:
             raise SentryInvalidResponseError() from None
+
+    async def get_issue_commit_sha(self, issue_id: str) -> CommitSha | None:
+        with self._telemetry.observe_connector(
+            "sentry",
+            self.source.value,
+            "get_issue_commit_sha",
+        ) as span:
+            try:
+                commit_sha = await self._load_issue_commit_sha(issue_id)
+            except SentryConnectorError as error:
+                self._record_failure(span, error)
+                raise
+            self._record_success(span)
+            return commit_sha
+
+    async def _load_issue_commit_sha(self, issue_id: str) -> CommitSha | None:
+        raw_issue, _resolved_id = await self._resolve_issue(issue_id)
+        release = raw_issue.firstRelease
+        if release is None:
+            return None
+        if release.lastCommit is not None:
+            try:
+                return CommitShaAdapter.validate_python(release.lastCommit.id)
+            except ValidationError:
+                raise SentryInvalidResponseError() from None
+
+
+        try:
+            return CommitShaAdapter.validate_python(release.version)
+        except ValidationError:
+            return None
 
     async def _load_incident_evidence(
         self,

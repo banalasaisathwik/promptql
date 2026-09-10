@@ -3977,3 +3977,78 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   `get_linked_jira_key` returned `"KAN-5"` for the linked issue and `None`
   for the still-unlinked one, matching the exact two assertions requested
   before the commit was made.
+
+### 2026-09-10 - A planned call turned out unnecessary once the data was actually read
+
+- **V2 milestone:** ADR-037 phase 3 — the deterministic scan orchestrator,
+  the first thing in this ADR that actually fans out across issues and
+  writes a real per-issue result, not just a single connector method.
+- **Engineering concept and syntax:** `app/workflows/correlation_scan.py`'s
+  `scan_repository_for_correlations` calls `list_open_issues` once, then
+  for each capped issue: `get_failure_location_evidence`,
+  `get_linked_jira_key` (phase 2), a new `get_issue_commit_sha`, and — only
+  if a commit resolved — `get_commit_evidence`/`get_commit_changed_file_evidence`
+  (ADR-036). `derive_deployment_code_facts`/`derive_code_failure_facts` run
+  as plain pure functions over whatever evidence was actually collected.
+  No `AgentExecutor`, no planner, no `InvestigationResult` — the return
+  type is a new, separate `RepositoryCorrelationScanResult`.
+- **The planned step that turned out wrong, found before writing it:**
+  the ADR's original sketch called for `get_deployment_evidence` per
+  issue. Checking live (issue detail for both real sandbox issues) showed
+  two things at once: a bare Sentry issue never exposes the single
+  `"version:environment"` string that method requires (only a *count* of
+  distinct environment values seen, never the value), and even if it did,
+  this sandbox's releases have `lastCommit: null` — so
+  `get_deployment_evidence` would fail with
+  `SentryReleaseMissingCommitError` regardless. Replaced with a new
+  `get_issue_commit_sha`, which turned out cheaper than expected: the
+  issue-detail response already embeds the *full* release object
+  (`firstRelease`, including `lastCommit`) directly — not just a version
+  string — so no second call to Sentry's dedicated Release API endpoint
+  was needed at all, reusing `_resolve_issue`'s existing single call. The
+  fallback (treat `firstRelease.version` as the commit SHA when
+  `lastCommit` is null and the version string happens to already match
+  `CommitSha`'s shape) is what actually resolves both real sandbox
+  issues — confirmed live before writing the fallback logic, not assumed.
+- **Two ambiguities resolved as explicit design, not silent defaults:**
+  (1) a `None` `jira_ticket` on its own can't distinguish "Sentry confirmed
+  no link" from "the lookup failed" — `IssueCorrelationResult.step_failures`
+  carries a `ScanStep.LINKED_JIRA_KEY` entry only in the second case,
+  proven with a dedicated test forcing a 401 on that one call. (2) GitHub's
+  undocumented ~300-file cap (deferred in the ADR-036 entry above) got an
+  explicit decision here rather than staying open indefinitely: a
+  no-extra-call heuristic, `possibly_truncated_file_list = (count == 300)`
+  — not certain (a commit could legitimately touch exactly 300 files), but
+  it is the only signal GitHub's API offers, and flagging a heuristic beats
+  silence.
+- **Per-issue failure isolation, not one big try/except:** `_call_step`
+  wraps each connector call individually, retrying exactly once and only
+  for `ToolFailure.retryable`'s existing category set
+  (`RATE_LIMITED`/`TIMEOUT`/`UPSTREAM_UNAVAILABLE`) — no backoff, not
+  `AgentExecutor`/`RetryPolicy`. This means a later step failing (e.g. the
+  commit isn't on GitHub) never discards evidence a successful earlier step
+  already produced — confirmed live (see below): `PYTHON-FASTAPI-1`'s
+  result still carries its failure-location evidence even though both
+  GitHub steps failed. `list_open_issues` itself is deliberately outside
+  this isolation — if the scan can't list issues at all, returning an
+  empty result would misrepresent "provider down" as "nothing open."
+- **`MAX_ISSUES_PER_SCAN` lowered from the ADR's own "e.g. max 20" sketch
+  to 5** — a direct instruction, not a default: at up to ~6 calls per
+  issue (confirmed, not estimated, once the real call sequence was known),
+  20 issues risked real rate-limit exposure before the orchestrator had
+  been proven correct even once against live data.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  from `services/api` — 670 passed (662 before this change plus 6 new
+  `HttpSentrySourceIssueCommitShaTests` plus 8 new `CorrelationScanTests`),
+  0 failed, 14 skipped. Then the real end-to-end proof requested before
+  approval to move on: both real `HttpSentrySource` and
+  `HttpGitHubCodeEvidenceSource` together (not mocked) against both real
+  sandbox issues. `PYTHON-FASTAPI-1`: `jira_ticket="KAN-5"`,
+  `commit_sha` resolved via the fallback, `status="partial"` — that
+  specific commit was never pushed to GitHub (a real `422`, mapped to
+  `invalid_response` since 422 isn't one of GitHub's specifically-handled
+  status codes), while the failure-location evidence collected earlier
+  survived into the result unchanged. `PYTHON-FLASK-1`: `jira_ticket=None`
+  with no `LINKED_JIRA_KEY` step failure (confirmed-unlinked, not a lookup
+  error), a real commit SHA that *is* on GitHub, `status="ok"`, 86 evidence
+  IDs and 31 `changed_file` facts derived from that commit's real diff.

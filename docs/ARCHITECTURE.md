@@ -434,6 +434,33 @@ these were built incrementally under the V2.5–V2.16 milestones tracked in
 [Part 3's implementation sequence](#implementation-sequence) rather than each
 getting a separate decision record. [ADR-023](decisions/ADR-023-bounded-tool-retry-policy.md) covers the retry policy specifically.
 
+## Deterministic repo-only correlation scan (Implemented, phases 1-3; phase 4 planned)
+
+`app/workflows/correlation_scan.py`'s `scan_repository_for_correlations`
+(see [ADR-037](decisions/ADR-037-deterministic-correlation-path-for-repo-only-input.md))
+is a **second, entirely separate entry point** from everything above — it
+never touches `AdaptiveInvestigationRuntime`, `TypedLLMPlanner`, `Tool`/
+`ToolRegistry`, or `InvestigationResult`. Where the planner-driven path
+answers "why did *this* incident break" given a specific
+`incident_reference`, this path answers "what's currently open across this
+repo" given only `{repository_owner, repository_name, sentry_project_slug}`
+— a fixed, hardcoded call sequence per Sentry issue
+(`get_failure_location_evidence` → `get_linked_jira_key` →
+`get_issue_commit_sha` → `get_commit_evidence`/`get_commit_changed_file_evidence`
+→ the existing pure `derive_deployment_code_facts`/`derive_code_failure_facts`
+functions), capped at `MAX_ISSUES_PER_SCAN = 5` issues per scan (applied
+before fan-out, with a non-silent `truncated` flag on the result). Each
+issue's connector calls are isolated with a thin, single retry
+(`_call_step`, not `AgentExecutor`/`RetryPolicy`) so one issue's failure
+never aborts the scan; the result is a flat
+`RepositoryCorrelationScanResult` with a per-issue
+`ok`/`partial`/`failed` `status`, never a hypothesis or rendered narrative.
+`HttpSentrySource.get_issue_commit_sha` (new for this scan) resolves an
+issue's commit from its issue-detail response's embedded `firstRelease`
+object — not `get_deployment_evidence`, which needs an environment string
+a bare Sentry issue never exposes. Phase 4 (an HTTP entry point) is
+planned, not yet built.
+
 ## Grounding extraction: natural-language pre-step (Implemented)
 
 `investigations/grounding_extraction/` lets a caller submit a plain-English
