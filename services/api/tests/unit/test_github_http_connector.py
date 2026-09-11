@@ -114,6 +114,34 @@ async def load_facts(
 
 
 class HttpGitHubConnectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_authenticated_context_uses_authoritative_login_and_accessible_repositories(
+        self,
+    ) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.url.path == "/user":
+                return httpx.Response(200, json={"login": "octocat"})
+            return httpx.Response(200, json=[{
+                "name": "collaborator-repo", "full_name": "other/collaborator-repo",
+                "private": True, "default_branch": "main", "owner": {"login": "other"},
+                "unneeded_provider_field": "never reaches our contract",
+            }])
+
+        client = httpx.AsyncClient(
+            base_url="https://api.github.test", transport=httpx.MockTransport(handler)
+        )
+        try:
+            login, repositories = await HttpGitHubConnector(client).get_authenticated_context()
+        finally:
+            await client.aclose()
+
+        self.assertEqual(login, "octocat")
+        self.assertEqual(repositories[0].full_name, "other/collaborator-repo")
+        self.assertEqual(requests[1].url.params["affiliation"], "owner,collaborator,organization")
+        self.assertEqual(requests[1].url.params["per_page"], "100")
+
     async def test_successful_pull_request_normalization(self) -> None:
         facts = await load_facts(GitHubResponses())
 

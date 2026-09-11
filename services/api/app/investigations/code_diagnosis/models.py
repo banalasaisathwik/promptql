@@ -15,6 +15,8 @@ from app.investigations.models import (
 MAX_CODE_FINDINGS = 3
 MAX_CODE_CONTEXT_LOCATIONS = 20
 MAX_CODE_LINES_PER_HUNK = 20
+MAX_PROPOSED_FIX_LINES = 60
+MAX_PROPOSED_FIX_EXPANSION_LINES = 20
 CodeExplanation = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
@@ -207,6 +209,85 @@ class ValidatedCodeFinding(ContractModel):
 class CodeFindingValidationResult(ContractModel):
     accepted_findings: tuple[ValidatedCodeFinding, ...] = ()
     rejected_candidates: tuple[RejectedCodeFinding, ...] = ()
+
+
+class FixProposalInput(ContractModel):
+    finding: ValidatedCodeFinding
+    hypothesis: CodeDiagnosisHypothesis
+    facts: Annotated[FactSet, Field(min_length=1, max_length=10)]
+    failure_error_category: NonEmptyString | None = None
+    source_evidence_id: InvestigationIdentifier
+    source_line_start: Annotated[int, Field(strict=True, gt=0)]
+    source_line_end: Annotated[int, Field(strict=True, gt=0)]
+    original_hunk: NonEmptyString
+    supporting_fact_ids: tuple[InvestigationIdentifier, ...]
+    supporting_evidence_ids: tuple[InvestigationIdentifier, ...]
+
+
+class ProposedCodeFixCandidate(ContractModel):
+    finding_id: InvestigationIdentifier
+    file_path: NonEmptyString
+    corrected_hunk: NonEmptyString
+    failure_mechanism: CodeExplanation
+    fix_strategy: CodeExplanation
+    explanation: CodeExplanation
+    supporting_fact_ids: Annotated[
+        tuple[InvestigationIdentifier, ...], Field(min_length=1, max_length=10)
+    ]
+    supporting_evidence_ids: Annotated[
+        tuple[InvestigationIdentifier, ...], Field(min_length=1, max_length=30)
+    ]
+
+
+class FixProposalOutput(ContractModel):
+    candidate: ProposedCodeFixCandidate | None = None
+
+
+class ProposedCodeFix(ContractModel):
+    fix_id: InvestigationIdentifier
+    finding_id: InvestigationIdentifier
+    file_path: NonEmptyString
+    function_name: NonEmptyString | None = None
+    line_start: Annotated[int, Field(strict=True, gt=0)]
+    line_end: Annotated[int, Field(strict=True, gt=0)]
+    original_hunk: NonEmptyString
+    corrected_hunk: NonEmptyString
+    failure_mechanism: NonEmptyString
+    fix_strategy: NonEmptyString
+    explanation: NonEmptyString
+    supporting_fact_ids: tuple[InvestigationIdentifier, ...]
+    supporting_evidence_ids: tuple[InvestigationIdentifier, ...]
+
+
+class CodeFixStatus(StrEnum):
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+
+
+class CodeFixProposalFailureCode(StrEnum):
+    PROVIDER_FAILURE = "provider_failure"
+    INVALID_RESPONSE = "invalid_response"
+    CANDIDATE_SCHEMA_INVALID = "candidate_schema_invalid"
+
+
+class CodeFixValidationFailureCode(StrEnum):
+    UNKNOWN_FINDING = "unknown_finding"
+    FILE_MISMATCH = "file_mismatch"
+    SUPPORT_MISMATCH = "support_mismatch"
+    SOURCE_CONTEXT_MISMATCH = "source_context_mismatch"
+    OVERSIZED_REPLACEMENT = "oversized_replacement"
+    UNSUPPORTED_IMPORT = "unsupported_import"
+    DIFF_MARKER_ARTIFACT = "diff_marker_artifact"
+
+
+class RejectedCodeFix(ContractModel):
+    candidate: ProposedCodeFixCandidate
+    reason: CodeFixValidationFailureCode
+
+
+class CodeFixValidationResult(ContractModel):
+    accepted_fixes: tuple[ProposedCodeFix, ...] = ()
+    rejected_candidates: tuple[RejectedCodeFix, ...] = ()
 
 
 class DeveloperRecommendationCode(StrEnum):

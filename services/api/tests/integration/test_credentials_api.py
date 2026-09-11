@@ -96,6 +96,30 @@ class CredentialsApiTests(unittest.TestCase):
             self.credential_repository.list_connected_providers(self.current_user.id), ()
         )
 
+    def test_all_three_provider_connection_routes_share_the_same_safe_contract(self) -> None:
+        for provider in CredentialProvider:
+            stored = self.client.post(
+                "/v1/credentials",
+                headers=self._authenticated_headers(),
+                json={"provider": provider.value, "token": f"test-{provider.value}-token"},
+            )
+            self.assertEqual(stored.status_code, 200)
+            self.assertEqual(stored.json()["provider"], provider.value)
+            self.assertTrue(stored.json()["connected"])
+            self.assertNotIn("token", stored.text.lower())
+
+            deleted = self.client.delete(
+                f"/v1/credentials/{provider.value}",
+                headers=self._authenticated_headers(),
+            )
+            self.assertEqual(deleted.status_code, 204)
+
+        listed = self.client.get("/v1/credentials", headers=self._authenticated_headers())
+        self.assertEqual(
+            {item["provider"]: item["connected"] for item in listed.json()["providers"]},
+            {"github": False, "jira": False, "sentry": False},
+        )
+
     def test_anonymous_requests_never_receive_credential_fields(self) -> None:
         response = self.client.get("/v1/credentials")
 

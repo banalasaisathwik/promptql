@@ -15,6 +15,11 @@ class SentryProjectResponse(SentryResponseModel):
     slug: RequiredString
 
 
+class SentryProjectDiscoveryResponse(SentryResponseModel):
+    slug: RequiredString
+    name: RequiredString
+
+
 class SentryCommitResponse(SentryResponseModel):
     id: RequiredString
 
@@ -27,6 +32,9 @@ class SentryIssueReleaseResponse(SentryResponseModel):
 class SentryIssueResponse(SentryResponseModel):
     id: RequiredString
     shortId: RequiredString
+
+
+    title: RequiredString | None = None
     status: Literal["unresolved", "resolved", "ignored"]
     firstSeen: RequiredString
     lastSeen: RequiredString

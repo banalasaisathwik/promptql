@@ -10,7 +10,7 @@ from app.investigations import (
     StackFrameEvidenceContent,
 )
 from app.investigations.fact_derivation._ids import fact_id, references
-from app.investigations.path_normalization import normalized_path
+from app.investigations.path_normalization import paths_match
 
 
 def derive_code_failure_facts(
@@ -41,9 +41,9 @@ def derive_code_failure_facts(
     for frame in frames:
         if frame.content.file_path is None:
             continue
-        failure_path = normalized_path(frame.content.file_path)
+        failure_path = frame.content.file_path
         for changed_file in changed_files:
-            if normalized_path(changed_file.content.path) != failure_path:
+            if not paths_match(changed_file.content.path, failure_path):
                 continue
             facts.append(
                 ChangedFileMatchesFailureFileFact(
@@ -57,7 +57,7 @@ def derive_code_failure_facts(
             for hunk in hunks:
                 if (
                     hunk.content.pull_request_number != changed_file.content.pull_request_number
-                    or normalized_path(hunk.content.file_path) != failure_path
+                    or not paths_match(hunk.content.file_path, failure_path)
                     or hunk.content.new_count == 0
                 ):
                     continue
@@ -95,9 +95,9 @@ def derive_code_failure_facts(
     for frame in frames:
         if frame.content.file_path is None:
             continue
-        failure_path = normalized_path(frame.content.file_path)
+        failure_path = frame.content.file_path
         for changed_file in commit_changed_files:
-            if normalized_path(changed_file.content.path) != failure_path:
+            if not paths_match(changed_file.content.path, failure_path):
                 continue
             facts.append(
                 ChangedFileMatchesFailureFileFact(
@@ -111,7 +111,7 @@ def derive_code_failure_facts(
             for hunk in commit_hunks:
                 if (
                     hunk.content.commit_sha != changed_file.content.commit_sha
-                    or normalized_path(hunk.content.file_path) != failure_path
+                    or not paths_match(hunk.content.file_path, failure_path)
                     or hunk.content.new_count == 0
                 ):
                     continue

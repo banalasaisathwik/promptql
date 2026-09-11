@@ -289,6 +289,46 @@ questions. Passing it proves the harness and supported scenario; it does not
 establish broad production incident quality. Grounding and reference agreement
 remain separate from true root-cause correctness.
 
+## Fix-proposal eval matrix
+
+A focused eval for the bounded fix-proposal boundary (ADR-038), separate from
+the V2 investigation harness above: each case builds its hypothesis and code
+finding deterministically (the real production validators, not an LLM), so
+every provider call it makes is the fix-proposal call itself. Five fixed
+fixture cases: KeyError/missing-mapping-key, None dereference, invalid input
+boundary, configuration/deployment mismatch, and one deliberately ambiguous
+case where correct abstention is the expected outcome.
+
+Run the fifteen-sample offline path without network access:
+
+```powershell
+uv run python -m app.evals.fix_proposal.runner --fake-dry-run --inter-request-delay-seconds 0
+```
+
+Preflight the configured provider without constructing a client or making an
+external request:
+
+```powershell
+uv run --env-file .env python -m app.evals.fix_proposal.runner --preflight
+```
+
+A bounded real smoke (one sample per case, five calls) requires explicit
+acknowledgement:
+
+```powershell
+uv run --env-file .env python -m app.evals.fix_proposal.runner --samples-per-case 1 --acknowledge-paid-calls
+```
+
+Metrics are behavioral, not string-similarity: `correct_file`,
+`correct_hunk_or_location`, `failure_mechanism_grounded` (deterministic
+per-case keyword grounding), `minimal_edit` (line-level diff), an
+`unsupported_identifier_rate` heuristic, `syntax_valid` (`ast.parse` on a
+dedented hunk), `fix_available_when_expected`, and
+`abstains_when_fix_not_grounded`. A real single-sample live run is expected
+to show ordinary model variance (see ADR-038's "Live verification — fix
+proposal" section) — `release_passed` on the fake-dry-run path is the
+release gate; a single live sample is a smoke, not a threshold.
+
 ## Intended layers
 
 | Layer | Intended location | Purpose | Status |

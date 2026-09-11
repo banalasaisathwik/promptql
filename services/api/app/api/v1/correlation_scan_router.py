@@ -17,6 +17,7 @@ from app.connectors.factory import create_sentry_http_client
 from app.connectors.models import ContractModel, NonEmptyString
 from app.connectors.protocols import GitHubCodeEvidenceSource
 from app.connectors.sentry_http import HttpSentrySource
+from app.explanations import TypedLLMClient
 from app.observability import RuntimeTelemetry
 from app.workflows.correlation_scan import RepositoryCorrelationScanResult, scan_repository_for_correlations
 
@@ -77,6 +78,18 @@ async def get_sentry_source_for_scan(
         yield HttpSentrySource(http_client, settings.organization_slug, telemetry)
 
 
+def get_correlation_scan_hypothesis_client(request: Request) -> TypedLLMClient:
+    return request.app.state.investigation_hypothesis_client
+
+
+def get_correlation_scan_code_diagnosis_client(request: Request) -> TypedLLMClient:
+    return request.app.state.investigation_code_diagnosis_client
+
+
+def get_correlation_scan_fix_proposal_client(request: Request) -> TypedLLMClient:
+    return request.app.state.investigation_code_diagnosis_client
+
+
 @router.post(
     "/correlation-scans",
     response_model=RepositoryCorrelationScanResult,
@@ -88,6 +101,16 @@ async def start_correlation_scan(
     github_source: Annotated[
         GitHubCodeEvidenceSource, Depends(get_github_code_evidence_source)
     ],
+    hypothesis_client: Annotated[
+        TypedLLMClient, Depends(get_correlation_scan_hypothesis_client)
+    ],
+    code_diagnosis_client: Annotated[
+        TypedLLMClient, Depends(get_correlation_scan_code_diagnosis_client)
+    ],
+    fix_proposal_client: Annotated[
+        TypedLLMClient, Depends(get_correlation_scan_fix_proposal_client)
+    ],
+    telemetry: Annotated[RuntimeTelemetry, Depends(get_runtime_telemetry)],
 ) -> RepositoryCorrelationScanResult | JSONResponse:
     try:
         return await scan_repository_for_correlations(
@@ -96,6 +119,10 @@ async def start_correlation_scan(
             sentry_project_slug=scan_request.sentry_project_slug,
             sentry_source=sentry_source,
             github_source=github_source,
+            hypothesis_client=hypothesis_client,
+            code_diagnosis_client=code_diagnosis_client,
+            fix_proposal_client=fix_proposal_client,
+            telemetry=telemetry,
         )
     except SentryConnectorError as error:
         status_code = 503 if error.category in _UPSTREAM_UNAVAILABLE_CATEGORIES else 502

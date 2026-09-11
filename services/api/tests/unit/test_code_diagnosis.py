@@ -2,6 +2,8 @@ import unittest
 
 from pydantic import ValidationError
 
+from datetime import UTC, datetime
+
 from app.connectors.github_code_fakes import (
     CHANGED_FILE_EVIDENCE_FIXTURES,
     FIXTURE_PULL_REQUEST,
@@ -14,7 +16,18 @@ from app.explanations import FakeLLMClient
 from app.investigations import (
     ChangedFileFact,
     ChangedFileMatchesFailureFileFact,
+    ChangedHunkOverlapsFailureLineFact,
+    CommitChangedFileEvidenceContent,
+    CommitDiffHunkEvidenceContent,
+    DiffLine,
+    DiffLineKind,
+    Evidence,
+    EvidenceKind,
+    EvidenceProvenance,
+    EvidenceSource,
+    FileChangeType,
     InvestigationRequest,
+    StackFrameEvidenceContent,
 )
 from app.investigations.code_diagnosis import (
     CodeContextBuilder,
@@ -23,15 +36,20 @@ from app.investigations.code_diagnosis import (
     CodeDiagnosisFailureCode,
     CodeFindingCategory,
     CodeFindingValidationFailureCode,
+    CodeFixValidationFailureCode,
     DeterministicCodeFindingValidator,
+    DeterministicCodeFixValidator,
     DeveloperRecommendationCode,
     MAX_CODE_CONTEXT_LOCATIONS,
     MAX_CODE_LINES_PER_HUNK,
+    FixProposalContextBuilder,
+    ProposedCodeFixCandidate,
+    TypedLLMFixProposalGenerator,
     SuspectedCodeFinding,
     TypedLLMCodeDiagnoser,
     build_developer_recommendations,
 )
-from app.investigations.fact_derivation import derive_facts
+from app.investigations.fact_derivation import derive_code_failure_facts, derive_facts
 from app.investigations.hypotheses import (
     CandidateHypothesis,
     DeterministicHypothesisValidator,
@@ -160,6 +178,127 @@ class CodeContextBuilderTests(unittest.TestCase):
         )
         self.assertEqual(len(hunk_location.lines), MAX_CODE_LINES_PER_HUNK)
         self.assertTrue(all(len(line.text) == 300 for line in hunk_location.lines))
+
+
+_COMMIT_FIXTURE_TIME = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+_COMMIT_SHA = "d" * 40
+
+
+def _commit_scoped_evidence() -> tuple[Evidence, ...]:
+    changed_file = Evidence(
+        evidence_id="github:commit:file",
+        source=EvidenceSource.GITHUB,
+        kind=EvidenceKind.COMMIT_CHANGED_FILE,
+        provenance=EvidenceProvenance(
+            source_reference="github:commit:file", retrieved_at=_COMMIT_FIXTURE_TIME
+        ),
+        content=CommitChangedFileEvidenceContent(
+            repository_owner="octo-org",
+            repository_name="analytics",
+            commit_sha=_COMMIT_SHA,
+            path="services/checkout.py",
+            change_type=FileChangeType.MODIFIED,
+            additions=1,
+            deletions=1,
+            changes=2,
+            patch_available=True,
+        ),
+    )
+    hunk = Evidence(
+        evidence_id="github:commit:hunk",
+        source=EvidenceSource.GITHUB,
+        kind=EvidenceKind.COMMIT_DIFF_HUNK,
+        provenance=EvidenceProvenance(
+            source_reference="github:commit:hunk", retrieved_at=_COMMIT_FIXTURE_TIME
+        ),
+        content=CommitDiffHunkEvidenceContent(
+            repository_owner="octo-org",
+            repository_name="analytics",
+            commit_sha=_COMMIT_SHA,
+            file_path="services/checkout.py",
+            old_start=80,
+            old_count=1,
+            new_start=80,
+            new_count=10,
+            lines=(
+                DiffLine(kind=DiffLineKind.CONTEXT, text="def create_order(cart):"),
+                *(
+                    DiffLine(kind=DiffLineKind.ADDITION, text=f"    line_{i} = 1")
+                    for i in range(9)
+                ),
+            ),
+        ),
+    )
+    stack_frame = Evidence(
+        evidence_id="incident:frame",
+        source=EvidenceSource.INCIDENT,
+        kind=EvidenceKind.STACK_FRAME,
+        provenance=EvidenceProvenance(
+            source_reference="incident:frame", retrieved_at=_COMMIT_FIXTURE_TIME
+        ),
+        content=StackFrameEvidenceContent(
+            file_path="services/checkout.py",
+            function_name="create_order",
+            line_number=87,
+            error_category="KeyError",
+        ),
+    )
+    return (changed_file, hunk, stack_frame)
+
+
+class CodeContextBuilderCommitScopedEvidenceTests(unittest.TestCase):
+    def test_commit_scoped_changed_file_and_hunk_become_locations(self):
+        evidence = _commit_scoped_evidence()
+        facts = derive_code_failure_facts(evidence)
+        changed_fact = next(item for item in facts if isinstance(item, ChangedFileFact))
+        relationship_fact = next(
+            item for item in facts if isinstance(item, ChangedFileMatchesFailureFileFact)
+        )
+        hypothesis = DeterministicHypothesisValidator().validate(
+            (
+                CandidateHypothesis(
+                    hypothesis_id="hypothesis:commit-scoped",
+                    kind=HypothesisKind.CODE_CHANGE_MAY_HAVE_CONTRIBUTED,
+                    subject="services/checkout.py",
+                    supporting_fact_ids=(changed_fact.fact_id, relationship_fact.fact_id),
+                ),
+            ),
+            facts,
+        ).accepted_hypotheses[0]
+
+        context = CodeContextBuilder().build(REQUEST, (hypothesis,), facts, evidence)
+
+        self.assertEqual(
+            {location.kind for location in context.locations},
+            {
+                CodeContextKind.CHANGED_FILE,
+                CodeContextKind.DIFF_HUNK,
+                CodeContextKind.STACK_FRAME,
+            },
+        )
+
+        candidate = SuspectedCodeFinding(
+            finding_id="finding:commit-scoped",
+            hypothesis_id=hypothesis.hypothesis_id,
+            file_path="services/checkout.py",
+            location_evidence_id="incident:frame",
+            category=CodeFindingCategory.CHANGED_CODE_NEAR_FAILURE,
+            supporting_fact_ids=hypothesis.supporting_fact_ids,
+            supporting_evidence_ids=tuple(
+                dict.fromkeys(
+                    evidence_id
+                    for fact in (changed_fact, relationship_fact)
+                    for evidence_id in fact.evidence_reference_ids
+                )
+            ),
+            explanation="The changed file and stack frame agree on the same location.",
+        )
+        result = DeterministicCodeFindingValidator().validate(
+            (candidate,), (hypothesis,), facts, evidence
+        )
+
+        self.assertEqual(len(result.accepted_findings), 1, result.rejected_candidates)
+        self.assertEqual(result.accepted_findings[0].line_number, 87)
 
 
 class CodeFindingValidatorTests(unittest.TestCase):
@@ -332,6 +471,122 @@ class DeveloperRecommendationTests(unittest.TestCase):
             all(item.supporting_fact_ids == finding.supporting_fact_ids for item in first)
         )
         self.assertNotIn(_candidate().explanation, " ".join(item.message for item in first))
+
+
+class CodeFixProposalTests(unittest.IsolatedAsyncioTestCase):
+    def _proposal_input(self):
+        evidence = _commit_scoped_evidence()
+        facts = derive_code_failure_facts(evidence)
+        changed_fact = next(item for item in facts if isinstance(item, ChangedFileFact))
+        relationship_fact = next(
+            item for item in facts if isinstance(item, ChangedFileMatchesFailureFileFact)
+        )
+        hunk_fact = next(
+            item for item in facts if isinstance(item, ChangedHunkOverlapsFailureLineFact)
+        )
+        hypothesis = DeterministicHypothesisValidator().validate(
+            (
+                CandidateHypothesis(
+                    hypothesis_id="hypothesis:checkout-hunk",
+                    kind=HypothesisKind.CODE_CHANGE_MAY_HAVE_CONTRIBUTED,
+                    subject="services/checkout.py",
+                    supporting_fact_ids=(
+                        changed_fact.fact_id,
+                        relationship_fact.fact_id,
+                        hunk_fact.fact_id,
+                    ),
+                ),
+            ),
+            facts,
+        ).accepted_hypotheses[0]
+        supporting_evidence_ids = tuple(
+            dict.fromkeys(
+                evidence_id
+                for fact in (changed_fact, relationship_fact, hunk_fact)
+                for evidence_id in fact.evidence_reference_ids
+            )
+        )
+        finding = DeterministicCodeFindingValidator().validate(
+            (
+                _candidate(
+                    hypothesis_id=hypothesis.hypothesis_id,
+                    location_evidence_id="incident:frame",
+                    supporting_fact_ids=hypothesis.supporting_fact_ids,
+                    supporting_evidence_ids=supporting_evidence_ids,
+                ),
+            ),
+            (hypothesis,),
+            facts,
+            evidence,
+        ).accepted_findings[0]
+        diagnosis_input = CodeContextBuilder().build(REQUEST, (hypothesis,), facts, evidence)
+        hypothesis = diagnosis_input.hypotheses[0]
+        return FixProposalContextBuilder().build(finding, hypothesis, facts, evidence)
+
+    async def test_generator_receives_actual_hunk_and_validator_owns_original(self):
+        proposal_input = self._proposal_input()
+        self.assertIsNotNone(proposal_input)
+        assert proposal_input is not None
+        output = {
+            "candidate": {
+                "finding_id": proposal_input.finding.finding_id,
+                "file_path": proposal_input.finding.file_path,
+                "corrected_hunk": proposal_input.original_hunk + "\n    return None",
+                "failure_mechanism": "The observed access can fail for an absent value.",
+                "fix_strategy": "Handle the absent value in the bounded failure path.",
+                "explanation": "The replacement adds handling before the failing path continues.",
+                "supporting_fact_ids": list(proposal_input.finding.supporting_fact_ids),
+                "supporting_evidence_ids": list(proposal_input.finding.supporting_evidence_ids),
+            }
+        }
+        candidate = await TypedLLMFixProposalGenerator(FakeLLMClient(output)).generate(proposal_input)
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+        result = DeterministicCodeFixValidator().validate(candidate, proposal_input)
+        self.assertEqual(result.rejected_candidates, ())
+        fix = result.accepted_fixes[0]
+        self.assertEqual(fix.original_hunk, proposal_input.original_hunk)
+        self.assertEqual(fix.file_path, proposal_input.finding.file_path)
+
+    async def test_validator_rejects_invented_file_and_oversized_rewrite(self):
+        proposal_input = self._proposal_input()
+        self.assertIsNotNone(proposal_input)
+        assert proposal_input is not None
+        candidate = ProposedCodeFixCandidate(
+            finding_id=proposal_input.finding.finding_id,
+            file_path="services/invented.py",
+            corrected_hunk="\n".join("value = 1" for _ in range(61)),
+            failure_mechanism="A failure can occur.",
+            fix_strategy="Change code.",
+            explanation="The change helps.",
+            supporting_fact_ids=proposal_input.finding.supporting_fact_ids,
+            supporting_evidence_ids=proposal_input.finding.supporting_evidence_ids,
+        )
+        result = DeterministicCodeFixValidator().validate(candidate, proposal_input)
+        self.assertEqual(
+            result.rejected_candidates[0].reason,
+            CodeFixValidationFailureCode.FILE_MISMATCH,
+        )
+
+    async def test_validator_rejects_unified_diff_marker_lines(self):
+        proposal_input = self._proposal_input()
+        self.assertIsNotNone(proposal_input)
+        assert proposal_input is not None
+        candidate = ProposedCodeFixCandidate(
+            finding_id=proposal_input.finding.finding_id,
+            file_path=proposal_input.finding.file_path,
+            corrected_hunk="-    value = STOCK[item_id - 1]",
+            failure_mechanism="A failure can occur.",
+            fix_strategy="Change code.",
+            explanation="The change helps.",
+            supporting_fact_ids=proposal_input.finding.supporting_fact_ids,
+            supporting_evidence_ids=proposal_input.finding.supporting_evidence_ids,
+        )
+        result = DeterministicCodeFixValidator().validate(candidate, proposal_input)
+        self.assertEqual(
+            result.rejected_candidates[0].reason,
+            CodeFixValidationFailureCode.DIFF_MARKER_ARTIFACT,
+        )
 
 
 if __name__ == "__main__":

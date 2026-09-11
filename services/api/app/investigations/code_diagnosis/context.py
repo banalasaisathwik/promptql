@@ -14,13 +14,15 @@ from app.investigations.code_diagnosis.models import (
 )
 from app.investigations.models import (
     ChangedFileEvidenceContent,
+    CommitChangedFileEvidenceContent,
+    CommitDiffHunkEvidenceContent,
     DiffHunkEvidenceContent,
     Evidence,
     FactSet,
     InvestigationRequest,
     StackFrameEvidenceContent,
 )
-from app.investigations.path_normalization import normalized_path
+from app.investigations.path_normalization import paths_match
 
 if TYPE_CHECKING:
     from app.investigations.hypotheses.models import ValidatedHypothesis
@@ -37,9 +39,7 @@ class CodeContextBuilder:
         selected_hypotheses = tuple(
             sorted(hypotheses, key=lambda item: item.hypothesis_id)
         )
-        relevant_paths = {
-            normalized_path(item.subject) for item in selected_hypotheses
-        }
+        relevant_paths = {item.subject for item in selected_hypotheses}
         relevant_fact_ids = {
             fact_id
             for hypothesis in selected_hypotheses
@@ -107,21 +107,27 @@ def _support_bundle(
     )
 
 
+def _matches_any(path: str, relevant_paths: set[str]) -> bool:
+    return any(paths_match(path, relevant_path) for relevant_path in relevant_paths)
+
+
 def _location(
     evidence: Evidence,
     relevant_paths: set[str],
 ) -> CodeContextLocation | None:
     content = evidence.content
-    if isinstance(content, ChangedFileEvidenceContent):
-        if normalized_path(content.path) not in relevant_paths:
+
+
+    if isinstance(content, (ChangedFileEvidenceContent, CommitChangedFileEvidenceContent)):
+        if not _matches_any(content.path, relevant_paths):
             return None
         return CodeContextLocation(
             evidence_id=evidence.evidence_id,
             kind=CodeContextKind.CHANGED_FILE,
             file_path=content.path,
         )
-    if isinstance(content, DiffHunkEvidenceContent):
-        if normalized_path(content.file_path) not in relevant_paths:
+    if isinstance(content, (DiffHunkEvidenceContent, CommitDiffHunkEvidenceContent)):
+        if not _matches_any(content.file_path, relevant_paths):
             return None
         first_line = (
             content.new_start
@@ -145,9 +151,8 @@ def _location(
             ),
         )
     if isinstance(content, StackFrameEvidenceContent):
-        if (
-            content.file_path is None
-            or normalized_path(content.file_path) not in relevant_paths
+        if content.file_path is None or not _matches_any(
+            content.file_path, relevant_paths
         ):
             return None
         return CodeContextLocation(

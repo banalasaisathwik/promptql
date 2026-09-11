@@ -8,6 +8,7 @@ from app.api.v1.auth_router import router as auth_router
 from app.api.v1.credentials_router import router as credentials_router
 from app.api.v1.connector_router import router as connector_router
 from app.api.v1.correlation_scan_router import router as correlation_scan_router
+from app.api.v1.source_discovery_router import router as source_discovery_router
 from app.api.v1.demo_account_router import router as demo_account_router
 from app.api.v1.live_events_router import router as live_events_router
 from app.api.v1.models import (
@@ -326,6 +327,7 @@ def create_app(
     application.state.live_event_broker = live_event_broker
     application.include_router(connector_router)
     application.include_router(correlation_scan_router)
+    application.include_router(source_discovery_router)
     application.include_router(live_events_router)
     application.include_router(auth_router)
     application.include_router(credentials_router)

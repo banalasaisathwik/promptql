@@ -1,5 +1,264 @@
 # Learning log
 
+## 2026-09-11 — live fix-proposal verification found a real diff-fragment bug the size/provenance validator never checked for
+
+- **Concept:** a deterministic validator that only checks provenance
+  (finding/file/Fact/Evidence identity) and size cannot catch a candidate
+  that is the *wrong shape* — grounded, correctly-sized, and still not
+  literal replacement source. Live-provider runs surface exactly this class
+  of gap; a fixture-only test suite cannot, because a hand-written fixture
+  candidate never accidentally shapes itself like a unified-diff fragment.
+- **Where:** `app/investigations/code_diagnosis/fix_proposal.py`
+  (`DeterministicCodeFixValidator._rejection_reason`,
+  `FIX_PROPOSAL_SYSTEM_INSTRUCTIONS`), `models.py`
+  (`CodeFixValidationFailureCode.DIFF_MARKER_ARTIFACT`),
+  `tests/unit/test_code_diagnosis.py::CodeFixProposalTests::
+  test_validator_rejects_unified_diff_marker_lines`.
+- **What happened:** ran the real pipeline end to end — real Sentry
+  (`student-whe`/`python-fastapi`), real GitHub
+  (`banalasaisathwik/promptql-sandbox`), real `OpenRouterLLMClient`
+  (`openai/gpt-oss-120b`) — through `POST /v1/correlation-scans` against the
+  same real, already-open `PYTHON-FASTAPI-1` issue ADR-037/038 used, this
+  time through the new fix-proposal stage those ADRs' earlier sessions
+  never live-verified. Before spending any paid call, a cheap prerequisite
+  check (`scan_repository_for_correlations` with real Sentry/GitHub sources
+  but the default `FakeLLMClient()`) confirmed the deterministic path was
+  intact: `status: ok`, 4 Evidence, 3 Facts, `grounding_strength: strong`.
+  The first live fix-generation call then returned an *accepted*
+  `corrected_hunk` of `"-    STOCK[item_id - 1] -= qty"` — a bare
+  unified-diff removal line, not code the reader could paste into the file.
+  Every existing check passed it: the file matched, the Fact/Evidence IDs
+  matched, it was well under the line-count cap, and it contained no
+  `import`. Nothing checked its *shape*.
+- **Decision and fix:** added one new rejection reason,
+  `DIFF_MARKER_ARTIFACT`, for any `corrected_hunk` line starting with a
+  bare `-`/`+` character — safe because `FixProposalContextBuilder` already
+  strips diff prefixes from `original_hunk`'s own source lines before
+  handing them to the model, so a legitimate replacement line preserving
+  the file's real indentation should never start with one. Also
+  strengthened `FIX_PROPOSAL_SYSTEM_INSTRUCTIONS` (now `v1.1`) to say
+  explicitly that `corrected_hunk` must reproduce every line of the
+  original hunk verbatim except the ones that change, never a diff
+  fragment. Reproduced the bug in a deterministic test *first* — confirmed
+  it failed against the pre-fix validator (proving the gap was real, not
+  hypothetical), then confirmed it passed after the fix — before touching
+  the live pipeline again, per the standing rule that a live-only fix never
+  ships untested.
+- **What was deliberately not changed:** the deterministic
+  provenance/size/import checks, the trust boundary itself (LLM proposes,
+  deterministic code decides), and nothing was loosened to force a real
+  candidate to pass — the fix narrows acceptance, it does not relax it.
+- **Observed real-model variance, correctly handled, not bugs:** across
+  further live sampling (confirming the fix, then exercising the new
+  `app/evals/fix_proposal/` eval matrix live), the same real provider also:
+  produced a `SUPPORT_MISMATCH` rejection (a candidate that dropped one
+  required Fact ID — the strict validator correctly refused it, the same
+  behavior ADR-038 already documented for the hypothesis stage), declined
+  to propose a fix at all for one case (an honest abstention this pipeline
+  is designed to accept, not force), and once encoded a multi-line
+  `corrected_hunk` using the Unicode glyph `⏎` (U+23CE) instead of a
+  literal newline — schema-valid, not wrong, just an unusual formatting
+  choice not chased further after a single observation. Two genuine
+  transient GitHub `upstream_unavailable` failures correctly reached
+  `insufficient_evidence` and skipped the LLM call entirely — the
+  cost/safety gate held even at this new stage.
+- **New eval matrix, not just more unit tests:** `app/evals/fix_proposal/`
+  mirrors `app.evals.investigations`' conventions (typed
+  case/observation/metrics/report models, a `--fake-dry-run`/
+  `--acknowledge-paid-calls` CLI runner) but is deliberately narrower: each
+  case builds its hypothesis/finding deterministically (the real
+  production validators, not an LLM), so the only provider call it ever
+  makes is the fix-proposal call itself. Five fixture cases (KeyError,
+  None-dereference, invalid input boundary, configuration/deployment
+  mismatch, and one deliberately ambiguous case expecting abstention) are
+  scored on `correct_file`, `correct_hunk_or_location`,
+  `failure_mechanism_grounded` (deterministic per-case keyword check, not
+  an LLM judge), `minimal_edit`, `unsupported_identifier_rate`,
+  `syntax_valid`, `fix_available_when_expected`, and
+  `abstains_when_fix_not_grounded`.
+- **A grading bug found while building the grader itself:** the first
+  `minimal_edit` implementation compared original/corrected lines
+  positionally (`zip`), which overcounts every line after an
+  insertion/deletion as "changed" even when its content is identical, just
+  shifted down by one line — this made two genuinely reasonable fixture
+  fixes score as "not minimal." Replaced with a real `difflib.
+  SequenceMatcher` line-level diff. Separately, the first
+  `unsupported_identifier_rate` heuristic matched identifiers anywhere in
+  the text, so English words inside a string literal (`"quantity is
+  required"` → flagged `required`) and legitimate stdlib method calls
+  (`stock.get(...)` → flagged `get`, since `get` is a dict method, not a
+  module-level builtin) were both false positives. Fixed by stripping
+  string/comment content before matching and excluding attribute-accessed
+  names entirely (`.get` can never be verified as "known" without real type
+  information, and the task's own examples — unknown helper call, project
+  class, custom exception, variable — are all bare names). Caught both by
+  actually running the fake-dry-run harness against real fixture data and
+  reading its output, not by reasoning about the regex in the abstract.
+- **Design decision — no cost telemetry for this stage (found, not
+  fixed):** `TypedLLMFixProposalGenerator.generate()` returns only the
+  validated candidate, discarding `LLMStructuredResponse.token_usage` —
+  confirmed live: neither run emitted an `llm.token_usage` event with
+  `role: fix_proposal`, unlike the hypothesis/code-diagnosis stages. Left
+  alone deliberately: giving `FixProposalOutput` a metadata-carrying shape
+  is real, scoped work outside "verify what already exists," not a
+  one-line fix — recorded as an ADR-038 reconsideration trigger instead of
+  bundled into this session's changes.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  from `services/api` — 726 passed, 0 failed, 14 skipped (718 baseline + 1
+  regression test + 7 new `test_fix_proposal_evals.py` tests).
+  `uv run python -m compileall -q app tests` clean. `app.openapi()` builds.
+  `git diff --check` clean (line-ending-only warnings). Frontend: `bun run
+  test:web` 74 passed (73 baseline + 1 new `ProposedFixPanel` test, added
+  after noticing the panel never rendered `fix_strategy` even though the
+  API already returns it); `bun run lint:web` and `bun run build:web` both
+  clean. Fix-proposal eval, fake-dry-run: 15/15 planned samples, every gate
+  passes. Fix-proposal eval, live (1 sample/case, 5 real calls): ordinary
+  variance as described above, not a threshold this single sample is
+  expected to clear.
+- **Unresolved questions:** whether the `⏎` line-break substitution is a
+  systematic quirk of this specific model/provider or a one-off — only
+  revisit if a future live run repeats it. Whether the fix-proposal stage
+  should get its own cost telemetry — recorded as an ADR-038
+  reconsideration trigger, not decided here.
+
+## 2026-09-11 - selected records are safer than selected strings
+
+- **Concept:** A searchable selector has two kinds of state: temporary search
+  text and the selected provider record. Only the selected record is suitable
+  for a request boundary. Search text can filter an already-discovered list,
+  but it must never become a repository owner/name or Sentry project slug.
+- **Where:** `WhylineApp.tsx` keeps `selectedRepository` and
+  `selectedSentryProject` as the scan form's only identifier state. Its two
+  compact comboboxes provide mouse, arrow-key, Enter, and Escape interaction;
+  `correlationSelection.ts` derives the unchanged scan payload and its CTA
+  gate solely from those records and source-connection state.
+- **Decision and validation:** The UI uses no added dependency or backend
+  endpoint. `discoverySearch.test.ts` verifies client-side provider filtering,
+  `correlationSelection.test.ts` covers payload/gating invariants, and
+  `bun run test:web`, `bun run lint:web`, and `bun run build:web` passed after
+  the redesign. A browser viewport audit remains unavailable because no
+  browser surface is connected to this session.
+
+## 2026-09-11 — selectors are a presentation boundary, not a credential boundary
+
+- **Concept:** A connected provider credential can support safe discovery
+  without returning the credential to the browser. The backend resolves the
+  authoritative GitHub login and accessible repositories, and normalizes
+  Sentry projects to organization/project-slug/name selector records.
+- **Where:** `source_discovery_router.py` constructs request-scoped GitHub and
+  Sentry clients from encrypted per-user credentials. `WhylineApp` replaces
+  free-text owner/repository/project fields with those controlled selectors.
+  `CorrelationScanPresentation.grounding_strength` is derived only from the
+  issue-local changed-file match and diff-overlap Facts for the same failure
+  path; it is not probability.
+- **Validation:** backend `unittest discover` passed 715 tests (14 configured
+  PostgreSQL skips); frontend lint/build passed; web tests passed 69 tests and
+  230 assertions. Live connected-account/browser verification remains a
+  separate required proof.
+
+## 2026-09-11 — a bounded scan presentation is a contract boundary, not another analysis layer
+
+- **Concept:** Whyline V1 needs enough information to render an issue list and
+  diagnosis without pretending that synchronous correlation scans have run
+  history, live progress, evidence browsing, or source snippets. The smallest
+  truthful addition is `IssueCorrelationResult.presentation`, made entirely
+  from data already collected and deterministically validated in the same
+  request.
+- **Where:** `SentryOpenIssue` now preserves only Sentry's optional `title`;
+  `correlation_scan.py` projects that title and the existing normalized stack
+  frame into `CorrelationScanPresentation`. `FactSummary` has explicit stable
+  renderers for changed file, failure-file match, and diff overlap Facts. The
+  existing `analysis` field remains the sole source for validated hypotheses,
+  code findings, and developer recommendations. `GET /v1/auth/me` reuses
+  `get_current_user` and returns the existing public `UserResponse` for an
+  authenticated browser refresh.
+- **Boundary:** no raw provider payload, token, encrypted credential, password
+  hash, prompt, unvalidated candidate, or code snippet enters the response.
+  Missing title/location metadata is represented as `null`; it never invents a
+  substitute or changes correlation status. Logged out means the browser cookie
+  was cleared; no server-side revocation store was introduced to a stateless
+  signed-cookie design.
+- **Validation:** focused auth, correlation API/workflow, and Sentry
+  normalization suites passed (74 tests); complete backend suite passed (702,
+  14 PostgreSQL-dependent skips). `compileall`, `app.openapi()`, and
+  `git diff --check` also passed.
+
+## 2026-09-10 — live E2E proof found the same absolute-vs-relative path bug in two places a `FakeLLMClient` run could never reach
+
+- **Concept:** ADR-038's grounded correlation-scan pipeline had only ever
+  been exercised with `FakeLLMClient` and hand-built fixtures where both
+  sides of every path comparison happened to already be identical strings.
+  Running it live — real Sentry (`student-whe`/`python-fastapi`), real
+  GitHub (`banalasaisathwik/promptql-sandbox`), real
+  `OpenRouterLLMClient` (`openai/gpt-oss-120b`) — against the real,
+  already-open issue `PYTHON-FASTAPI-1` immediately produced
+  `analysis.status: insufficient_evidence` with the LLM never even called,
+  because Sentry's real in-app stack frame reports an *absolute* deploy
+  path (`/opt/render/project/src/sandbox-target/app/checkout.py`) while
+  GitHub's commit API reports the same file *repo-relative*
+  (`sandbox-target/app/checkout.py`). `normalized_path`
+  (`app/investigations/path_normalization.py`) only normalized separators
+  and a leading `./` — deliberately never fuzzy-matched — so these two
+  real, correct representations of the same file never compared equal
+  anywhere in the codebase. This is the kind of gap that is structurally
+  invisible to any fixture-only test: nothing was wrong with the fixtures,
+  they just never modeled two different sources disagreeing about path
+  format for the same real file.
+- **Where:** added `paths_match()` (strict path-segment-boundary suffix
+  match, never a bare-substring or single-filename match) alongside the
+  existing `normalized_path()`, and switched every cross-source path
+  comparison to it: `fact_derivation/code_change.py`,
+  `code_diagnosis/{context,validator}.py`, and
+  `hypotheses/validator.py` — the last one is `DeterministicHypothesis
+  Validator`, shared with the already-shipped adaptive investigation path,
+  so this one fix closed the same latent defect in both callers at once.
+  `correlation_scan.py`'s own `_has_hypothesis_worthy_facts` gate had a
+  second, independent copy of the same bug (a raw set intersection between
+  two Fact fields populated from two different sources) — replaced with a
+  bare presence check once `paths_match` made the underlying Facts correct.
+  Fixing the path bug alone still weren't enough: the real LLM then set a
+  hypothesis's `subject` to a bare basename (`"checkout.py"`) instead of a
+  Fact's full path, correctly rejected by `paths_match`'s deliberate refusal
+  to match on a single trailing segment alone — `HYPOTHESIS_SYSTEM_
+  INSTRUCTIONS` (`hypotheses/instructions.py`, now `v2.17.3`) now explicitly
+  requires copying a Fact's path character-for-character and citing every
+  Fact needed to establish the claim, mirroring the code-diagnosis prompt's
+  already-established "copy the exact field" pattern.
+- **Validation:** `uv run python -m unittest discover -s tests -v` from
+  `services/api` — 696 passed, 0 failed, 14 skipped (684 baseline + 12 new:
+  `tests/unit/test_path_normalization.py` (10, new file) +
+  2 new cases in `test_grounded_hypotheses.py`). `uv run python -m
+  compileall -q app tests`; `git diff --check`; `app.openapi()` build.
+  Live: registered a real user against the real Neon Postgres, stored real
+  Sentry/GitHub credentials through `PostgresCredentialRepository`, and
+  called the actual authenticated `POST /v1/correlation-scans` endpoint
+  (not just the workflow function directly) four times — 3 of 4 reached
+  `analysis.status: completed` with a validated `GroundedCodeFinding` citing
+  `checkout.py:13` in `decrement_inventory`, the real off-by-one bug the
+  resolved commit introduced; the 4th landed on `code_finding_unavailable`
+  from ordinary real-LLM run-to-run variance, correctly preserved rather
+  than forced. Separately confirmed the deterministic gate live against the
+  real `python-flask` project's `PYTHON-FLASK-1` issue (a real commit
+  missing from the target repo): `status: partial`, `fact_ids: ()`,
+  `analysis.status: insufficient_evidence`, zero hypothesis/code-diagnosis
+  telemetry events emitted for that call.
+- **Key design decision and why:** fixed the shared validator/context/
+  fact-derivation code rather than only the correlation-scan-local gate,
+  even though that meant touching code the adaptive investigation path also
+  depends on — the bug was never scan-specific (any real containerized
+  deployment reports absolute in-app paths this way), so a scan-only patch
+  would have left the identical defect live in `InvestigationWorkflowService`
+  for any real deployment. Checked with the user first, since this changes
+  `DeterministicCodeFindingValidator`'s acceptance semantics, before
+  implementing. `paths_match` still refuses to match on a single filename
+  segment alone specifically to avoid the exact fuzzy-matching risk the
+  original `normalized_path` comment warned about.
+- **Unresolved:** per-issue isolation across two *real* open issues in one
+  project was not exercised live — both sandbox Sentry projects have
+  exactly one open issue each right now; only the existing synthetic-fixture
+  test (`test_two_issues_in_one_scan_never_share_facts_or_hypotheses`)
+  covers that case today.
+
 ## 2026-08-30 — a rejected hypothesis's own reason was computed and then thrown away; making it visible found a real, closed answer
 
 - **Concept:** `DeterministicHypothesisValidator.validate()`
@@ -4315,3 +4574,110 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   once by re-running the full live scan through the deliberate repo
   mismatch and reading `failure_code: "not_found"` out of the actual
   `step_failures` output.
+
+### 2026-09-10 - Reuse over rebuild: grounded reasoning bolted onto a scan that was deliberately built without it
+
+- **V2 milestone:** ADR-038 — extending the ADR-037 deterministic
+  correlation scan with per-issue grounded hypothesis/code-diagnosis
+  reasoning, strictly downstream of the deterministic phase.
+- **Concept:** "Deterministic control flow" and "LLM involved somewhere in
+  the pipeline" are not opposites. ADR-037 correctly kept the scan's
+  *control flow* deterministic (no planner deciding what to call); ADR-038
+  adds a bounded, gated, strictly-downstream step where an LLM *proposes* an
+  interpretation of Facts a deterministic step already collected, and a
+  deterministic validator decides whether that proposal ever reaches the
+  response. The Core V2 principle ("probabilistic reasoning may propose;
+  deterministic code controls what is accepted") turned out to describe
+  exactly this shape, not an argument against ever calling an LLM from this
+  path.
+- **Design decision — reuse classes, not a shared orchestration function:**
+  `TypedLLMHypothesisGenerator`, `DeterministicHypothesisValidator`,
+  `CodeContextBuilder`, `TypedLLMCodeDiagnoser`,
+  `DeterministicCodeFindingValidator`, and `build_developer_recommendations`
+  were already free-standing, dependency-injected units with zero coupling
+  to `AdaptiveInvestigationRuntime`/`InvestigationRun` persistence.
+  `correlation_scan.py` calls them directly, the same way
+  `InvestigationWorkflowService` does, rather than extracting a new shared
+  "grounded reasoning" module. Considered extracting `investigation.py`'s
+  `_complete_adaptive_run` inline block into a shared helper first, but its
+  hypothesis-generation and hypothesis-validation stages are deliberately
+  two *separate* `observe_investigation_stage` OTel spans there — merging
+  them into one shared function would have quietly changed an existing,
+  working path's span granularity for no benefit, since the classes it
+  would wrap were already the actual reusable unit. Left `investigation.py`
+  completely untouched.
+- **A real, load-bearing bug found by actually running the pipeline, not
+  just importing it:** `CodeContextBuilder._location()` and
+  `DeterministicCodeFindingValidator` only ever recognized
+  `ChangedFileEvidenceContent`/`DiffHunkEvidenceContent` — the PR-scoped
+  evidence shape. ADR-036's commit-scoped
+  `CommitChangedFileEvidenceContent`/`CommitDiffHunkEvidenceContent` (no
+  pull request) were never wired into either one, because
+  `investigation.py`'s own `ADAPTIVE_INVESTIGATION_ALLOWED_TOOL_IDS` never
+  includes `GET_COMMIT_DIFF`, so the adaptive path never produces that
+  evidence shape and the gap was invisible there. The correlation scan
+  *only ever* produces commit-scoped evidence — so code diagnosis would
+  have reached the LLM missing every changed-file/diff-hunk location, and
+  even a perfectly-grounded LLM proposal would have been rejected by the
+  validator's own `changed_file_observed`/`_location_path` checks. Caught
+  by writing a live, in-process script (`FakeLLMClient`, no network, no
+  fixtures) that ran the whole pipeline end to end before trusting any
+  unit test — a passing `unittest.mock`-based test would not have exercised
+  the real content-type mismatch, since nothing forced the mock evidence to
+  match either code type. Fixed by adding a second `isinstance(...,
+  (X, CommitX))` branch in each of the three places that mattered
+  (`context.py::_location`, `validator.py::_rejection_reason`/
+  `_location_path`/`_validated_finding`), mirroring the exact dual-branch
+  pattern `fact_derivation/code_change.py` already used for the same two
+  content families — this was necessary to make ADR-038's own stated goal
+  reachable at all, not an unrelated refactor.
+- **Design decision — new status vocabulary, not an overloaded existing
+  one:** `IssueAnalysisStatus` (`insufficient_evidence` /
+  `hypothesis_generation_failed` / `no_validated_hypothesis` /
+  `code_finding_unavailable` / `completed` / `analysis_error`) is a new
+  enum, kept fully independent of both `IssueCorrelationStatus`
+  (`ok`/`partial`/`failed`, unchanged) and `GroundedTerminationReason`
+  (which encodes planner-loop concepts like `budget_exhausted`/
+  `planning_limit_reached` that structurally cannot happen on a path with
+  no planner). Reusing `GroundedTerminationReason` would have required
+  either adding meaningless-here values to an enum `render_grounded_result`
+  and investigation.py's rendering dict both already close over, or reusing
+  an existing value for a semantically different situation — both worse
+  than one new, precisely-scoped enum.
+- **Design decision — event-log telemetry, not a new OTel span identity:**
+  `RuntimeTelemetry.observe_investigation_stage`'s span/`SUPPORTED_WORKFLOWS`
+  machinery is tied to a persisted `InvestigationRun`'s UUID `run_id` and a
+  fixed two-entry workflow-identity set. The correlation scan persists no
+  `InvestigationRun` at all. Rather than extending that machinery to a
+  third identity (a real Level-2 change, and a bigger one than this task's
+  actual ask), the new analysis phase reuses `RuntimeTelemetry`'s existing
+  generic, UUID-keyed structured-event methods
+  (`record_investigation_diagnostic_failure`/`record_llm_token_usage`/
+  `record_hypothesis_validation_rejected`) with a fresh `uuid4()` per issue
+  purely as a log-correlation key. One new field, `sentry_issue_id`, was
+  added to `StructuredEventLogger.ALLOWED_EVENT_FIELDS`
+  (`app/observability/structured_logging.py`) — every other field these
+  events use was already allowlisted for the adaptive path's identical
+  diagnostics.
+- **Invariant preserved:** `app/workflows/correlation_scan.py` still never
+  imports `TypedLLMPlanner`/`PlanValidator`/`AdaptiveInvestigationRuntime`/
+  `AgentExecutor` — asserted directly by a new module-namespace test
+  (`test_correlation_scan_module_never_imports_planner_or_executor`) rather
+  than left as an informal claim in a docstring or ADR.
+- **Validation evidence:** `uv run python -m unittest discover -s tests -v`
+  from `services/api` — 684 passed, 0 failed, 14 skipped (676 baseline + 7
+  new `CorrelationScanGroundedAnalysisTests` + 1 new
+  `CodeContextBuilderCommitScopedEvidenceTests`), including every existing
+  ADR-037/adaptive-investigation/hypothesis/code-diagnosis test unchanged.
+  A standalone live script (in-process, `FakeLLMClient`, no network)
+  constructed a Sentry-issue-shaped commit-scoped changed-file + diff-hunk +
+  stack-frame evidence set and confirmed `IssueAnalysisStatus.COMPLETED`
+  with a real `GroundedCodeFinding` citing the diff hunk's file/function/
+  line before any unit test was written. `app.openapi()` confirmed
+  `IssueGroundedAnalysis`/`IssueAnalysisStatus` appear in the generated
+  schema; `git diff --check` clean.
+- **Unresolved question:** this session only exercised `FakeLLMClient` end
+  to end — a real provider's candidate shapes against commit-scoped
+  evidence specifically (as opposed to the adaptive path's PR-scoped
+  evidence the validators were originally designed around) remain
+  unverified live. See ADR-038's Reconsideration triggers.

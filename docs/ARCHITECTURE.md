@@ -62,6 +62,7 @@ GET  /v1/runs/{run_id}                     -> persisted current run snapshot (me
 POST /v1/auth/register                     -> create account, set session cookie (201)
 POST /v1/auth/login                        -> authenticate, set session cookie
 POST /v1/auth/logout                       -> clear session cookie (204)
+GET  /v1/auth/me                           -> authenticated public user record; 401 without a valid session
 POST /v1/credentials                       -> authenticated encrypted provider-token upsert (provider/status/source only)
 GET  /v1/credentials                       -> authenticated GitHub/Jira/Sentry connection status only (source: real|demo)
 DELETE /v1/credentials/{provider}          -> authenticated provider-token removal (204; 403 for an is_demo account)
@@ -434,38 +435,120 @@ these were built incrementally under the V2.5–V2.16 milestones tracked in
 [Part 3's implementation sequence](#implementation-sequence) rather than each
 getting a separate decision record. [ADR-023](decisions/ADR-023-bounded-tool-retry-policy.md) covers the retry policy specifically.
 
-## Deterministic repo-only correlation scan (Implemented, all 4 phases)
+## Deterministic repo-only correlation scan (Implemented, ADR-037 phases 1-4 + ADR-038)
 
 `app/workflows/correlation_scan.py`'s `scan_repository_for_correlations`
 (see [ADR-037](decisions/ADR-037-deterministic-correlation-path-for-repo-only-input.md))
 is a **second, entirely separate entry point** from everything above — it
-never touches `AdaptiveInvestigationRuntime`, `TypedLLMPlanner`, `Tool`/
-`ToolRegistry`, or `InvestigationResult`. Where the planner-driven path
-answers "why did *this* incident break" given a specific
-`incident_reference`, this path answers "what's currently open across this
-repo" given only `{repository_owner, repository_name, sentry_project_slug}`
-— a fixed, hardcoded call sequence per Sentry issue
-(`get_failure_location_evidence` → `get_linked_jira_key` →
-`get_issue_commit_sha` → `get_commit_evidence`/`get_commit_changed_file_evidence`
-→ the existing pure `derive_deployment_code_facts`/`derive_code_failure_facts`
-functions), capped at `MAX_ISSUES_PER_SCAN = 5` issues per scan (applied
-before fan-out, with a non-silent `truncated` flag on the result). Each
-issue's connector calls are isolated with a thin, single retry
-(`_call_step`, not `AgentExecutor`/`RetryPolicy`) so one issue's failure
-never aborts the scan; the result is a flat
-`RepositoryCorrelationScanResult` with a per-issue
-`ok`/`partial`/`failed` `status`, never a hypothesis or rendered narrative.
+never touches `AdaptiveInvestigationRuntime`, `TypedLLMPlanner`,
+`PlanValidator`, or `AgentExecutor` (an invariant enforced directly by a
+module-namespace test). Where the planner-driven path answers "why did
+*this* incident break" given a specific `incident_reference`, this path
+answers "what's currently open across this repo" given only
+`{repository_owner, repository_name, sentry_project_slug}` — a fixed,
+hardcoded call sequence per Sentry issue (`get_failure_location_evidence` →
+`get_linked_jira_key` → `get_issue_commit_sha` →
+`get_commit_evidence`/`get_commit_changed_file_evidence` → the existing pure
+`derive_deployment_code_facts`/`derive_code_failure_facts` functions),
+capped at `MAX_ISSUES_PER_SCAN = 5` issues per scan (applied before
+fan-out, with a non-silent `truncated` flag on the result). Each issue's
+connector calls are isolated with a thin, single retry (`_call_step`, not
+`AgentExecutor`/`RetryPolicy`) so one issue's failure never aborts the scan;
+the result is a flat `RepositoryCorrelationScanResult` with a per-issue
+`ok`/`partial`/`failed` correlation `status`.
 `HttpSentrySource.get_issue_commit_sha` (new for this scan) resolves an
 issue's commit from its issue-detail response's embedded `firstRelease`
 object — not `get_deployment_evidence`, which needs an environment string
 a bare Sentry issue never exposes.
 
+**Grounded reasoning per issue (Implemented, [ADR-038](decisions/ADR-038-grounded-reasoning-for-the-deterministic-correlation-scan.md)).**
+Once an issue's deterministic Facts/Evidence above are ready, `_correlate_
+issue` hands them — and only them, never another issue's — to the same
+LLM-proposal + deterministic-validation pipeline
+`InvestigationWorkflowService` already uses:
+`TypedLLMHypothesisGenerator` → `DeterministicHypothesisValidator` →
+`CodeContextBuilder` → `TypedLLMCodeDiagnoser` →
+`DeterministicCodeFindingValidator` → `build_developer_recommendations`.
+A cheap deterministic gate (`_has_hypothesis_worthy_facts`) skips the LLM
+call entirely when no candidate could possibly validate. The result is an
+additive `IssueCorrelationResult.analysis: IssueGroundedAnalysis` field —
+`status: IssueAnalysisStatus` (`insufficient_evidence` /
+`hypothesis_generation_failed` / `no_validated_hypothesis` /
+`code_finding_unavailable` / `completed` / `analysis_error`),
+`hypotheses: tuple[GroundedHypothesis, ...]`,
+`code_findings: tuple[GroundedCodeFinding, ...]`,
+`recommendations: tuple[DeveloperRecommendation, ...]` — kept strictly
+separate from `IssueCorrelationStatus`: one answers "did deterministic
+source correlation succeed?", the other "how far did grounded reasoning
+get?". An unexpected exception during this phase for one issue (caught in
+`_run_issue_analysis`) never aborts the scan or another issue's analysis.
+This required extending `CodeContextBuilder`/
+`DeterministicCodeFindingValidator` (`investigations/code_diagnosis/
+{context,validator}.py`) to also recognize ADR-036's commit-scoped
+`CommitChangedFileEvidenceContent`/`CommitDiffHunkEvidenceContent` — the
+only evidence shape this scan ever produces, which they previously ignored
+entirely (see ADR-038 for the live-verified before/after). **Live-verified
+against real Sentry + GitHub + OpenRouter (2026-09-10)**: this run also
+found and fixed a load-bearing path-matching gap — `normalized_path`'s
+strict equality never matched Sentry's absolute in-app deploy path against
+GitHub's repo-relative path for the same file, which meant a real deployed
+app could never produce a hypothesis-worthy Fact or a validator-accepted
+hypothesis/finding at all. `app/investigations/path_normalization.py` now
+also exposes `paths_match` (a strict path-segment-boundary suffix match,
+never a fuzzy substring match), used everywhere two paths from different
+sources are compared (`fact_derivation/code_change.py`,
+`code_diagnosis/{context,validator}.py`, `hypotheses/validator.py`); see
+ADR-038's live-verification addendum for the full before/after. LLM clients are
+never constructed inside `correlation_scan.py`: `scan_repository_for_
+correlations` takes `hypothesis_client`/`code_diagnosis_client:
+TypedLLMClient | None` (defaulting to `FakeLLMClient()`), and the route
+injects `app.state.investigation_hypothesis_client`/
+`investigation_code_diagnosis_client` — the same clients `Investigation
+WorkflowService` already receives, resolved from `LLMTask.HYPOTHESIS_
+GENERATION`/`LLMTask.CODE_DIAGNOSIS` in `main.py`. Telemetry is event-log
+only (`correlation.hypothesis.*`/`correlation.code_diagnosis.*` through the
+existing generic `RuntimeTelemetry.record_investigation_diagnostic_failure`/
+`record_llm_token_usage`/`record_hypothesis_validation_rejected` methods,
+keyed by a fresh per-issue `uuid4()`) — deliberately not a new
+`observe_investigation_stage` OTel span identity, since that machinery is
+tied to a persisted `InvestigationRun`'s UUID and a fixed two-workflow
+`SUPPORTED_WORKFLOWS` set this scan does not participate in.
+
+**Bounded proposed code fixes (Implemented, [ADR-038](decisions/ADR-038-grounded-reasoning-for-the-deterministic-correlation-scan.md), live-verified 2026-09-11).**
+After `DeterministicCodeFindingValidator` accepts a location, `FixProposal
+ContextBuilder` (`investigations/code_diagnosis/fix_proposal.py`) selects
+one supporting diff-hunk Evidence that covers that finding's observed
+failure line and builds `original_hunk` itself, from that exact
+backend-owned post-commit source slice — the model never has to reproduce
+source it wasn't given. `TypedLLMFixProposalGenerator` returns only a
+bounded `corrected_hunk` plus `failure_mechanism`/`fix_strategy`/
+`explanation`; `DeterministicCodeFixValidator` requires the same finding,
+file, Fact IDs, and Evidence IDs, a size limit
+(`MAX_PROPOSED_FIX_LINES`/`MAX_PROPOSED_FIX_EXPANSION_LINES`), no `import`/
+`from` lines, and — added after a real live-provider run returned an
+accepted bare unified-diff removal line instead of literal code — no line
+starting with a bare `-`/`+` diff marker
+(`CodeFixValidationFailureCode.DIFF_MARKER_ARTIFACT`) before returning a
+`ProposedCodeFix`. The router shares `investigation_code_diagnosis_client`
+for this stage rather than constructing a separate client (`correlation_
+scan_router.py`'s `get_correlation_scan_fix_proposal_client`). This is a
+read-only trust boundary: a proposed fix is grounded and scope-validated,
+never proven correct until compiled/tested, and no scan can apply a patch,
+modify a repository, create a pull request, or push code. Missing hunk
+context, provider failure, or a rejected suggestion leaves the validated
+diagnosis intact with `fix_status: unavailable`. Live-verified against the
+same real Sentry/GitHub/OpenRouter incident as the paragraph above,
+including the bug this live run found and fixed — see ADR-038's "Live
+verification — fix proposal" section for the full before/after and the
+separate `app/evals/fix_proposal/` eval matrix.
+
 `POST /v1/correlation-scans` (`app/api/v1/correlation_scan_router.py`) is
 the entry point: synchronous, returns the full
 `RepositoryCorrelationScanResult` in the response body (no async/SSE run
-lifecycle — nothing here makes an LLM call or needs one), and requires an
-authenticated caller with their own connected Sentry and GitHub
-credentials. Unlike `get_incident_source`/`get_github_code_evidence_source`
+lifecycle — the scan's own LLM calls, when the deterministic gate allows
+them, are made in-request and bounded, not unpredictable planning latency),
+and requires an authenticated caller with their own connected Sentry and
+GitHub credentials. Unlike `get_incident_source`/`get_github_code_evidence_source`
 (`connector_router.py`), there is no anonymous/demo fallback — no fake
 equivalent of `list_open_issues`/`get_linked_jira_key`/
 `get_issue_commit_sha` exists, so `get_sentry_source_for_scan` (the new
@@ -476,6 +559,61 @@ than calling `get_credential_repository(request)` directly the way
 bypasses `app.dependency_overrides` entirely, which would have made the
 new route untestable the same way; the existing functions were left
 unchanged.
+
+**Source discovery and Whyline V1 UI (Implemented):** authenticated browser
+requests use `GET /v1/github/context` and `GET /v1/sentry/projects`, each of
+which decrypts the current user's stored provider credential only inside the
+request-scoped connector path. They return bounded selector projections, never
+tokens or provider payloads. `WhylineApp` presents those projections through
+two client-side-filtered, keyboard-accessible comboboxes. Search text is
+presentation-only: `selectedRepository` and `selectedSentryProject` are the
+only normal repository/project inputs to `POST /v1/correlation-scans`; the
+GitHub owner/name and Sentry project slug remain independent scan request
+fields. When `analysis.proposed_fixes` is non-empty, `ProposedFixPanel`
+(`WhylineApp.tsx`) renders each one: file/function/line range, failure
+mechanism, fix strategy, the observed and suggested hunks side by side, an
+explanation, and a copy-to-clipboard action — never an apply/push/create-PR
+action, matching the read-only trust boundary above.
+
+### Whyline V1 correlation presentation boundary
+
+The synchronous scan response now also carries additive
+`IssueCorrelationResult.presentation: CorrelationScanPresentation`. It is a
+bounded, deterministic UI projection, not a raw Evidence/Fact serializer:
+
+```text
+normalized Sentry title + stack-frame Evidence + validated Facts
+                         |
+                         v
+          CorrelationScanPresentation / FactSummary
+                         |
+                         v
+              frontend-safe scan response
+```
+
+It includes only the optional issue title, failure file path/line/function,
+and summaries for `ChangedFileFact`, `ChangedFileMatchesFailureFileFact`, and
+`ChangedHunkOverlapsFailureLineFact`. `render_correlation_fact_summary()`
+creates those summaries without an LLM call. Missing title or failure-location
+metadata remains `null`; it does not change the scan status. Raw Sentry JSON,
+tokens, encrypted credentials, prompts, code snippets, and unvalidated LLM
+candidates never cross this boundary. The UI must use `fact_summaries` rather
+than trying to reconstruct Facts from `fact_ids`.
+
+For the V1 frontend, `GET /v1/auth/me` reuses the signed-session
+`get_current_user` dependency and returns `UserResponse` (`id`, `email`, and
+`created_at`) only. A missing, invalid, or expired cookie returns FastAPI's
+existing `401 {"detail": "Not authenticated."}`. Logout clears that browser
+cookie; the existing stateless session design does not add server-side token
+revocation.
+
+The scan remains request/response only: `POST /v1/correlation-scans` has no
+scan persistence, history endpoint, or SSE stream. Frontend handling is:
+`401` auth required; `409` Sentry/GitHub source not connected (the existing
+top-level `detail` string); `422` invalid request data; `502`/`503` upstream
+failure (`ApiError` with `correlation_scan_upstream_failed`); and `200` with
+per-issue `partial`/`failed` statuses for isolated issue failures. A listed
+credential means a token is stored, not that the provider was live-validated.
 
 ## Grounding extraction: natural-language pre-step (Implemented)
 

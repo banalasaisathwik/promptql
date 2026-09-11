@@ -97,7 +97,7 @@ class HypothesisGeneratorTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(generated.candidates), 1)
-        self.assertEqual(generated.metadata.prompt_version, "v2.17.1")
+        self.assertEqual(generated.metadata.prompt_version, "v2.17.3")
         self.assertEqual(generated.metadata.provider, "fake")
         self.assertEqual(generated.metadata.task, "hypothesis_generation")
         self.assertEqual(generated.metadata.requested_model, "deterministic-fake-v1")
@@ -184,6 +184,49 @@ class DeterministicHypothesisValidatorTests(unittest.TestCase):
         result = DeterministicHypothesisValidator().validate((), _facts())
         self.assertEqual(result.accepted_hypotheses, ())
         self.assertEqual(result.rejected_candidates, ())
+
+    def test_absolute_deploy_path_and_repo_relative_path_still_match(self):
+        facts = (
+            ChangedFileFact(
+                fact_id="F_CHANGED", evidence_reference_ids=("E_CHANGED",),
+                path="sandbox-target/app/checkout.py", change_type="modified",
+            ),
+            ChangedFileMatchesFailureFileFact(
+                fact_id="F_FAILURE_FILE", evidence_reference_ids=("E_FAILURE",),
+                file_path="/opt/render/project/src/sandbox-target/app/checkout.py",
+            ),
+        )
+        for subject in (
+            "sandbox-target/app/checkout.py",
+            "/opt/render/project/src/sandbox-target/app/checkout.py",
+        ):
+            with self.subTest(subject=subject):
+                result = DeterministicHypothesisValidator().validate(
+                    (_candidate("F_CHANGED", "F_FAILURE_FILE", subject=subject),), facts
+                )
+                self.assertEqual(
+                    [item.hypothesis_id for item in result.accepted_hypotheses],
+                    ["H_CODE_CHANGE"],
+                )
+
+    def test_bare_filename_subject_is_still_rejected(self):
+        facts = (
+            ChangedFileFact(
+                fact_id="F_CHANGED", evidence_reference_ids=("E_CHANGED",),
+                path="sandbox-target/app/checkout.py", change_type="modified",
+            ),
+            ChangedFileMatchesFailureFileFact(
+                fact_id="F_FAILURE_FILE", evidence_reference_ids=("E_FAILURE",),
+                file_path="/opt/render/project/src/sandbox-target/app/checkout.py",
+            ),
+        )
+        result = DeterministicHypothesisValidator().validate(
+            (_candidate("F_CHANGED", "F_FAILURE_FILE", subject="checkout.py"),), facts
+        )
+        self.assertEqual(
+            result.rejected_candidates[0].reason,
+            HypothesisValidationFailureCode.ENTITY_MISMATCH,
+        )
 
 
 class GroundedRenderingTests(unittest.TestCase):

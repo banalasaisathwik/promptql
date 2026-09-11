@@ -30,11 +30,13 @@ class FakeSentryScanSource:
         open_issues: tuple[SentryOpenIssue, ...] = (),
         jira_key: JiraIssueKey | None = None,
         commit_sha: str | None = None,
+        failure_location: Evidence | None = None,
         list_open_issues_error: Exception | None = None,
     ) -> None:
         self._open_issues = open_issues
         self._jira_key = jira_key
         self._commit_sha = commit_sha
+        self._failure_location = failure_location
         self._list_open_issues_error = list_open_issues_error
 
     async def list_open_issues(
@@ -49,7 +51,9 @@ class FakeSentryScanSource:
 
     async def get_failure_location_evidence(
         self, request: FailureLocationEvidenceRequest
-    ) -> Evidence:
+    ) -> Evidence | None:
+        if self._failure_location is not None:
+            return self._failure_location
         return Evidence(
             evidence_id=f"sentry:issue:{request.incident_reference}:failure-location",
             source=EvidenceSource.INCIDENT,
@@ -73,6 +77,7 @@ class FakeSentryScanSource:
 ISSUE = SentryOpenIssue(
     issue_id="1001",
     short_id="CHECKOUT-1",
+    title="KeyError: 0",
     project_slug="checkout-api",
     first_seen=datetime(2026, 8, 17, 11, 40, tzinfo=UTC),
     last_seen=datetime(2026, 8, 17, 11, 50, tzinfo=UTC),
@@ -166,9 +171,46 @@ class CorrelationScanApiTests(unittest.TestCase):
         self.assertEqual(len(body["results"]), 1)
         result = body["results"][0]
         self.assertEqual(result["sentry_issue_id"], "1001")
+        self.assertEqual(result["presentation"]["issue_title"], "KeyError: 0")
+        self.assertEqual(result["presentation"]["failure_file_path"], "services/checkout.py")
         self.assertEqual(result["jira_ticket"], "KAN-5")
         self.assertIsNone(result["commit_sha"])
         self.assertEqual(result["status"], "ok")
+        self.assertNotIn("token", response.text.lower())
+        self.assertNotIn("password", response.text.lower())
+        self.assertNotIn("encrypted", response.text.lower())
+
+    def test_missing_sentry_title_or_failure_location_stays_safe_and_serializable(self) -> None:
+        self.credential_repository.store_credential(
+            self.current_user.id, CredentialProvider.SENTRY, "test-sentry-token"
+        )
+        issue_without_metadata = ISSUE.model_copy(update={"title": None})
+        self._override_sentry_source(
+            FakeSentryScanSource(
+                open_issues=(issue_without_metadata,),
+                failure_location=Evidence(
+                    evidence_id="sentry:issue:1001:failure-location-no-path",
+                    source=EvidenceSource.INCIDENT,
+                    kind=EvidenceKind.STACK_FRAME,
+                    provenance=EvidenceProvenance(
+                        source_reference="sentry:issue:1001",
+                        retrieved_at=datetime(2026, 8, 17, 12, 0, tzinfo=UTC),
+                    ),
+                    content=StackFrameEvidenceContent(
+                        service="checkout-api", error_category="KeyError"
+                    ),
+                ),
+            )
+        )
+
+        response = self.client.post("/v1/correlation-scans", json=self._request_body())
+
+        self.assertEqual(response.status_code, 200)
+        presentation = response.json()["results"][0]["presentation"]
+        self.assertIsNone(presentation["issue_title"])
+        self.assertIsNone(presentation["failure_file_path"])
+        self.assertIsNone(presentation["failure_line_number"])
+        self.assertIsNone(presentation["failure_function_name"])
 
     def test_sentry_connector_error_maps_to_typed_upstream_failure(self) -> None:
         self.credential_repository.store_credential(

@@ -1,105 +1,46 @@
-/** Root React component.
- *
- * App deliberately contains no feature logic. It selects the page to render,
- * while the readiness feature owns its state, API calls, and presentation.
- */
-
-import './App.css'
 import { useEffect, useState } from 'react'
-import { InvestigationConsolePage } from './features/inspection/InvestigationConsolePage'
-import { InvestigationTraceView } from './features/inspection/InvestigationTraceView'
-import { LandingPage } from './features/inspection/LandingPage'
-import { RunDashboardPage } from './features/inspection/RunDashboardPage'
-import { ConnectToolsPage } from './features/inspection/ConnectToolsPage'
-import { WorkspaceAuthPage } from './features/inspection/WorkspaceAuthPage'
-import { runTracePathFor } from './routing'
+import { fetchCurrentUser } from './features/inspection/api'
+import type { AuthenticatedUser } from './features/inspection/api'
+import { ConnectorApiError } from './features/inspection/apiError'
+import { AuthPage, Landing, WhylineWorkspace } from './features/inspection/WhylineApp'
+import './App.css'
 
-
-function runIdFromPath(pathname: string): string | null {
-  const match = /^\/runs\/([^/]+)$/.exec(pathname)
-  return match ? decodeURIComponent(match[1]) : null
-}
-
-
-function traceRunIdFromPath(pathname: string): string | null {
-  const match = /^\/runs\/([^/]+)\/trace$/.exec(pathname)
-  return match ? decodeURIComponent(match[1]) : null
-}
-
-
+/** The V1 shell owns only browser routing and the cookie-backed auth boot state. */
 function App() {
   const [pathname, setPathname] = useState(window.location.pathname)
-  const [demoPrefill, setDemoPrefill] = useState<{ email: string, password: string } | null>(null)
-  const traceRunId = traceRunIdFromPath(pathname)
-  const runId = runIdFromPath(pathname)
+  const [user, setUser] = useState<AuthenticatedUser | null>(null)
+  const [authState, setAuthState] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading')
 
-  function navigate(nextPath: string) {
-    window.history.pushState(null, '', nextPath)
-    setPathname(nextPath)
+  function navigate(path: string) {
+    window.history.pushState(null, '', path)
+    setPathname(path)
   }
 
   useEffect(() => {
-    function updatePathname() {
-      setPathname(window.location.pathname)
-    }
-    window.addEventListener('popstate', updatePathname)
-    return () => window.removeEventListener('popstate', updatePathname)
+    const updatePath = () => setPathname(window.location.pathname)
+    window.addEventListener('popstate', updatePath)
+    return () => window.removeEventListener('popstate', updatePath)
   }, [])
 
-  if (traceRunId) {
-    return <InvestigationTraceView runId={traceRunId} />
-  }
+  useEffect(() => {
+    void fetchCurrentUser().then((currentUser) => {
+      setUser(currentUser)
+      setAuthState('authenticated')
+    }).catch((caught) => {
+      // A workspace is never rendered until the server resolves its session.
+      if (!(caught instanceof ConnectorApiError) || caught.status === 401) setAuthState('unauthenticated')
+      else setAuthState('unauthenticated')
+    })
+  }, [])
 
-  if (runId) {
-    return <RunDashboardPage runId={runId} />
+  if (authState === 'loading') return <main className="wl-boot" aria-live="polite">Loading Whyline…</main>
+  if (pathname === '/') return <Landing navigate={navigate} />
+  if (pathname === '/login' || pathname === '/signup') {
+    return <AuthPage mode={pathname === '/login' ? 'login' : 'signup'} navigate={navigate} onAuthenticated={(currentUser) => { setUser(currentUser); setAuthState('authenticated'); navigate('/connect') }} />
   }
-
-  if (pathname === '/') {
-    return (
-      <LandingPage
-        onTryDemo={(email, password) => {
-          setDemoPrefill({ email, password })
-          navigate('/login')
-        }}
-        onExploreAnonymously={() => navigate('/console')}
-      />
-    )
-  }
-
-  if (pathname === '/signup' || pathname === '/login') {
-    return (
-      <WorkspaceAuthPage
-        initialMode={pathname === '/login' ? 'login' : 'signup'}
-        initialEmail={pathname === '/login' ? demoPrefill?.email : undefined}
-        initialPassword={pathname === '/login' ? demoPrefill?.password : undefined}
-        onAuthenticated={() => {
-          setDemoPrefill(null)
-          navigate('/connect')
-        }}
-        onModeChanged={(mode) => navigate(mode === 'login' ? '/login' : '/signup')}
-      />
-    )
-  }
-
-  if (pathname === '/connect') {
-    return (
-      <ConnectToolsPage
-        onContinue={() => navigate('/console')}
-        onLoggedOut={() => navigate('/login')}
-      />
-    )
-  }
-
-  // The console is shared by anonymous visitors and authenticated workspaces.
-  // Its existing demo action submits the same checkout-500 fixture for both.
-  return (
-    <InvestigationConsolePage
-      onRunStarted={(nextRunId) => {
-        navigate(runTracePathFor(nextRunId))
-      }}
-    />
-  )
+  if (!user) return <AuthPage mode="login" navigate={navigate} onAuthenticated={(currentUser) => { setUser(currentUser); setAuthState('authenticated'); navigate('/connect') }} />
+  const page = pathname === '/sources' ? 'sources' : pathname === '/connect' ? 'connect' : 'scan'
+  return <WhylineWorkspace user={user} page={page} navigate={navigate} onLogout={() => { setUser(null); setAuthState('unauthenticated'); navigate('/') }} />
 }
-
 
 export default App
