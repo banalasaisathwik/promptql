@@ -569,11 +569,26 @@ two client-side-filtered, keyboard-accessible comboboxes. Search text is
 presentation-only: `selectedRepository` and `selectedSentryProject` are the
 only normal repository/project inputs to `POST /v1/correlation-scans`; the
 GitHub owner/name and Sentry project slug remain independent scan request
-fields. When `analysis.proposed_fixes` is non-empty, `ProposedFixPanel`
-(`WhylineApp.tsx`) renders each one: file/function/line range, failure
-mechanism, fix strategy, the observed and suggested hunks side by side, an
-explanation, and a copy-to-clipboard action — never an apply/push/create-PR
-action, matching the read-only trust boundary above.
+fields. The `Diagnosis` view (`WhylineApp.tsx`) presents a scan result as a
+two-column layout: a sticky metadata sidebar plus a main column ordered
+"Likely cause" (top hypothesis + a "Grounded in" summary of its location,
+commit, and Sentry id) -> "Code finding" (`groupCodeFindings` in
+`whylinePresentation.ts` collapses findings that share file, function, line,
+and category into one card with a "Supported by N evidence items" expander,
+instead of rendering duplicate cards) -> "Proposed fix". When
+`analysis.proposed_fixes` is non-empty, `ProposedFixPanel` renders each one:
+failure mechanism, fix strategy, a compact +/- line diff between the observed
+and suggested hunks (`computeLineDiff` in `whylineDiff.ts`, a pure
+presentation-layer LCS diff — it never generates code), an explanation, and a
+copy-to-clipboard action — never an apply/push/create-PR action, matching the
+read-only trust boundary above. All of this — plus `IssueCard`'s result-list
+rows and the diagnosis sidebar's "Failure location" — render backend-returned
+absolute file paths (e.g. Sentry stack-frame paths under
+`/opt/render/project/src/<repo>/...`) as repository-relative paths via
+`repositoryRelativePath()` (`whylinePath.ts`), which trims everything up to
+and including the repository name; this mirrors the backend's
+`paths_match()` suffix logic (`investigations/path_normalization.py`) but is
+presentation-only and never changes the underlying evidence.
 
 ### Whyline V1 correlation presentation boundary
 

@@ -4681,3 +4681,75 @@ evidence. It is not a conversation transcript, diary, or substitute for an ADR.
   evidence specifically (as opposed to the adaptive path's PR-scoped
   evidence the validators were originally designed around) remain
   unverified live. See ADR-038's Reconsideration triggers.
+
+### 2026-09-11 - Redesigning a result page without touching the deterministic/LLM boundary it presents
+
+- **Concept:** a "frontend presentation refactor" still has a
+  deterministic/probabilistic boundary to respect — it just moves entirely
+  inside the frontend. `Diagnosis`/`IssueCard`/`ProposedFixPanel`
+  (`apps/web/src/features/inspection/WhylineApp.tsx`) only ever *display*
+  fields the backend already validated (`CorrelationIssue` from `api.ts`);
+  none of the new presentation logic infers or fabricates a fact the
+  backend didn't already establish. Three small, independently unit-tested
+  pure functions carry that logic: `repositoryRelativePath()`
+  (`whylinePath.ts`) turns an absolute Sentry stack-frame path like
+  `/opt/render/project/src/sandbox-target/app/checkout.py` into
+  `app/checkout.py` by finding the last path segment equal to the known
+  repository name and keeping everything after it — this mirrors, but does
+  not call, the backend's `paths_match()` suffix logic
+  (`services/api/app/investigations/path_normalization.py`), because the
+  two run on different data shapes (a repo name vs. two arbitrary paths)
+  and the frontend must never depend on a backend module transitively.
+  `groupCodeFindings()` (`whylinePresentation.ts`) collapses code findings
+  that share file/function/line/category into one card with a "Supported
+  by N evidence items" expander, so repeated near-identical evidence from
+  the backend renders once instead of N times. `computeLineDiff()`
+  (`whylineDiff.ts`) is a small LCS line-diff purely for *displaying* the
+  backend-returned `original_hunk`/`corrected_hunk` as a compact +/- patch
+  — it never generates or alters code, satisfying the "no LLM output
+  becomes authoritative state" boundary from the other direction (no
+  frontend code becomes proposed code, either).
+- **Design decision — no new dependency for the diff:** rather than adding
+  an npm diff library (which would need the Dependencies-section approval
+  flow in CLAUDE.md for a one-function need), `computeLineDiff()` is a
+  ~30-line standard dynamic-programming LCS diff, unit-tested directly
+  against the fixture hunks (`whylineDiff.test.ts`) rather than trusted by
+  inspection.
+- **Bug found via the redesign, not the original ask:** `wl-proposed-fix`,
+  `wl-fix-title`, and `wl-code-compare` were referenced in the pre-existing
+  JSX but had zero matching CSS rules in `whyline.css`, so the two
+  side-by-side hunks rendered as unstyled, unconstrained `<pre>` blocks —
+  this, not any `position:absolute`/`z-index`, was the actual cause of the
+  reported "Diagnosis panel overlaps main content": a long unwrapped code
+  line has no default `overflow-x` clipping and visually bled across the
+  grid track into the sidebar column. Fixed by giving the new `.wl-diff`
+  block an explicit `overflow-x:auto` + `max-width:100%`, and by setting
+  `align-items:start` plus `position:sticky` only on the aside (not the
+  whole grid), which is what actually keeps a sticky sidebar column from
+  stretching to match a taller main column.
+- **Validation evidence:** `bun test` from `apps/web` — 97 pass, 0 fail,
+  300 `expect()` calls (18 files, including 3 new: `whylinePath.test.ts`,
+  `whylineDiff.test.ts`, plus new cases added to the pre-existing
+  `whylinePresentation.test.ts` and `WhylineApp.test.tsx`). `bun run
+  build` (`tsc -b && vite build`) and `bun run lint` (`oxlint`) both clean.
+  Beyond tests, rendered the actual `Diagnosis` component through a real
+  `vite` dev server (a temporary, since-deleted preview entry point) and
+  screenshotted it with a locally cached Playwright/Chromium at 1400px and
+  400px widths, plus clicked the "Supported by N evidence items" toggle to
+  confirm the expand/collapse state — not just static-markup string
+  assertions — before removing the preview files and stopping the server.
+- **Mistake caught mid-session:** `Write` on
+  `whylinePresentation.test.ts` was used as if creating a new file, but a
+  test file for `whylinePresentation.ts` already existed (three tests for
+  the error-message and label helpers) — `Write` overwrote it entirely.
+  Caught via `git status` showing `M` instead of `??` before this session
+  otherwise would have reported success. Fixed by restoring the original
+  three tests from `git show HEAD:...` and appending the new ones, rather
+  than losing pre-existing test coverage. Lesson for next time: run `git
+  status` on a file *before* deciding whether `Write` or `Edit` is the
+  right tool, not just before committing.
+- **No backend/API change:** `services/api` was not touched; `CLAUDE.md`
+  was checked — nothing here altered the API contract, so it needed no
+  companion ADR, only the `ARCHITECTURE.md` paragraph describing
+  `ProposedFixPanel`'s old two-hunk layout, which was now stale and was
+  updated to describe the new grouped-finding + compact-diff layout.

@@ -1,5 +1,6 @@
 import { ConnectorApiError } from './apiError'
-import type { CodeFindingCategory, CorrelationIssue } from './api'
+import type { CodeFindingCategory, CorrelationIssue, GroundedCodeFinding } from './api'
+import { repositoryRelativePath } from './whylinePath'
 
 /** Convert known HTTP outcomes and backend enums into the compact V1 language. */
 /** Preserve endpoint-specific backend messages for auth and credential actions. */
@@ -54,4 +55,57 @@ export function whylineGroundingLabel(
     moderate: 'Moderate grounding',
     insufficient: 'Insufficient evidence',
   }[strength]
+}
+
+/** The `file · Line N · function()` pieces shared by every location display on the result page. */
+export function whylineLocationParts(
+  filePath: string | null,
+  lineNumber: number | null,
+  functionName: string | null,
+  repositoryName?: string | null,
+): string[] {
+  const parts: string[] = []
+  if (filePath) parts.push(repositoryRelativePath(filePath, repositoryName))
+  if (lineNumber !== null) parts.push(`Line ${lineNumber}`)
+  if (functionName) parts.push(`${functionName}()`)
+  return parts
+}
+
+/**
+ * The one-line "what broke, where, what should change" summary shown under
+ * the failure title. It only joins backend-authored sentences that already
+ * exist on the issue (the top hypothesis statement and the top proposed
+ * fix's strategy) -- it never composes new factual claims.
+ */
+export function whylineFailureSummary(issue: CorrelationIssue): string | null {
+  const hypothesis = issue.analysis.hypotheses[0]?.statement.trim() || null
+  const strategy = issue.analysis.proposed_fixes[0]?.fix_strategy.trim() || null
+  if (hypothesis && strategy) return `${hypothesis} ${strategy}`
+  return hypothesis ?? strategy
+}
+
+export type WhylineCodeFindingGroup = {
+  primary: GroundedCodeFinding
+  supportingCount: number
+  duplicates: GroundedCodeFinding[]
+}
+
+/**
+ * Collapse code findings that name the same file, function, line, and
+ * category into one presentation group instead of rendering repeated
+ * near-identical evidence cards.
+ */
+export function groupCodeFindings(findings: readonly GroundedCodeFinding[]): WhylineCodeFindingGroup[] {
+  const order: string[] = []
+  const groups = new Map<string, GroundedCodeFinding[]>()
+  for (const finding of findings) {
+    const key = [finding.file_path, finding.function_name ?? '', finding.line_number ?? '', finding.category].join('::')
+    const existing = groups.get(key)
+    if (existing) existing.push(finding)
+    else { groups.set(key, [finding]); order.push(key) }
+  }
+  return order.map((key) => {
+    const group = groups.get(key) as GroundedCodeFinding[]
+    return { primary: group[0], supportingCount: group.length, duplicates: group.slice(1) }
+  })
 }

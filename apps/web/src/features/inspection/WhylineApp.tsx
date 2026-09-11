@@ -9,12 +9,16 @@ import type {
   CredentialProvider, GitHubContext, GitHubRepository, SentryProject,
 } from './api'
 import { canAnalyzeRepositoryScan, correlationRequestForSelection } from './correlationSelection'
+import { computeLineDiff } from './whylineDiff'
 import { filterDiscoveryItems } from './discoverySearch'
+import { repositoryRelativePath } from './whylinePath'
 import {
-  whylineAnalysisLabel as analysisLabel, whylineCategoryLabel as categoryLabel,
+  groupCodeFindings, whylineAnalysisLabel as analysisLabel, whylineCategoryLabel as categoryLabel,
   whylineDiscoveryErrorMessage as discoveryErrorMessage, whylineErrorMessage as errorMessage,
-  whylineGroundingLabel as groundingLabel, whylineScanErrorMessage as scanErrorMessage,
+  whylineFailureSummary as failureSummary, whylineGroundingLabel as groundingLabel,
+  whylineLocationParts as locationParts, whylineScanErrorMessage as scanErrorMessage,
 } from './whylinePresentation'
+import type { WhylineCodeFindingGroup } from './whylinePresentation'
 import './whyline.css'
 
 const providers: Array<{ id: CredentialProvider, name: string, required: boolean }> = [
@@ -138,14 +142,15 @@ function ScanWorkspace({ connections, navigate }: { connections: CredentialConne
   useEffect(() => { let active = true; setGithub(null); setProjects(null); setSelectedRepository(null); setSelectedSentryProject(null); setGithubError(null); setSentryError(null); setResult(null); if (githubConnected) void fetchGitHubContext().then((context) => { if (active) setGithub(context) }).catch((caught) => { if (active) setGithubError(discoveryErrorMessage('GitHub', caught)) }); if (sentryConnected) void fetchSentryProjects().then((items) => { if (active) setProjects(items) }).catch((caught) => { if (active) setSentryError(discoveryErrorMessage('Sentry', caught)) }); return () => { active = false } }, [githubConnected, sentryConnected])
   const request = correlationRequestForSelection(selectedRepository, selectedSentryProject); const canScan = canAnalyzeRepositoryScan(githubConnected, sentryConnected, selectedRepository, selectedSentryProject, Boolean(githubError || sentryError)); const githubLoading = githubConnected && github === null && !githubError; const sentryLoading = sentryConnected && projects === null && !sentryError
   async function scan(event: FormEvent) { event.preventDefault(); if (!request) { setError('Select an accessible repository and Sentry project.'); return }; setLoading(true); setError(null); try { setResult(await runCorrelationScan(request)); setSelected(null) } catch (caught) { setError(scanErrorMessage(caught)) } finally { setLoading(false) } }
-  if (selected) return <Diagnosis issue={selected} onBack={() => setSelected(null)} />
+  if (selected) return <Diagnosis issue={selected} repositoryName={result?.repository_name ?? null} onBack={() => setSelected(null)} />
   const grounded = result?.results.filter((issue) => issue.analysis.status === 'completed').length ?? 0; const insufficient = result?.results.filter((issue) => issue.analysis.status === 'insufficient_evidence').length ?? 0
-  return <section className="wl-workspace-content wl-scan-content">{!result ? <><div className="wl-title-row"><div><h1>Repository scan</h1><p>Trace production incidents back to the code change that introduced them.</p></div></div><form className="wl-scan-form" onSubmit={scan}><DiscoveryCombobox id="repository" label="Repository" searchLabel="Search repositories…" emptyLabel="No repositories found" loadingLabel="Loading repositories…" providerMark="GH" items={github?.repositories ?? []} selected={selectedRepository} disabled={!githubConnected || githubLoading || Boolean(githubError)} loading={githubLoading} getKey={(item) => item.full_name} getLabel={(item) => `${item.owner} / ${item.name}`} getSearchText={(item) => `${item.owner} ${item.name} ${item.full_name}`} getMeta={(item) => item.private ? 'Private' : 'Public'} onSelect={setSelectedRepository} /><DiscoveryCombobox id="sentry-project" label="Sentry project" searchLabel="Search Sentry projects…" emptyLabel="No Sentry projects found" loadingLabel="Loading Sentry projects…" providerMark="S" items={projects ?? []} selected={selectedSentryProject} disabled={!sentryConnected || sentryLoading || Boolean(sentryError)} loading={sentryLoading} getKey={(item) => `${item.organization_slug}/${item.project_slug}`} getLabel={(item) => `${item.organization_slug} / ${item.project_slug}`} getSearchText={(item) => `${item.organization_slug} ${item.project_slug} ${item.name}`} onSelect={setSelectedSentryProject} /><SourceStatus connections={connections} /><button className="wl-button wl-scan-cta" disabled={loading || !canScan}>{loading ? 'Analyzing repository…' : 'Analyze repository'}</button></form>{!githubConnected && connections !== null && <p className="wl-required">Connect GitHub to choose a repository. <button className="wl-link" onClick={() => navigate('/sources')}>Manage sources</button></p>}{!sentryConnected && connections !== null && <p className="wl-required">Connect Sentry to choose a project. <button className="wl-link" onClick={() => navigate('/sources')}>Manage sources</button></p>}{githubError && <p role="alert" className="wl-error">{githubError}</p>}{sentryError && <p role="alert" className="wl-error">{sentryError}</p>}{github?.repositories.length === 0 && <p className="wl-required">No repositories found for this GitHub connection.</p>}{projects?.length === 0 && <p className="wl-required">No Sentry projects found for this connection.</p>}{error && <p role="alert" className="wl-error">{error}</p>}{loading && <div className="wl-loading" role="status"><span className="wl-spinner" /><div><strong>Analyzing repository…</strong><p>Correlating Sentry issues with commits and code changes.</p></div></div>}</> : <section className="wl-results"><div className="wl-selected-source-bar"><div><strong>{selectedRepository ? `${selectedRepository.owner} / ${selectedRepository.name}` : result.repository_owner}</strong><span>{selectedSentryProject ? `${selectedSentryProject.organization_slug} / ${selectedSentryProject.project_slug}` : 'Selected Sentry project'}</span></div><button className="wl-text-button" onClick={() => setResult(null)}>Change</button></div><div className="wl-summary"><strong>{result.total_open_issues_found} open issue{result.total_open_issues_found === 1 ? '' : 's'}</strong><span>{grounded} grounded</span><span>{insufficient} insufficient evidence</span>{result.truncated && <span>Results limited to scanned issues</span>}</div>{result.results.map((issue) => <IssueCard key={issue.sentry_issue_id} issue={issue} onView={() => setSelected(issue)} />)}</section>}</section>
+  return <section className="wl-workspace-content wl-scan-content">{!result ? <><div className="wl-title-row"><div><h1>Repository scan</h1><p>Trace production incidents back to the code change that introduced them.</p></div></div><form className="wl-scan-form" onSubmit={scan}><DiscoveryCombobox id="repository" label="Repository" searchLabel="Search repositories…" emptyLabel="No repositories found" loadingLabel="Loading repositories…" providerMark="GH" items={github?.repositories ?? []} selected={selectedRepository} disabled={!githubConnected || githubLoading || Boolean(githubError)} loading={githubLoading} getKey={(item) => item.full_name} getLabel={(item) => `${item.owner} / ${item.name}`} getSearchText={(item) => `${item.owner} ${item.name} ${item.full_name}`} getMeta={(item) => item.private ? 'Private' : 'Public'} onSelect={setSelectedRepository} /><DiscoveryCombobox id="sentry-project" label="Sentry project" searchLabel="Search Sentry projects…" emptyLabel="No Sentry projects found" loadingLabel="Loading Sentry projects…" providerMark="S" items={projects ?? []} selected={selectedSentryProject} disabled={!sentryConnected || sentryLoading || Boolean(sentryError)} loading={sentryLoading} getKey={(item) => `${item.organization_slug}/${item.project_slug}`} getLabel={(item) => `${item.organization_slug} / ${item.project_slug}`} getSearchText={(item) => `${item.organization_slug} ${item.project_slug} ${item.name}`} onSelect={setSelectedSentryProject} /><SourceStatus connections={connections} /><button className="wl-button wl-scan-cta" disabled={loading || !canScan}>{loading ? 'Analyzing repository…' : 'Analyze repository'}</button></form>{!githubConnected && connections !== null && <p className="wl-required">Connect GitHub to choose a repository. <button className="wl-link" onClick={() => navigate('/sources')}>Manage sources</button></p>}{!sentryConnected && connections !== null && <p className="wl-required">Connect Sentry to choose a project. <button className="wl-link" onClick={() => navigate('/sources')}>Manage sources</button></p>}{githubError && <p role="alert" className="wl-error">{githubError}</p>}{sentryError && <p role="alert" className="wl-error">{sentryError}</p>}{github?.repositories.length === 0 && <p className="wl-required">No repositories found for this GitHub connection.</p>}{projects?.length === 0 && <p className="wl-required">No Sentry projects found for this connection.</p>}{error && <p role="alert" className="wl-error">{error}</p>}{loading && <div className="wl-loading" role="status"><span className="wl-spinner" /><div><strong>Analyzing repository…</strong><p>Correlating Sentry issues with commits and code changes.</p></div></div>}</> : <section className="wl-results"><div className="wl-selected-source-bar"><div><strong>{selectedRepository ? `${selectedRepository.owner} / ${selectedRepository.name}` : result.repository_owner}</strong><span>{selectedSentryProject ? `${selectedSentryProject.organization_slug} / ${selectedSentryProject.project_slug}` : 'Selected Sentry project'}</span></div><button className="wl-text-button" onClick={() => setResult(null)}>Change</button></div><div className="wl-summary"><strong>{result.total_open_issues_found} open issue{result.total_open_issues_found === 1 ? '' : 's'}</strong><span>{grounded} grounded</span><span>{insufficient} insufficient evidence</span>{result.truncated && <span>Results limited to scanned issues</span>}</div>{result.results.map((issue) => <IssueCard key={issue.sentry_issue_id} issue={issue} repositoryName={result.repository_name} onView={() => setSelected(issue)} />)}</section>}</section>
 }
 
-export function IssueCard({ issue, onView }: { issue: CorrelationIssue, onView: () => void }) {
-  const finding = issue.analysis.code_findings[0]; const p = issue.presentation; const location = [p.failure_file_path, p.failure_line_number !== null ? `line ${p.failure_line_number}` : null].filter(Boolean).join(' · ')
-  return <article className="wl-card wl-issue"><div className="wl-issue-head"><div><code>{issue.sentry_short_id}</code>{p.issue_title && <h2>{p.issue_title}</h2>}{location && <p>{location}{p.failure_function_name && ` · ${p.failure_function_name}`}</p>}</div><div className="wl-badges"><span className={`wl-badge ${issue.status === 'partial' ? 'wl-badge-warn' : ''}`}>{issue.status === 'ok' ? 'Correlation OK' : issue.status === 'partial' ? 'Partial correlation' : 'Correlation unavailable'}</span><span className="wl-badge">{analysisLabel(issue.analysis.status)}</span></div></div><dl className="wl-issue-details"><div><dt>Category</dt><dd>{finding ? categoryLabel(finding.category) : 'Not established'}</dd></div><div><dt>Grounding</dt><dd>{groundingLabel(p.grounding_strength)}</dd></div></dl><div className="wl-metadata">{issue.commit_sha && <code>Commit {issue.commit_sha.slice(0, 7)}</code>}{issue.jira_ticket && <code>Jira {issue.jira_ticket}</code>}</div>{p.fact_summaries[0]?.detail && <p className="wl-issue-summary">{p.fact_summaries[0].detail}</p>}<button className="wl-text-button" onClick={onView}>View diagnosis →</button></article>
+export function IssueCard({ issue, repositoryName, onView }: { issue: CorrelationIssue, repositoryName?: string | null, onView: () => void }) {
+  const finding = issue.analysis.code_findings[0]; const p = issue.presentation
+  const location = locationParts(p.failure_file_path, p.failure_line_number, p.failure_function_name, repositoryName)
+  return <article className="wl-card wl-issue"><div className="wl-issue-head"><div><code>{issue.sentry_short_id}</code>{p.issue_title && <h2>{p.issue_title}</h2>}{location.length > 0 && <p>{location.join(' · ')}</p>}</div><div className="wl-badges"><span className={`wl-badge ${issue.status === 'partial' ? 'wl-badge-warn' : ''}`}>{issue.status === 'ok' ? 'Correlation OK' : issue.status === 'partial' ? 'Partial correlation' : 'Correlation unavailable'}</span><span className="wl-badge">{analysisLabel(issue.analysis.status)}</span></div></div><dl className="wl-issue-details"><div><dt>Category</dt><dd>{finding ? categoryLabel(finding.category) : 'Not established'}</dd></div><div><dt>Grounding</dt><dd>{groundingLabel(p.grounding_strength)}</dd></div></dl><div className="wl-metadata">{issue.commit_sha && <code>Commit {issue.commit_sha.slice(0, 7)}</code>}{issue.jira_ticket && <code>Jira {issue.jira_ticket}</code>}</div>{p.fact_summaries[0]?.detail && <p className="wl-issue-summary">{p.fact_summaries[0].detail}</p>}<button className="wl-text-button" onClick={onView}>View diagnosis →</button></article>
 }
 
 export function ProposedFixPanel({ fix }: { fix: CorrelationIssue['analysis']['proposed_fixes'][number] }) {
@@ -154,12 +159,120 @@ export function ProposedFixPanel({ fix }: { fix: CorrelationIssue['analysis']['p
     await navigator.clipboard.writeText(fix.corrected_hunk)
     setCopied(true)
   }
-  return <section className="wl-card wl-panel wl-proposed-fix"><div className="wl-fix-title"><div><h2>Proposed fix</h2><p>{fix.file_path}{fix.function_name ? ` · ${fix.function_name}()` : ''} · lines {fix.line_start}–{fix.line_end}</p></div><button className="wl-text-button" onClick={() => void copy()}>{copied ? 'Copied' : 'Copy proposed fix'}</button></div><h3>Failure mechanism</h3><p>{fix.failure_mechanism}</p><h3>Fix strategy</h3><p>{fix.fix_strategy}</p><div className="wl-code-compare"><div><h3>Observed code</h3><pre><code>{fix.original_hunk}</code></pre></div><div><h3>Suggested correction</h3><pre><code>{fix.corrected_hunk}</code></pre></div></div><h3>Why this helps</h3><p>{fix.explanation}</p><p className="wl-small">This grounded, scope-validated suggestion is not automatically applied or proven correct until tested.</p></section>
+  const diff = computeLineDiff(fix.original_hunk, fix.corrected_hunk)
+  const hasChange = diff.some((line) => line.kind !== 'context')
+  return <section className="wl-card wl-panel wl-proposed-fix">
+    <div className="wl-fix-title">
+      <h2>Proposed fix</h2>
+      <button className="wl-text-button" onClick={() => void copy()}>{copied ? 'Copied' : 'Copy patch'}</button>
+    </div>
+    <h3>Failure mechanism</h3>
+    <p>{fix.failure_mechanism}</p>
+    <h3>Fix strategy</h3>
+    <p>{fix.fix_strategy}</p>
+    <h3>Patch</h3>
+    {hasChange
+      ? <pre className="wl-diff"><code>{diff.map((line, index) => (
+          <div key={index} className={`wl-diff-line wl-diff-${line.kind}`}>
+            {(line.kind === 'added' ? '+ ' : line.kind === 'removed' ? '- ' : '  ') + line.text}
+          </div>
+        ))}</code></pre>
+      : <pre className="wl-diff"><code>{fix.corrected_hunk}</code></pre>}
+    <h3>Why this fixes it</h3>
+    <p>{fix.explanation}</p>
+    <p className="wl-small">This grounded, scope-validated suggestion is not automatically applied or proven correct until tested.</p>
+  </section>
 }
 
-export function Diagnosis({ issue, onBack }: { issue: CorrelationIssue, onBack: () => void }) {
-  const p = issue.presentation; const analysis = issue.analysis; const a = { ...analysis, recommendations: [...analysis.proposed_fixes.map((fix) => ({ message: <ProposedFixPanel key={fix.finding_id} fix={fix} /> })), ...analysis.recommendations] } as typeof analysis; const location = [p.failure_file_path, p.failure_line_number !== null ? `Line ${p.failure_line_number}` : null, p.failure_function_name].filter(Boolean); const noEvidence = a.status === 'insufficient_evidence'; const noHypothesis = a.status === 'no_validated_hypothesis'
-  return <section className="wl-workspace-content"><button className="wl-text-button" onClick={onBack}>← Back to scan</button><div className="wl-title-row"><div><code>{issue.sentry_short_id}</code>{p.issue_title && <h1>{p.issue_title}</h1>}</div><div className="wl-badges"><span className="wl-badge">{issue.status === 'ok' ? 'Correlation OK' : issue.status === 'partial' ? 'Partial correlation' : 'Correlation unavailable'}</span><span className="wl-badge">{analysisLabel(a.status)}</span></div></div><div className="wl-diagnosis-grid"><div>{a.hypotheses.length > 0 && <section className="wl-card wl-panel"><h2>Likely cause</h2><ol>{a.hypotheses.map((hypothesis, index) => <li key={index}>{hypothesis.statement}</li>)}</ol></section>}<section className="wl-card wl-panel"><h2>Code finding</h2>{a.code_findings.length ? a.code_findings.map((finding, index) => <div className="wl-finding" key={index}><code>{finding.file_path}</code>{finding.function_name && <p>{finding.function_name}()</p>}{finding.line_number !== null && <p>Line {finding.line_number}</p>}<p>{categoryLabel(finding.category)}</p><p>{finding.statement}</p></div>) : <p>{noEvidence ? 'Whyline found source context but not enough deterministic evidence to make a grounded diagnosis.' : noHypothesis ? 'The available evidence did not support a reliable causal explanation.' : 'A grounded code location could not be established.'}</p>}</section>{a.recommendations.length > 0 && <section className="wl-card wl-panel"><h2>Recommended next actions</h2><ol>{a.recommendations.map((recommendation, index) => <li key={index}>{recommendation.message}</li>)}</ol></section>}<section className="wl-card wl-panel"><h2>Why this is grounded</h2>{p.fact_summaries.length ? <ul className="wl-facts">{p.fact_summaries.map((fact, index) => <li key={index}><span aria-hidden="true">✓</span><div><strong>{fact.label}</strong>{fact.detail && <p>{fact.detail}</p>}</div></li>)}</ul> : <p>No frontend-safe fact summaries were returned.</p>}</section></div><aside className="wl-card wl-panel"><h2>Diagnosis</h2><dl><dt>Category</dt><dd>{a.code_findings[0] ? categoryLabel(a.code_findings[0].category) : 'Not established'}</dd><dt>Grounding</dt><dd>{groundingLabel(p.grounding_strength)}</dd><dt>Sentry</dt><dd>{issue.sentry_short_id}</dd>{issue.jira_ticket && <><dt>Jira</dt><dd>{issue.jira_ticket}</dd></>}{issue.commit_sha && <><dt>Commit</dt><dd>{issue.commit_sha.slice(0, 7)}</dd></>}{location.length > 0 && <><dt>Failure location</dt><dd>{location.join(' · ')}</dd></>}</dl>{issue.status === 'partial' && <p className="wl-required">Partial correlation: some source data was unavailable.</p>}</aside></div></section>
+function CodeFindingGroupCard({ group, repositoryName }: { group: WhylineCodeFindingGroup, repositoryName?: string | null }) {
+  const [expanded, setExpanded] = useState(false)
+  const { primary, supportingCount, duplicates } = group
+  const relativePath = primary.file_path ? repositoryRelativePath(primary.file_path, repositoryName) : null
+  const meta = [primary.function_name ? `${primary.function_name}()` : null, primary.line_number !== null ? `Line ${primary.line_number}` : null]
+    .filter(Boolean).join(' · ')
+  return <div className="wl-finding">
+    {relativePath && <code className="wl-finding-path">{relativePath}</code>}
+    {meta && <p className="wl-finding-meta">{meta}</p>}
+    <p className="wl-finding-label">{categoryLabel(primary.category)}</p>
+    <p>{primary.statement}</p>
+    {supportingCount > 1 && <div className="wl-finding-evidence">
+      <button type="button" className="wl-text-button" onClick={() => setExpanded((current) => !current)}>
+        {expanded ? 'Hide evidence' : `Supported by ${supportingCount} evidence items`}
+      </button>
+      {expanded && <ul>{duplicates.map((duplicate, index) => <li key={index}>{duplicate.statement}</li>)}</ul>}
+    </div>}
+  </div>
+}
+
+export function Diagnosis({ issue, repositoryName, onBack }: { issue: CorrelationIssue, repositoryName?: string | null, onBack: () => void }) {
+  const p = issue.presentation; const a = issue.analysis
+  const location = locationParts(p.failure_file_path, p.failure_line_number, p.failure_function_name, repositoryName)
+  const summary = failureSummary(issue)
+  const codeFindingGroups = groupCodeFindings(a.code_findings)
+  const primaryHypothesis = a.hypotheses[0]?.statement ?? null
+  const primaryFinding = a.code_findings[0] ?? null
+  const primaryFindingLocation = primaryFinding
+    ? locationParts(primaryFinding.file_path, primaryFinding.line_number, null, repositoryName).join(' · ')
+    : ''
+  const groundedIn = primaryFindingLocation ? [primaryFindingLocation] : []
+  if (issue.commit_sha) groundedIn.push(`Commit ${issue.commit_sha.slice(0, 7)}`)
+  groundedIn.push(`Sentry ${issue.sentry_short_id}`)
+  const noEvidence = a.status === 'insufficient_evidence'; const noHypothesis = a.status === 'no_validated_hypothesis'
+  return <section className="wl-workspace-content wl-diagnosis-content">
+    <button className="wl-text-button" onClick={onBack}>← Back to scan</button>
+    <div className="wl-title-row">
+      <div>
+        <code>{issue.sentry_short_id}</code>
+        {p.issue_title && <h1>{p.issue_title}</h1>}
+        {summary && <p className="wl-failure-summary">{summary}</p>}
+      </div>
+      <div className="wl-badges">
+        <span className="wl-badge">{issue.status === 'ok' ? 'Correlation OK' : issue.status === 'partial' ? 'Partial correlation' : 'Correlation unavailable'}</span>
+        <span className="wl-badge">{analysisLabel(a.status)}</span>
+      </div>
+    </div>
+    <div className="wl-diagnosis-grid">
+      <div>
+        {primaryHypothesis && <section className="wl-card wl-panel">
+          <h2>Likely cause</h2>
+          <p>{primaryHypothesis}</p>
+          {groundedIn.length > 0 && <>
+            <p className="wl-grounded-in-label">Grounded in</p>
+            <ul className="wl-grounded-in">{groundedIn.map((item, index) => <li key={index}>{item}</li>)}</ul>
+          </>}
+        </section>}
+        <section className="wl-card wl-panel">
+          <h2>Code finding</h2>
+          {codeFindingGroups.length
+            ? codeFindingGroups.map((group, index) => <CodeFindingGroupCard key={index} group={group} repositoryName={repositoryName} />)
+            : <p>{noEvidence ? 'Whyline found source context but not enough deterministic evidence to make a grounded diagnosis.' : noHypothesis ? 'The available evidence did not support a reliable causal explanation.' : 'A grounded code location could not be established.'}</p>}
+        </section>
+        {a.proposed_fixes.map((fix) => <ProposedFixPanel key={fix.finding_id} fix={fix} />)}
+        {a.recommendations.length > 0 && <section className="wl-card wl-panel">
+          <h2>Recommended next actions</h2>
+          <ol>{a.recommendations.map((recommendation, index) => <li key={index}>{recommendation.message}</li>)}</ol>
+        </section>}
+        <section className="wl-card wl-panel">
+          <h2>Why this is grounded</h2>
+          {p.fact_summaries.length
+            ? <ul className="wl-facts">{p.fact_summaries.map((fact, index) => <li key={index}><span aria-hidden="true">✓</span><div><strong>{fact.label}</strong>{fact.detail && <p>{fact.detail}</p>}</div></li>)}</ul>
+            : <p>No frontend-safe fact summaries were returned.</p>}
+        </section>
+      </div>
+      <aside className="wl-card wl-panel">
+        <h2>Diagnosis</h2>
+        <dl>
+          <dt>Category</dt><dd>{a.code_findings[0] ? categoryLabel(a.code_findings[0].category) : 'Not established'}</dd>
+          <dt>Grounding</dt><dd>{groundingLabel(p.grounding_strength)}</dd>
+          <dt>Sentry</dt><dd>{issue.sentry_short_id}</dd>
+          {issue.jira_ticket && <><dt>Jira</dt><dd>{issue.jira_ticket}</dd></>}
+          {issue.commit_sha && <><dt>Commit</dt><dd>{issue.commit_sha.slice(0, 7)}</dd></>}
+          {location.length > 0 && <><dt>Failure location</dt><dd>{location.join(' · ')}</dd></>}
+        </dl>
+        {issue.status === 'partial' && <p className="wl-required">Partial correlation: some source data was unavailable.</p>}
+      </aside>
+    </div>
+  </section>
 }
 
 export function WhylineWorkspace({ user, page, navigate, onLogout }: { user: AuthenticatedUser, page: 'scan' | 'sources' | 'connect', navigate: (path: string) => void, onLogout: () => void }) {
