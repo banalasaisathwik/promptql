@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/v1/:path*",
-      "destination": "https://REPLACE_WITH_RENDER_BACKEND_URL.onrender.com/v1/:path*"
+      "destination": "https://promptql.onrender.com/v1/:path*"
     }
   ]
 }
