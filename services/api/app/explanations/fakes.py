@@ -167,16 +167,18 @@ def _default_investigation_output(request: TypedLLMRequest) -> object | None:
                 (
                     fact
                     for fact in facts
-                    if isinstance(
-                        fact,
-                        (
-                            ChangedFileMatchesFailureFileFact,
-                            ChangedHunkOverlapsFailureLineFact,
-                        ),
-                    )
+                    if isinstance(fact, ChangedHunkOverlapsFailureLineFact)
                     and fact.file_path == changed_file.path
                 ),
-                None,
+                next(
+                    (
+                        fact
+                        for fact in facts
+                        if isinstance(fact, ChangedFileMatchesFailureFileFact)
+                        and fact.file_path == changed_file.path
+                    ),
+                    None,
+                ),
             )
             if relationship is not None:
                 return HypothesisGenerationOutput(
@@ -262,6 +264,12 @@ def _default_investigation_output(request: TypedLLMRequest) -> object | None:
                 ),
             )
         )
+
+    if request.output_model.__name__ == "FixProposalOutput":
+        from app.investigations.code_diagnosis import FixProposalOutput
+
+
+        return FixProposalOutput()
 
     return None
 

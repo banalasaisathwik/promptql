@@ -21,8 +21,10 @@ from app.connectors.github_http_models import (
     GitHubCommitStatusResponse,
     GitHubCommitStatusesPageResponse,
     GitHubPullRequestResponse,
+    GitHubRepositoryResponse,
     GitHubReviewResponse,
     GitHubRuleResponse,
+    GitHubUserResponse,
 )
 from app.connectors.models import (
     CheckStatus,
@@ -62,6 +64,40 @@ class HttpGitHubConnector(BaseHttpGitHubConnector):
         max_pages: int = MAX_PAGES,
     ) -> None:
         super().__init__(client, telemetry, max_pages)
+
+    async def get_authenticated_context(
+        self,
+    ) -> tuple[str, tuple[GitHubRepositoryResponse, ...]]:
+        observation = GitHubRequestObservation()
+        with self._telemetry.observe_connector(
+            "github", self.source.value, "get_authenticated_context"
+        ) as span:
+            try:
+                user = await self._get_model("/user", GitHubUserResponse, observation)
+                repositories = await self._get_paginated_list(
+                    "/user/repos",
+                    GitHubRepositoryResponse,
+                    observation,
+                    {"affiliation": "owner,collaborator,organization", "sort": "full_name", "direction": "asc"},
+                )
+            except GitHubConnectorError as error:
+                span.set_attributes(
+                    **{
+                        "promptql.connector.result": error.category.value,
+                        "promptql.http.status_class": observation.status_class,
+                        "promptql.pagination.page_count": observation.page_count,
+                    }
+                )
+                span.mark_error(FailureCategory.CONNECTOR_FAILURE)
+                raise
+            span.set_attributes(
+                **{
+                    "promptql.connector.result": "success",
+                    "promptql.http.status_class": observation.status_class,
+                    "promptql.pagination.page_count": observation.page_count,
+                }
+            )
+            return user.login, repositories
 
 
     async def get_pull_request(

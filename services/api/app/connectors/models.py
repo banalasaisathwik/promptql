@@ -147,6 +147,7 @@ class SentryOpenIssuesRequest(ContractModel):
 class SentryOpenIssue(ContractModel):
     issue_id: NonEmptyString
     short_id: NonEmptyString
+    title: NonEmptyString | None = None
     project_slug: NonEmptyString
     first_seen: AwareDatetime
     last_seen: AwareDatetime

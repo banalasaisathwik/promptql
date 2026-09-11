@@ -42,6 +42,7 @@ from app.connectors.sentry_http_models import (
     SentryExceptionEntryDataResponse,
     SentryIssueIntegrationResponse,
     SentryIssueResponse,
+    SentryProjectDiscoveryResponse,
     SentryReleaseResponse,
     SentryResponseModel,
     SentryShortIdResponse,
@@ -212,6 +213,38 @@ class HttpSentrySource:
             self._record_success(span)
             return issues
 
+    async def list_accessible_projects(self) -> tuple[SentryProjectDiscoveryResponse, ...]:
+        with self._telemetry.observe_connector(
+            "sentry", self.source.value, "list_accessible_projects"
+        ) as span:
+            try:
+                projects = await self._load_accessible_projects()
+            except SentryConnectorError as error:
+                self._record_failure(span, error)
+                raise
+            self._record_success(span)
+            return projects
+
+    async def _load_accessible_projects(self) -> tuple[SentryProjectDiscoveryResponse, ...]:
+        path = f"/organizations/{self._organization_path}/projects/"
+        params: dict[str, str] = {}
+        projects: list[SentryProjectDiscoveryResponse] = []
+        for _page in range(MAX_ISSUE_PAGES):
+            payload, response = await self._get_json_page(path, params)
+            if not isinstance(payload, list):
+                raise SentryInvalidResponseError()
+            try:
+                projects.extend(
+                    SentryProjectDiscoveryResponse.model_validate(item) for item in payload
+                )
+            except ValidationError:
+                raise SentryInvalidResponseError() from None
+            next_link = _parse_link_header(response.headers.get("link")).get("next")
+            if next_link is None or next_link.get("results") != "true":
+                return tuple(projects)
+            params = {"cursor": next_link["cursor"]}
+        raise SentryIncompleteResultError()
+
     async def _load_open_issues(
         self,
         request: SentryOpenIssuesRequest,
@@ -247,6 +280,7 @@ class HttpSentrySource:
             return SentryOpenIssue(
                 issue_id=raw_issue.id,
                 short_id=raw_issue.shortId,
+                title=raw_issue.title,
                 project_slug=raw_issue.project.slug,
                 first_seen=self._parse_datetime(raw_issue.firstSeen),
                 last_seen=self._parse_datetime(raw_issue.lastSeen),

@@ -12,6 +12,7 @@ from app.investigations.models import (
     ChangedHunkOverlapsFailureLineFact,
     FactSet,
 )
+from app.investigations.path_normalization import paths_match
 
 
 class DeterministicHypothesisValidator:
@@ -53,12 +54,12 @@ class DeterministicHypothesisValidator:
 
 
         changed_file_support = any(
-            isinstance(fact, ChangedFileFact) and fact.path == candidate.subject
+            isinstance(fact, ChangedFileFact) and paths_match(fact.path, candidate.subject)
             for fact in selected_facts
         )
         failure_location_support = any(
             isinstance(fact, (ChangedFileMatchesFailureFileFact, ChangedHunkOverlapsFailureLineFact))
-            and fact.file_path == candidate.subject
+            and paths_match(fact.file_path, candidate.subject)
             for fact in selected_facts
         )
         if not changed_file_support or not failure_location_support:
@@ -71,7 +72,9 @@ class DeterministicHypothesisValidator:
                 )
                 if value is not None
             }
-            if selected_entities and candidate.subject not in selected_entities:
+            if selected_entities and not any(
+                paths_match(entity, candidate.subject) for entity in selected_entities
+            ):
                 return HypothesisValidationFailureCode.ENTITY_MISMATCH
             return HypothesisValidationFailureCode.MISSING_REQUIRED_SUPPORT
         return None

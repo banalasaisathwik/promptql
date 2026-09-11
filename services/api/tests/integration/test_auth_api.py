@@ -13,6 +13,7 @@ class AuthApiTests(unittest.TestCase):
         cls.client = TestClient(app)
 
     def setUp(self) -> None:
+        self.client.cookies.clear()
         self.user_repository = InMemoryUserRepository()
         self.session_signer = SessionSigner(
             secret_key="test-only-secret-key-32-characters!!",
@@ -105,6 +106,44 @@ class AuthApiTests(unittest.TestCase):
         set_cookie_header = response.headers.get("set-cookie", "")
         self.assertIn(f"{SESSION_COOKIE_NAME}=", set_cookie_header)
         self.assertIn("Max-Age=0", set_cookie_header)
+
+    def test_me_returns_the_current_public_user_for_a_valid_session(self) -> None:
+        user = self.user_repository.create_user(
+            "me@example.com", "correct horse battery staple"
+        )
+
+        response = self.client.get(
+            "/v1/auth/me",
+            headers={"cookie": f"{SESSION_COOKIE_NAME}={self.session_signer.sign(user.id)}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], str(user.id))
+        self.assertEqual(response.json()["email"], "me@example.com")
+        self.assertNotIn("password", response.text.lower())
+
+    def test_me_rejects_a_missing_or_tampered_session(self) -> None:
+        self.assertEqual(self.client.get("/v1/auth/me").status_code, 401)
+        self.assertEqual(
+            self.client.get(
+                "/v1/auth/me",
+                headers={"cookie": f"{SESSION_COOKIE_NAME}=tampered-session"},
+            ).status_code,
+            401,
+        )
+
+    def test_me_is_unauthenticated_after_logout_clears_the_browser_cookie(self) -> None:
+        self.user_repository.create_user(
+            "logout@example.com", "correct horse battery staple"
+        )
+        login = self.client.post(
+            "/v1/auth/login",
+            json={"email": "logout@example.com", "password": "correct horse battery staple"},
+        )
+        self.assertEqual(login.status_code, 200)
+
+        self.assertEqual(self.client.post("/v1/auth/logout").status_code, 204)
+        self.assertEqual(self.client.get("/v1/auth/me").status_code, 401)
 
 
 if __name__ == "__main__":

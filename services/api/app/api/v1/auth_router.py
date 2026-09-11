@@ -116,6 +116,13 @@ def _set_session_cookie(
     )
 
 
+@router.get("/me", response_model=UserResponse)
+def get_me(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> UserResponse:
+    return _user_response(current_user)
+
+
 @router.post(
     "/register",
     response_model=UserResponse,

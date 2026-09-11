@@ -18,6 +18,14 @@ class GitHubUserResponse(GitHubResponseModel):
     login: RequiredString
 
 
+class GitHubRepositoryResponse(GitHubResponseModel):
+    name: RequiredString
+    full_name: RequiredString
+    private: bool
+    default_branch: RequiredString | None = None
+    owner: GitHubUserResponse
+
+
 class GitHubBranchResponse(GitHubResponseModel):
     ref: RequiredString
     sha: CommitSha

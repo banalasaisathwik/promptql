@@ -22,7 +22,17 @@ class HypothesisKind(StrEnum):
 class CandidateHypothesis(ContractModel):
     hypothesis_id: InvestigationIdentifier
     kind: HypothesisKind
-    subject: NonEmptyString
+    subject: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1),
+        Field(
+            description=(
+                "The exact 'path' or 'file_path' string of one supporting "
+                "Fact, copied character-for-character -- never shortened to "
+                "a bare filename."
+            )
+        ),
+    ]
     supporting_fact_ids: Annotated[
         tuple[InvestigationIdentifier, ...], Field(min_length=1, max_length=10)
     ]

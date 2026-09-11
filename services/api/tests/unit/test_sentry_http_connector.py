@@ -133,6 +133,7 @@ def open_issue_list_item(**updates) -> dict:
     payload = {
         "id": "7699024952",
         "shortId": "PYTHON-FASTAPI-1",
+        "title": "KeyError: 0",
         "status": "unresolved",
         "firstSeen": "2026-08-29T05:54:44.826751Z",
         "lastSeen": "2026-08-29T05:59:31.353765Z",
@@ -204,6 +205,22 @@ def create_source(handler, telemetry=None):
 
 
 class HttpSentrySourceSuccessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lists_accessible_projects_without_exposing_provider_payload(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.path, "/api/0/organizations/acme/projects/")
+            return httpx.Response(200, json=[{
+                "slug": "python-fastapi", "name": "Python FastAPI",
+                "id": "secret-provider-id", "platform": "python",
+            }])
+
+        source, client = create_source(handler)
+        try:
+            projects = await source.list_accessible_projects()
+        finally:
+            await client.aclose()
+
+        self.assertEqual(projects[0].slug, "python-fastapi")
+        self.assertEqual(projects[0].name, "Python FastAPI")
     async def test_incident_evidence_normalizes_and_never_fabricates_environment_or_category(
         self,
     ) -> None:
@@ -427,6 +444,7 @@ class HttpSentrySourceOpenIssuesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0].issue_id, "7699024952")
         self.assertEqual(issues[0].short_id, "PYTHON-FASTAPI-1")
+        self.assertEqual(issues[0].title, "KeyError: 0")
         self.assertEqual(issues[0].project_slug, "python-fastapi")
         self.assertEqual(
             issues[0].first_seen,
@@ -466,6 +484,25 @@ class HttpSentrySourceOpenIssuesTests(unittest.IsolatedAsyncioTestCase):
             requests[0].url.params["query"],
             "is:unresolved release:e1448f6171fd009aca9f8136f7e6ec8120a9e515",
         )
+
+    async def test_missing_issue_title_is_normalized_as_none(self) -> None:
+        payload = open_issue_list_item()
+        payload.pop("title")
+        source, client = create_source(
+            lambda _request: httpx.Response(
+                200,
+                json=[payload],
+                headers={"link": link_header(next_cursor=None, next_results=False)},
+            )
+        )
+        try:
+            issues = await source.list_open_issues(
+                SentryOpenIssuesRequest(project_slug="python-fastapi")
+            )
+        finally:
+            await client.aclose()
+
+        self.assertEqual(issues[0].title, None)
 
     async def test_follows_the_next_cursor_until_results_is_false(self) -> None:
         pages = [

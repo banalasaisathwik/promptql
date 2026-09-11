@@ -56,6 +56,7 @@ ALLOWED_EVENT_FIELDS = frozenset(
         "failed_generation_present",
         "failed_generation_length",
         "local_schema_error",
+        "sentry_issue_id",
     }
 )
 

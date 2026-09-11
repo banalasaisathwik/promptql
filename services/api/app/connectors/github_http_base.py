@@ -115,14 +115,18 @@ class BaseHttpGitHubConnector:
         path: str,
         model_type: type[ResponseModel],
         observation: GitHubRequestObservation,
+        params: dict[str, int | str] | None = None,
     ) -> tuple[ResponseModel, ...]:
         results: list[ResponseModel] = []
         for page in range(1, self._max_pages + 1):
             observation.page_count += 1
+            page_params: dict[str, int | str] = {"per_page": PAGE_SIZE, "page": page}
+            if params is not None:
+                page_params.update(params)
             payload = await self._request_json(
                 path,
                 observation,
-                {"per_page": PAGE_SIZE, "page": page},
+                page_params,
             )
             if not isinstance(payload, list):
                 raise GitHubInvalidResponseError()
