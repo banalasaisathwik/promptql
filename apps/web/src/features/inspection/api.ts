@@ -276,6 +276,11 @@ export async function logoutWorkspace(): Promise<void> {
   await requestNoContent('/v1/auth/logout', { method: 'POST' })
 }
 
+/** Resolve the signed HttpOnly browser session; no frontend token is stored. */
+export async function fetchCurrentUser(): Promise<AuthenticatedUser> {
+  return parseAuthenticatedUser(await requestJson('/v1/auth/me'))
+}
+
 
 export async function fetchCredentialConnections(): Promise<CredentialConnections> {
   return parseCredentialConnections(await requestJson('/v1/credentials'))
@@ -315,4 +320,114 @@ export async function connectCredential(
 
 export async function disconnectCredential(provider: CredentialProvider): Promise<void> {
   await requestNoContent(`/v1/credentials/${provider}`, { method: 'DELETE' })
+}
+
+export type CorrelationScanRequest = {
+  repository_owner: string
+  repository_name: string
+  sentry_project_slug: string
+}
+
+export type GitHubRepository = {
+  owner: string
+  name: string
+  full_name: string
+  private: boolean
+  default_branch: string | null
+}
+
+export type GitHubContext = { login: string, repositories: GitHubRepository[] }
+export type SentryProject = {
+  organization_slug: string
+  project_slug: string
+  name: string
+}
+
+export async function fetchGitHubContext(): Promise<GitHubContext> {
+  return await requestJson('/v1/github/context') as GitHubContext
+}
+
+export async function fetchSentryProjects(): Promise<SentryProject[]> {
+  return await requestJson('/v1/sentry/projects') as SentryProject[]
+}
+
+export type FactSummary = { label: string, detail: string | null }
+export type GroundedHypothesis = { statement: string }
+export type GroundedCodeFinding = {
+  category: CodeFindingCategory
+  file_path: string
+  line_number: number | null
+  function_name: string | null
+  statement: string
+}
+export type ProposedCodeFix = {
+  finding_id: string
+  file_path: string
+  function_name: string | null
+  line_start: number
+  line_end: number
+  original_hunk: string
+  corrected_hunk: string
+  failure_mechanism: string
+  fix_strategy: string
+  explanation: string
+}
+export type CodeFindingCategory =
+  | 'changed_code_near_failure'
+  | 'error_handling_or_null_path'
+  | 'input_validation'
+  | 'state_or_resource_lifecycle'
+  | 'configuration_or_deployment'
+export type DeveloperRecommendation = { message: string }
+export type CorrelationIssue = {
+  sentry_issue_id: string
+  sentry_short_id: string
+  jira_ticket: string | null
+  commit_sha: string | null
+  status: 'ok' | 'partial' | 'failed'
+  step_failures: Array<{ step: string, failure_code: string }>
+  presentation: {
+    issue_title: string | null
+    failure_file_path: string | null
+    failure_line_number: number | null
+    failure_function_name: string | null
+    fact_summaries: FactSummary[]
+    grounding_strength: 'strong' | 'moderate' | 'insufficient'
+  }
+  analysis: {
+    status: 'insufficient_evidence' | 'hypothesis_generation_failed' | 'no_validated_hypothesis' | 'code_finding_unavailable' | 'completed' | 'analysis_error'
+    hypotheses: GroundedHypothesis[]
+    code_findings: GroundedCodeFinding[]
+    recommendations: DeveloperRecommendation[]
+    proposed_fixes: ProposedCodeFix[]
+    fix_status: 'available' | 'unavailable'
+  }
+}
+export type CorrelationScanResult = {
+  repository_owner: string
+  repository_name: string
+  total_open_issues_found: number
+  issues_scanned: number
+  truncated: boolean
+  results: CorrelationIssue[]
+}
+
+function isCorrelationScanResult(value: unknown): value is CorrelationScanResult {
+  if (!isRecord(value) || !Array.isArray(value.results)) return false
+  return typeof value.repository_owner === 'string'
+    && typeof value.repository_name === 'string'
+    && typeof value.total_open_issues_found === 'number'
+    && typeof value.issues_scanned === 'number'
+    && typeof value.truncated === 'boolean'
+}
+
+/** Submit the real, non-persisted repository correlation scan. */
+export async function runCorrelationScan(request: CorrelationScanRequest): Promise<CorrelationScanResult> {
+  const body = await requestJson('/v1/correlation-scans', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!isCorrelationScanResult(body)) throw new ConnectorApiError('The API response is malformed.')
+  return body
 }

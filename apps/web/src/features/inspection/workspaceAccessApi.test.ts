@@ -3,10 +3,14 @@ import {
   connectCredential,
   disconnectCredential,
   fetchCredentialConnections,
+  fetchCurrentUser,
+  fetchGitHubContext,
+  fetchSentryProjects,
   fetchDemoAccount,
   loginWorkspace,
   logoutWorkspace,
   registerWorkspace,
+  runCorrelationScan,
 } from './api'
 
 
@@ -134,4 +138,46 @@ test('fetches the public demo-account email and password unauthenticated', async
   expect(demoAccount).toEqual({
     email: 'demo@promptql.dev', password: 'correct horse battery staple',
   })
+})
+
+
+test('boots from the session-resolved user and submits the exact correlation payload', async () => {
+  const calls: Array<{ url: string, init?: RequestInit }> = []
+  globalThis.fetch = (async (url, init) => {
+    calls.push({ url: String(url), init })
+    if (String(url) === '/v1/auth/me') {
+      return new Response(JSON.stringify({
+        id: 'a9e3c5d3-c089-4b5e-a006-63f1a3e66a3a', email: 'user@example.com', created_at: '2026-09-11T10:00:00Z',
+      }), { status: 200 })
+    }
+    return new Response(JSON.stringify({
+      repository_owner: 'owner', repository_name: 'repo', total_open_issues_found: 0,
+      issues_scanned: 0, truncated: false, results: [],
+    }), { status: 200 })
+  }) as typeof fetch
+
+  expect((await fetchCurrentUser()).email).toBe('user@example.com')
+  await runCorrelationScan({ repository_owner: 'owner', repository_name: 'repo', sentry_project_slug: 'project' })
+
+  expect(calls.map((call) => call.url)).toEqual(['/v1/auth/me', '/v1/correlation-scans'])
+  expect(calls.every((call) => call.init?.credentials === 'include')).toBe(true)
+  expect(JSON.parse(String(calls[1].init?.body))).toEqual({
+    repository_owner: 'owner', repository_name: 'repo', sentry_project_slug: 'project',
+  })
+})
+
+test('loads selector-safe provider discovery data with the session cookie', async () => {
+  const calls: Array<{ url: string, init?: RequestInit }> = []
+  globalThis.fetch = (async (url, init) => {
+    calls.push({ url: String(url), init })
+    if (String(url) === '/v1/github/context') return new Response(JSON.stringify({
+      login: 'octocat', repositories: [{ owner: 'octocat', name: 'sandbox', full_name: 'octocat/sandbox', private: false, default_branch: 'main' }],
+    }), { status: 200 })
+    return new Response(JSON.stringify([{ organization_slug: 'acme', project_slug: 'python-fastapi', name: 'Python FastAPI' }]), { status: 200 })
+  }) as typeof fetch
+
+  expect((await fetchGitHubContext()).repositories[0].full_name).toBe('octocat/sandbox')
+  expect((await fetchSentryProjects())[0].project_slug).toBe('python-fastapi')
+  expect(calls.map((call) => call.url)).toEqual(['/v1/github/context', '/v1/sentry/projects'])
+  expect(calls.every((call) => call.init?.credentials === 'include')).toBe(true)
 })

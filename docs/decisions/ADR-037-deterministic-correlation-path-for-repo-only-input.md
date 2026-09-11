@@ -5,6 +5,12 @@
 - Owners: Repository owner
 - Supersedes: None
 - Superseded by: None
+- Amended by: [ADR-038](ADR-038-grounded-reasoning-for-the-deterministic-correlation-scan.md)
+  — the "no hypothesis, no rendering through `render_grounded_result`"
+  sentence in the Decision section below is superseded; the "zero coupling
+  to `AdaptiveInvestigationRuntime`/`TypedLLMPlanner`" invariant is
+  unchanged and still holds. Kept below unedited per this repo's "never
+  rewrite an accepted historical ADR" convention.
 
 ## Context
 
